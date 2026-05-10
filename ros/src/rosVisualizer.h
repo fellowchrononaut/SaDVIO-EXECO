@@ -503,11 +503,15 @@ class RosVisualizer : public rclcpp::Node {
         _mesh_line_list.header.stamp    = rclcpp::Node::now();
 
         for (auto &polygon : mesh->getPolygonVector()) {
+            if (!polygon)
+                continue;
 
             // Handles the points of the polygon
             std::vector<geometry_msgs::msg::Point> p_vector;
             std::vector<std_msgs::msg::ColorRGBA> c_vector;
             for (auto &vertex : polygon->getVertices()) {
+                if (!vertex)
+                    continue;
                 geometry_msgs::msg::Point p;
                 std_msgs::msg::ColorRGBA color;
                 Eigen::Vector3d lmk_coord = vertex->getVertexPosition();
@@ -526,6 +530,9 @@ class RosVisualizer : public rclcpp::Node {
 
                 c_vector.push_back(color);
             }
+
+            if (p_vector.size() != 3 || c_vector.size() != 3)
+                continue;
 
             // Set the lines of the polygon
             _mesh_line_list.points.push_back(p_vector.at(0));
@@ -568,9 +575,11 @@ class RosVisualizer : public rclcpp::Node {
         marker.header.stamp    = rclcpp::Node::now();
         marker.type            = visualization_msgs::msg::Marker::TRIANGLE_LIST;
         marker.action          = visualization_msgs::msg::Marker::ADD;
+        marker.ns              = "dense_mesh";
         marker.id              = 10;
         marker.scale.x = marker.scale.y = marker.scale.z = 1.0;
         marker.pose.orientation.w = 1.0;
+        marker.color.a = 0.5f;
 
         for (const auto& face : dm.faces) {
             for (int k = 0; k < 3; ++k) {
@@ -582,22 +591,17 @@ class RosVisualizer : public rclcpp::Node {
                 p.x = v.x(); p.y = v.y(); p.z = v.z();
                 marker.points.push_back(p);
 
-                // Colour by GP variance if available, else flat cyan
-                std_msgs::msg::ColorRGBA c;
-                if (vi < static_cast<int>(dm.vertex_variance.size())) {
-                    float var = dm.vertex_variance[vi];
-                    // Low variance = blue, high variance = red
-                    c.r = std::min(1.f, var * 4.f);
-                    c.g = 0.f;
-                    c.b = std::max(0.f, 1.f - var * 4.f);
-                } else {
-                    c.r = 0.f; c.g = 0.8f; c.b = 0.8f;
-                }
-                c.a = 0.75f;
-                marker.colors.push_back(c);
+                std_msgs::msg::ColorRGBA color;
+                color.r = 0.0f;
+                color.g = 1.0f;
+                color.b = 0.0f;
+                color.a = 1.0f;
+                marker.colors.push_back(color);
             }
         }
 
+        std::cout << "[DenseMeshRViz] publishing triangles="
+                  << marker.points.size() / 3 << std::endl;
         _pub_dense_mesh->publish(marker);
     }
 

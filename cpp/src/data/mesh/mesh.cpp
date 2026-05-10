@@ -3,12 +3,13 @@
 namespace isae {
 
 void Mesh3D::updateMesh(std::vector<FeatPolygon> feats_polygon, std::shared_ptr<Frame> frame) {
+    std::lock_guard<std::mutex> lock(_mesh_mtx);
 
     // Set the reference frame and a copy to all important variables
     _reference_frame = frame;
     _cam0            = _reference_frame->getSensors().at(0);
     _img0            = _cam0->getRawData().clone();
-    if (_reference_frame->getSensors().at(1)) {
+    if (_reference_frame->getSensors().size() > 1 && _reference_frame->getSensors().at(1)) {
         _cam1 = _reference_frame->getSensors().at(1);
         _img1 = _cam1->getRawData().clone();
     } else {
@@ -619,6 +620,9 @@ void Mesh3D::generatePointCloud() {
     }
 
     // Cast on the other camera if nofov
+    if (!_cam1)
+        return;
+
     Eigen::Affine3d T_cam0_cam1 = _cam0->getFrame2SensorTransform() * _cam1->getFrame2SensorTransform().inverse();
     if (geometry::log_so3(T_cam0_cam1.rotation()).norm() > 0.5) {
 

@@ -89,7 +89,7 @@ struct Config {
 
     // Dense SGBM mesh pipeline — fully independent of mesh3d (sparse ZNCC mesh)
     bool        dense_depth          = false;         // enable dense SGBM pipeline
-    std::string dense_mesh_method   = "none";        // "none"=depth only, "gp"=GP mesh, "pd"=PD mesh
+    std::string dense_mesh_method   = "none";        // "none"=depth only, "gp"=GP, "pd"=PD, "zncc"=SGBM+Delaunay+ZNCC
     double      stereo_depth_scale     = 1.0;        // SGBM image scale factor
     double      stereo_depth_max_depth = 20.0;       // metres; dense cloud points beyond this are dropped
     int         stereo_depth_num_disp   = 64;

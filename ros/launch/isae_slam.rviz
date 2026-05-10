@@ -130,6 +130,19 @@ Visualization Manager:
         Value: /mesh
       Value: false
     - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Dense_Mesh
+      Namespaces:
+        dense_mesh: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /dense_mesh
+      Value: true
+    - Class: rviz_default_plugins/Marker
       Enabled: false
       Name: Marker
       Namespaces:

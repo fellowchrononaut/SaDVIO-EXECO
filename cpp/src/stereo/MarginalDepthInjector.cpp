@@ -59,6 +59,10 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
 
     // Extract baseline: P2(0,3) = -f_rect * baseline
     _baseline = -P2.at<double>(0, 3) / P2.at<double>(0, 0);
+    _zncc_cfg.vertex_stride    = std::max(8, cfg.stride * 4);
+    _zncc_cfg.zncc_threshold   = cfg.zncc_threshold;
+    _zncc_cfg.max_edge_length  = cfg.max_length_threshold;
+    _zncc_cfg.max_depth        = cfg.max_depth;
 
     // Compute undistort+rectify maps for both cameras
     cv::initUndistortRectifyMap(K_L_cv, d_L_cv, R1, P1,
@@ -252,6 +256,11 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
         dense_mesh = pd_estimator.estimate(disp_float, f_rect, _baseline,
                                            cx_rect, cy_rect, item.T_w_rectcam,
                                            _R1_mat, item.frame);
+    } else if (_cfg.mesh_method == "zncc" || _cfg.mesh_method == "sgbm_zncc") {
+        SGBMZNCCMeshEstimator zncc_estimator(_zncc_cfg);
+        dense_mesh = zncc_estimator.estimate(disp_float, gray_L, gray_R,
+                                             f_rect, _baseline, cx_rect, cy_rect,
+                                             item.T_w_rectcam);
     }
 
     auto t4 = clk::now();
@@ -264,7 +273,9 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
               << "  cloud=" << ms(t2,t3) << "ms"
               << "  " << _cfg.mesh_method << "=" << ms(t3,t4) << "ms"
               << "  total=" << ms(t0,t4) << "ms"
-              << "  pts=" << point_cloud.size() << std::endl;
+              << "  pts=" << point_cloud.size()
+              << "  mesh_v=" << dense_mesh.vertices.size()
+              << "  mesh_f=" << dense_mesh.faces.size() << std::endl;
 
     // Store result for the ROS visualizer to poll
     {

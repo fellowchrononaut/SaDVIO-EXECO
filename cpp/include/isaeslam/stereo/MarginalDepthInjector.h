@@ -4,6 +4,7 @@
 #include "isaeslam/stereo/DenseMesh.h"
 #include "isaeslam/stereo/GPMeshEstimator.h"
 #include "isaeslam/stereo/PrimalDualMeshEstimator.h"
+#include "isaeslam/stereo/SGBMZNCCMeshEstimator.h"
 #include "isaeslam/data/mesh/mesh.h"
 #include "isaeslam/data/frame.h"
 #include <Eigen/Core>
@@ -25,7 +26,9 @@ struct MarginalDepthConfig {
     double      scale_factor    = 1.0;
     int         stride          = 2;
     double      max_depth       = 20.0;  // metres — points beyond this are dropped
-    std::string mesh_method     = "none"; // "none"=depth only, "gp"=GP, "pd"=PD
+    std::string mesh_method     = "none"; // "none"=depth only, "gp"=GP, "pd"=PD, "zncc"=SGBM+Delaunay+ZNCC
+    double      zncc_threshold  = 0.8;
+    double      max_length_threshold = 2.0;
     int         uniqueness_ratio    = 10;
     int         speckle_window_size = 100;
     int         speckle_range       = 32;
@@ -83,6 +86,7 @@ class MarginalDepthInjector {
 
     GPMeshConfig _gp_cfg;
     PrimalDualConfig _pd_cfg;
+    SGBMZNCCConfig _zncc_cfg;
 
     // Queue (single-slot, drop policy)
     std::mutex _q_mtx;

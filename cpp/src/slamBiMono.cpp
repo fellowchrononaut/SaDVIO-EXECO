@@ -65,6 +65,8 @@ bool SLAMBiMono::init() {
             dcfg.stride           = _slam_param->_config.stereo_depth_stride;
             dcfg.max_depth        = _slam_param->_config.stereo_depth_max_depth;
             dcfg.mesh_method      = _slam_param->_config.dense_mesh_method;
+            dcfg.zncc_threshold   = _slam_param->_config.ZNCC_tsh;
+            dcfg.max_length_threshold = _slam_param->_config.max_length_tsh;
             dcfg.uniqueness_ratio    = _slam_param->_config.stereo_depth_uniqueness_ratio;
             dcfg.speckle_window_size = _slam_param->_config.stereo_depth_speckle_window_size;
             dcfg.speckle_range       = _slam_param->_config.stereo_depth_speckle_range;
