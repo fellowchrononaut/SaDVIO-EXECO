@@ -1,0 +1,77 @@
+# General sensor definitions.
+dataset: realsense
+ncam: 2
+
+# Body frame = IMU (Gyro/Accel at origin).
+# All extrinsics are sensor positions expressed in the IMU body frame,
+# derived from the /device_0/*/tf/0 transforms in the original ROS1 bag.
+# IR1 (left) is the reference in the bag; IMU is at [-0.03022, 0.0074, 0.01602] from IR1.
+
+camera_0:
+  topic: /device_0/sensor_0/Infrared_1/image/data
+  # Sensor extrinsics wrt. the body-frame (IMU).
+  # IR1 position in IMU frame: [+0.03022, -0.00740, -0.01602]
+  # Rotation: identity (camera and IMU frames are aligned on D435i)
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [0.0, 0.0, 1.0,  0.0,
+           -1.0, 0.0, 0.0, 0.09502,
+           0.0, -1.0, 0.0, 0.0,
+           0.0, 0.0, 0.0,  1.0]
+
+  # Camera specific definitions.
+  rate_hz: 30
+  resolution: [640, 480]
+  projection_model: pinhole
+  intrinsics: [394.675, 394.675, 321.784, 241.019] # fu, fv, cu, cv — from CameraInfo K matrix
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0] # k1, k2, p1, p2, k3 — SDK reports zeros (Brown Conrady)
+
+camera_1:
+  topic: /device_0/sensor_0/Infrared_2/image/data
+  # Sensor extrinsics wrt. the body-frame (IMU).
+  # IR2 position in IMU frame: [-0.06480, -0.00740, -0.01602]
+  # (IR2 is at x=-0.09502 from IR1, minus IMU offset x=-0.03022)
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [0.0, 0.0, 1.0, 0.0,
+           -1.0, 0.0, 0.0, 0.0,
+           0.0, -1.0, 0.0, 0.0,
+           0.0, 0.0, 0.0,  1.0]
+
+  # Camera specific definitions.
+  rate_hz: 30
+  resolution: [640, 480]
+  projection_model: pinhole
+  intrinsics: [394.675, 394.675, 321.784, 241.019] # fu, fv, cu, cv — from CameraInfo K matrix
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+imu:
+  # NOTE: the bag records gyro and accel as separate topics at different rates.
+  # Use a merged topic if your VIO framework requires a single combined Imu message.
+  # Gyro-only:  /device_0/sensor_2/Gyro_0/imu/data   (~200 Hz, angular_velocity only)
+  # Accel-only: /device_0/sensor_2/Accel_0/imu/data  (~100 Hz, linear_acceleration only)
+  topic: /device_0/sensor_2/Gyro_0/imu/data
+  # Sensor extrinsics wrt. the body-frame (IMU is the body frame).
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [1.0, 0.0, 0.0, 0.0,
+           0.0, 1.0, 0.0, 0.0,
+           0.0, 0.0, 1.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 200 # gyro rate; use 100 if using the accel topic
+
+  # D435i BMI055 IMU noise parameters.
+  # These are starting values — calibrate with kalibr or allan_variance_ros for best results.
+  gyroscope_noise_density: 0.00017    # [ rad / s / sqrt(Hz) ]
+  gyroscope_random_walk: 0.0001       # [ rad / s^2 / sqrt(Hz) ]
+  accelerometer_noise_density: 0.0015 # [ m / s^2 / sqrt(Hz) ]
+  accelerometer_random_walk: 0.001    # [ m / s^3 / sqrt(Hz) ]
+  dt_imu_cam: 0.0 # D435i has hardware sync; calibrate with kalibr if drift is observed
+
+
