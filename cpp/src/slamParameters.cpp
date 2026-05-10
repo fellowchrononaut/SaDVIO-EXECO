@@ -88,6 +88,8 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.dense_mesh_method     = yaml_file["dense_mesh_method"].as<std::string>();
     if (yaml_file["stereo_depth_scale"])
         _config.stereo_depth_scale    = yaml_file["stereo_depth_scale"].as<double>();
+    if (yaml_file["stereo_depth_max_depth"])
+        _config.stereo_depth_max_depth = yaml_file["stereo_depth_max_depth"].as<double>();
     if (yaml_file["stereo_depth_num_disp"])
         _config.stereo_depth_num_disp     = yaml_file["stereo_depth_num_disp"].as<int>();
     if (yaml_file["stereo_depth_block_size"])
