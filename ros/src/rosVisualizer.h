@@ -94,6 +94,9 @@ class RosVisualizer : public rclcpp::Node {
         _pub_global_map_lines       = this->create_publisher<visualization_msgs::msg::Marker>("map_global_lines", 1000);
         _pub_marker                 = this->create_publisher<visualization_msgs::msg::Marker>("mesh", 1000);
         _pub_cloud                  = this->create_publisher<sensor_msgs::msg::PointCloud2>("point_cloud", 1000);
+        _pub_dense_depth            = this->create_publisher<sensor_msgs::msg::Image>("dense_depth", 10);
+        _pub_dense_mesh             = this->create_publisher<visualization_msgs::msg::Marker>("dense_mesh", 10);
+        _pub_dense_cloud            = this->create_publisher<sensor_msgs::msg::PointCloud2>("dense_point_cloud", 10);
         _tf_broadcaster             = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
         _vo_traj_msg.type    = visualization_msgs::msg::Marker::LINE_STRIP;
@@ -546,6 +549,65 @@ class RosVisualizer : public rclcpp::Node {
         _pub_cloud->publish(*pc2_msg_);
     }
 
+    void publishDenseDepth(const cv::Mat& depth_img) {
+        std_msgs::msg::Header header;
+        header.frame_id = "world";
+        header.stamp    = rclcpp::Node::now();
+
+        // Publish as 32FC1 (metres) — usable for downstream processing
+        auto msg = cv_bridge::CvImage(header, "32FC1", depth_img).toImageMsg();
+        _pub_dense_depth->publish(*msg);
+    }
+
+    void publishDenseMesh(const isae::DenseMesh& dm) {
+        if (dm.vertices.empty() || dm.faces.empty())
+            return;
+
+        visualization_msgs::msg::Marker marker;
+        marker.header.frame_id = "world";
+        marker.header.stamp    = rclcpp::Node::now();
+        marker.type            = visualization_msgs::msg::Marker::TRIANGLE_LIST;
+        marker.action          = visualization_msgs::msg::Marker::ADD;
+        marker.id              = 10;
+        marker.scale.x = marker.scale.y = marker.scale.z = 1.0;
+        marker.pose.orientation.w = 1.0;
+
+        for (const auto& face : dm.faces) {
+            for (int k = 0; k < 3; ++k) {
+                int vi = face[k];
+                if (vi < 0 || vi >= static_cast<int>(dm.vertices.size()))
+                    continue;
+                const auto& v = dm.vertices[vi];
+                geometry_msgs::msg::Point p;
+                p.x = v.x(); p.y = v.y(); p.z = v.z();
+                marker.points.push_back(p);
+
+                // Colour by GP variance if available, else flat cyan
+                std_msgs::msg::ColorRGBA c;
+                if (vi < static_cast<int>(dm.vertex_variance.size())) {
+                    float var = dm.vertex_variance[vi];
+                    // Low variance = blue, high variance = red
+                    c.r = std::min(1.f, var * 4.f);
+                    c.g = 0.f;
+                    c.b = std::max(0.f, 1.f - var * 4.f);
+                } else {
+                    c.r = 0.f; c.g = 0.8f; c.b = 0.8f;
+                }
+                c.a = 0.75f;
+                marker.colors.push_back(c);
+            }
+        }
+
+        _pub_dense_mesh->publish(marker);
+    }
+
+    void publishDenseCloud(const isae::DenseMesh& dm) {
+        if (dm.vertices.empty())
+            return;
+        auto msg = convertToPointCloud2(dm.vertices);
+        _pub_dense_cloud->publish(*msg);
+    }
+
     void runVisualizer(std::shared_ptr<isae::SLAMCore> SLAM) {
 
         while (true) {
@@ -567,6 +629,16 @@ class RosVisualizer : public rclcpp::Node {
                 SLAM->_mesh_to_display.reset();
             }
 
+            // Poll for dense stereo results (depth image, GP mesh, dense cloud)
+            if (SLAM->_depth_injector) {
+                isae::DenseResult result;
+                if (SLAM->_depth_injector->pollResult(result)) {
+                    publishDenseDepth(result.depth_img);
+                    publishDenseMesh(result.mesh);
+                    publishDenseCloud(result.mesh);
+                }
+            }
+
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -576,6 +648,9 @@ class RosVisualizer : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr _pub_image_kps, _pub_image_matches_in_time,
         _pub_image_matches_in_frame;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pub_cloud;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr _pub_dense_depth;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _pub_dense_mesh;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pub_dense_cloud;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _pub_vo_pose;
     std::shared_ptr<tf2_ros::TransformBroadcaster> _tf_broadcaster;
     visualization_msgs::msg::Marker _vo_traj_msg;

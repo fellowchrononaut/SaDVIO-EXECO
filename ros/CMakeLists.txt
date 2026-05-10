@@ -42,6 +42,14 @@ find_package(yaml-cpp REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 
+# OpenMP for SGBM multi-threading
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP ${OpenMP_CXX_VERSION} found — SGBM will use multi-thread")
+else()
+    message(WARNING "OpenMP not found — SGBM runs single-threaded")
+endif()
+
 include_directories(
   ${OpenCV_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
@@ -61,7 +69,11 @@ file(GLOB_RECURSE LIB_SOURCES ../cpp/src/*.cpp ../cpp/include/*.cpp
 file(GLOB_RECURSE LIB_HEADERS ../cpp/include/*.h ../cpp/include/*.hpp ../cpp/include/*.inl
   ../cpp/thirdparty/ELSED/src/*.h)
 add_library(${PROJECT_NAME} SHARED ${LIB_SOURCES} ${LIB_HEADERS})
-target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} ${CERES_LIBRARIES} ${YAML_CPP_LIBRARIES} ${PCL_LIBRARIES} ${Boost_SYSTEM_LIBRARY})
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} ${CERES_LIBRARIES} ${YAML_CPP_LIBRARIES} ${PCL_LIBRARIES} ${Boost_SYSTEM_LIBRARY} OpenMP::OpenMP_CXX)
+else()
+    target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} ${CERES_LIBRARIES} ${YAML_CPP_LIBRARIES} ${PCL_LIBRARIES} ${Boost_SYSTEM_LIBRARY})
+endif()
 
 install(
   TARGETS ${PROJECT_NAME}

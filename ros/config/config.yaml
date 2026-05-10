@@ -40,9 +40,16 @@ marginalization: 0              # marginalization of old variables or not
 sparsification: 0         # sparsification of the prior or not   
 
 ## Mesh parameters
-mesh3d: 0                      # mesh3d computation or not 
+mesh3d: 0                      # mesh3d computation or not
 ZNCC_tsh: 0.8                   # Threshold on ZNCC for triangle filtering
 max_length_tsh: 2               # Threshold on maximum length for triangle filtering
+
+## Dense stereo mesh augmentation
+stereo_depth_enabled:    false
+stereo_depth_num_disp:   64
+stereo_depth_block_size: 5
+stereo_depth_scale:      1.0
+stereo_depth_stride:     2
 
 ## KF selection criteria
 min_lmk_number: 50              # minimum tracked landmark below which a KF is voted

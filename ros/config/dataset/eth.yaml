@@ -57,4 +57,11 @@ imu:
   accelerometer_noise_density: 2.0000e-2  # [ m / s^2 / sqrt(Hz) ]   ( accel "white noise" )
   accelerometer_random_walk: 1.0000e-3     # [ m / s^3 / sqrt(Hz) ]  ( accel bias diffusion )
   dt_imu_cam: 0.00
-  
+
+## Dense stereo mesh augmentation
+stereo_depth_enabled:    false
+stereo_depth_num_disp:   64
+stereo_depth_block_size: 5
+stereo_depth_scale:      1.0
+stereo_depth_stride:     2
+

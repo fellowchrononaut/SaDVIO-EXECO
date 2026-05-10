@@ -87,6 +87,13 @@ struct Config {
     double ZNCC_tsh;             //!< Threshold on ZNCC for triangle filtering
     double max_length_tsh;       //!< Threshold on maximum length for triangle filtering
 
+    // Dense stereo mesh augmentation
+    bool   stereo_depth_enabled    = false;
+    double stereo_depth_scale      = 1.0;
+    int    stereo_depth_num_disp   = 64;
+    int    stereo_depth_block_size = 5;
+    int    stereo_depth_stride     = 2;
+
     std::vector<FeatureStruct> features_handled; //!< types of features the slam will work on separated with commas (,)
 };
 

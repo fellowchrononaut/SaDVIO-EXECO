@@ -77,6 +77,17 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.ZNCC_tsh              = yaml_file["ZNCC_tsh"].as<double>();
     _config.max_length_tsh        = yaml_file["max_length_tsh"].as<double>();
 
+    if (yaml_file["stereo_depth_enabled"])
+        _config.stereo_depth_enabled    = yaml_file["stereo_depth_enabled"].as<bool>();
+    if (yaml_file["stereo_depth_scale"])
+        _config.stereo_depth_scale      = yaml_file["stereo_depth_scale"].as<double>();
+    if (yaml_file["stereo_depth_num_disp"])
+        _config.stereo_depth_num_disp   = yaml_file["stereo_depth_num_disp"].as<int>();
+    if (yaml_file["stereo_depth_block_size"])
+        _config.stereo_depth_block_size = yaml_file["stereo_depth_block_size"].as<int>();
+    if (yaml_file["stereo_depth_stride"])
+        _config.stereo_depth_stride     = yaml_file["stereo_depth_stride"].as<int>();
+
     // Features type
     YAML::Node features_node = yaml_file["features_handled"];
 

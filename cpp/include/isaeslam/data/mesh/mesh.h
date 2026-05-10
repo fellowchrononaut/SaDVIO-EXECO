@@ -106,6 +106,10 @@ class Mesh3D {
      */
     void generatePointCloud();
 
+    /// Append pre-computed world-frame 3D points directly to the point cloud,
+    /// bypassing ray casting. Called by MarginalDepthInjector.
+    void injectDensePoints(const std::vector<Eigen::Vector3d>& pts_world);
+
     mutable std::mutex _mesh_mtx;
     mutable std::mutex _pc_mtx;
 

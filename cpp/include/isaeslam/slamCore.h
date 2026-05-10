@@ -24,6 +24,7 @@
 #include "isaeslam/landmarkinitializer/Point3DlandmarkInitializer.h"
 #include "isaeslam/optimizers/AngularAdjustmentCERESAnalytic.h"
 #include "isaeslam/slamParameters.h"
+#include "isaeslam/stereo/MarginalDepthInjector.h"
 #include "isaeslam/typedefs.h"
 #include "utilities/timer.h"
 
@@ -82,6 +83,9 @@ class SLAMCore {
     std::shared_ptr<isae::LocalMap> _local_map_to_display;
     std::shared_ptr<isae::GlobalMap> _global_map_to_display;
     std::shared_ptr<Mesh3D> _mesh_to_display;
+
+    // Dense stereo injector — null for non-stereo modes, initialised in BiMono/BiMonoVIO::init()
+    std::shared_ptr<MarginalDepthInjector> _depth_injector;
 
     /*!
      * @brief Detect all types of features for a given sensor with bucketting

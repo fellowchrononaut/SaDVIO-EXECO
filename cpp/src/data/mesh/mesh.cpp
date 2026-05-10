@@ -698,4 +698,9 @@ void Mesh3D::generatePointCloud() {
     }
 }
 
+void Mesh3D::injectDensePoints(const std::vector<Eigen::Vector3d>& pts_world) {
+    std::lock_guard<std::mutex> lock(_pc_mtx);
+    _point_cloud.insert(_point_cloud.end(), pts_world.begin(), pts_world.end());
+}
+
 } // namespace isae
