@@ -32,6 +32,8 @@ RUN apt-get update && apt-get install -y \
     ros-humble-turtlebot3 \
     ros-humble-turtlebot3-msgs \
     ros-humble-twist-mux \
+    ros-humble-tf2 \
+    ros-humble-tf2-ros \
     ros-humble-usb-cam \
     ros-humble-xacro \
     ruby-dev \
