@@ -74,4 +74,6 @@ imu:
   accelerometer_random_walk: 0.001    # [ m / s^3 / sqrt(Hz) ]
   dt_imu_cam: 0.0 # D435i has hardware sync; calibrate with kalibr if drift is observed
 
+# D435i has hardware-synchronised stereo IR cameras; 5ms is generous.
+stereo_sync_tolerance_ms: 5
 

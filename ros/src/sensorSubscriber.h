@@ -76,9 +76,10 @@ class SensorSubscriber : public rclcpp::Node {
         std::cout << "\nStarting the measurements reader thread!\n";
 
         std::vector<std::shared_ptr<isae::ASensor>> sensors;
-        double time_tolerance = 0.0025; // TODO add this as a parameter of the yaml
-        double t_last         = 0;
-        double t_curr         = 0;
+        double time_tolerance      = 0.0025; // camera-IMU grouping tolerance [s]
+        double stereo_sync_tol_ns = _prov->getStereoSyncTolNs(); // from dataset YAML
+        double t_last              = 0;
+        double t_curr              = 0;
 
         while (true) {
 
@@ -94,11 +95,11 @@ class SensorSubscriber : public rclcpp::Node {
                     double time1 = _imgs_bufr.front().header.stamp.sec * 1e9 + _imgs_bufr.front().header.stamp.nanosec;
                     t_curr       = time0;
 
-                    // sync tolerance
-                    if (time0 < time1 - 20000000) {
+                    // sync tolerance (configurable per dataset via stereo_sync_tolerance_ms in YAML)
+                    if (time0 < time1 - stereo_sync_tol_ns) {
                         _imgs_bufl.pop();
                         std::cout << "\n Throw img0 -- Sync error : " << (time0 - time1) << "\n";
-                    } else if (time0 > time1 + 20000000) {
+                    } else if (time0 > time1 + stereo_sync_tol_ns) {
                         _imgs_bufr.pop();
                         std::cout << "\n Throw img1 -- Sync error : " << (time0 - time1) << "\n";
                     } else {
@@ -258,9 +259,10 @@ class SensorSubscriberCompressed : public rclcpp::Node {
         std::cout << "\nStarting the measurements reader thread!\n";
 
         std::vector<std::shared_ptr<isae::ASensor>> sensors;
-        double time_tolerance = 0.0025; // TODO add this as a parameter of the yaml
-        double t_last         = 0;
-        double t_curr         = 0;
+        double time_tolerance      = 0.0025; // camera-IMU grouping tolerance [s]
+        double stereo_sync_tol_ns = _prov->getStereoSyncTolNs(); // from dataset YAML
+        double t_last              = 0;
+        double t_curr              = 0;
 
         while (true) {
 
@@ -276,11 +278,11 @@ class SensorSubscriberCompressed : public rclcpp::Node {
                     double time1 = _imgs_bufr.front().header.stamp.sec * 1e9 + _imgs_bufr.front().header.stamp.nanosec;
                     t_curr       = time0;
 
-                    // sync tolerance
-                    if (time0 < time1 - 20000000) {
+                    // sync tolerance (configurable per dataset via stereo_sync_tolerance_ms in YAML)
+                    if (time0 < time1 - stereo_sync_tol_ns) {
                         _imgs_bufl.pop();
                         std::cout << "\n Throw img0 -- Sync error : " << (time0 - time1) << "\n";
-                    } else if (time0 > time1 + 20000000) {
+                    } else if (time0 > time1 + stereo_sync_tol_ns) {
                         _imgs_bufr.pop();
                         std::cout << "\n Throw img1 -- Sync error : " << (time0 - time1) << "\n";
                     } else {

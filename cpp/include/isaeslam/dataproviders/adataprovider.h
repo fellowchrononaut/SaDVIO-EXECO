@@ -35,6 +35,7 @@ class ADataProvider {
     std::vector<std::shared_ptr<cam_config>> getCamConfigs() { return _cam_configs; };
     std::shared_ptr<imu_config> getIMUConfig() { return _imu_config; }
     int getNCam() { return _ncam; };
+    double getStereoSyncTolNs() const { return _stereo_sync_tol_ns; }
 
     /*!
      * @brief From raw image to sensor objects.
@@ -65,6 +66,7 @@ class ADataProvider {
     std::queue<std::shared_ptr<Frame>> _frame_queue;       //!< Queue of frames to be processed
     Config _slam_config;                                   //!< SLAM configuration
     int _nframes;                                          //!< Frame counter
+    double _stereo_sync_tol_ns = 20.0 * 1e6;             //!< Stereo pair timestamp tolerance [ns]
 };
 
 /*!

@@ -1,7 +1,9 @@
 #include "isaeslam/stereo/MarginalDepthInjector.h"
 #include "isaeslam/data/sensors/ASensor.h"
 #include <opencv2/core/eigen.hpp>
+#include <chrono>
 #include <iostream>
+#include <unistd.h>  // nice()
 
 namespace isae {
 
@@ -133,6 +135,12 @@ void MarginalDepthInjector::queueFrame(const std::shared_ptr<Frame>& frame,
 }
 
 void MarginalDepthInjector::workerLoop() {
+    // Lower this thread's OS priority so VIO threads always win CPU arbitration
+    // when competing for the same core. When cores are free, SGBM runs at full
+    // speed unthrottled. nice() on Linux is per-thread and only affects scheduling
+    // decisions under contention — not an artificial cap like cv::setNumThreads().
+    nice(10);
+
     while (_running) {
         QueueItem item;
         {
@@ -150,8 +158,8 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     if (!item.valid || item.img_L.empty() || item.img_R.empty())
         return;
 
-    // Limit OpenCV thread usage during SGBM
-    cv::setNumThreads(_cfg.sgbm_num_threads);
+    using clk = std::chrono::steady_clock;
+    auto t0 = clk::now();
 
     // Remap (rectify) images
     cv::Mat rect_L, rect_R;
@@ -180,6 +188,8 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     cv::Mat disp_raw;
     _sgbm->compute(gray_L, gray_R, disp_raw);
 
+    auto t1 = clk::now();
+
     // Convert to float (SGBM output is 16-bit fixed-point, divide by 16)
     cv::Mat disp_float;
     disp_raw.convertTo(disp_float, CV_32F, 1.0 / 16.0);
@@ -200,17 +210,26 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
         }
     }
 
-    // Run GP mesh estimator
-    GPMeshEstimator gp_estimator(_gp_cfg);
-    DenseMesh dense_mesh = gp_estimator.estimate(disp_float,
-                                                  f_rect, _baseline,
-                                                  cx_rect, cy_rect,
-                                                  item.T_w_rectcam);
+    auto t2 = clk::now();
 
-    // Inject dense points into the sparse Mesh3D point cloud
-    if (item.mesh && !dense_mesh.vertices.empty()) {
-        item.mesh->injectDensePoints(dense_mesh.vertices);
+    // Optionally run GP mesh estimator (skip when only depth image is needed)
+    DenseMesh dense_mesh;
+    if (_cfg.compute_mesh) {
+        GPMeshEstimator gp_estimator(_gp_cfg);
+        dense_mesh = gp_estimator.estimate(disp_float, f_rect, _baseline,
+                                           cx_rect, cy_rect, item.T_w_rectcam);
+        if (item.mesh && !dense_mesh.vertices.empty())
+            item.mesh->injectDensePoints(dense_mesh.vertices);
     }
+
+    auto t3 = clk::now();
+
+    auto ms = [](auto a, auto b) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+    };
+    std::cout << "[DenseDepth] SGBM=" << ms(t0,t1) << "ms  depth_cvt=" << ms(t1,t2) << "ms"
+              << (_cfg.compute_mesh ? "  GP=" + std::to_string(ms(t2,t3)) + "ms" : "  GP=skipped")
+              << "  total=" << ms(t0,t3) << "ms" << std::endl;
 
     // Store result for the ROS visualizer to poll
     {

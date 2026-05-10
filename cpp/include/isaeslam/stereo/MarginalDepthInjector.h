@@ -23,7 +23,7 @@ struct MarginalDepthConfig {
     int    block_size       = 5;
     double scale_factor     = 1.0;
     int    stride           = 2;
-    int    sgbm_num_threads = 2;
+    bool   compute_mesh     = false; // run GP mesh estimator; false = depth image only (fast)
 };
 
 // Holds the latest processed result, readable by the ROS visualizer.

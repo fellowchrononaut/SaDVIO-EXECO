@@ -35,6 +35,14 @@ void ADataProvider::loadSensorsConfiguration(const std::string &path) {
         this->loadCamConfig(config["camera_" + std::to_string(i)]);
     }
 
+    // Stereo sync tolerance (nanoseconds). Pairs whose timestamps differ more
+    // than this are dropped. Default 20ms; increase for datasets with looser
+    // hardware sync (e.g. AirSim simulation bags).
+    if (config["stereo_sync_tolerance_ms"])
+        _stereo_sync_tol_ns = config["stereo_sync_tolerance_ms"].as<double>() * 1e6;
+    else
+        _stereo_sync_tol_ns = 20.0 * 1e6; // 20ms default
+
     // Load IMU
     bool vio_mode = (_slam_config.slam_mode == "bimonovio" || _slam_config.slam_mode == "monovio");
     if (config["imu"] && vio_mode) {

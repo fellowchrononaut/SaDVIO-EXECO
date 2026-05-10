@@ -60,3 +60,9 @@ imu:
   accelerometer_random_walk: 0.0001    # [ m / s^3 / sqrt(Hz) ]   ( accel bias diffusion )
   dt_imu_cam: 0.1
 
+# Stereo sync tolerance: AirSim publishes left/right on independent ROS timers,
+# causing timestamp drift of 40-100ms despite both cameras rendering the same
+# virtual frame. 105ms accepts all observed drifts; image content is still
+# synchronised because AirSim renders both views at the same simulation tick.
+stereo_sync_tolerance_ms: 105
+

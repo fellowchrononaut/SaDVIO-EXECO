@@ -112,7 +112,7 @@ bool SLAMBiMonoVIO::init() {
     IMUprofiling();
 
     // Construct dense stereo injector if enabled
-    if (_slam_param->_config.stereo_depth_enabled && _slam_param->_config.mesh3D) {
+    if (_slam_param->_config.stereo_depth_enabled) {
         auto cam_cfgs = _slam_param->getDataProvider()->getCamConfigs();
         if (cam_cfgs.size() >= 2) {
             auto& cL = *cam_cfgs.at(0);
@@ -127,7 +127,7 @@ bool SLAMBiMonoVIO::init() {
             dcfg.block_size       = _slam_param->_config.stereo_depth_block_size;
             dcfg.scale_factor     = _slam_param->_config.stereo_depth_scale;
             dcfg.stride           = _slam_param->_config.stereo_depth_stride;
-            dcfg.sgbm_num_threads = 2;
+            dcfg.compute_mesh     = _slam_param->_config.stereo_depth_compute_mesh;
 
             _depth_injector = std::make_shared<MarginalDepthInjector>(
                 cL.K, cL.d, cR.K, cR.d, T_right_in_left, imsz, dcfg);
@@ -583,8 +583,9 @@ bool SLAMBiMonoVIO::backEndStep() {
                 _nkeyframes--;
             } else {
                 // Queue frame for async dense mesh BEFORE discardLastFrame()
-                if (_depth_injector && _slam_param->_config.mesh3D)
-                    _depth_injector->queueFrame(_local_map->getFrames().at(0), _mesher->_mesh_3d);
+                if (_depth_injector)
+                    _depth_injector->queueFrame(_local_map->getFrames().at(0),
+                                                _slam_param->_config.mesh3D ? _mesher->_mesh_3d : nullptr);
 
                 if (_slam_param->_config.marginalization == 1)
                     _slam_param->getOptimizerBack()->marginalize(_local_map->getFrames().at(0),
