@@ -75,7 +75,11 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
     int P2_sgbm    = 32 * 1 * block_size * block_size;
     _sgbm = cv::StereoSGBM::create(0, num_disp, block_size,
                                     P1_sgbm, P2_sgbm,
-                                    1, 0, 10, 100, 32,
+                                    cfg.disp12_max_diff,
+                                    cfg.pre_filter_cap,
+                                    cfg.uniqueness_ratio,
+                                    cfg.speckle_window_size,
+                                    cfg.speckle_range,
                                     cv::StereoSGBM::MODE_SGBM_3WAY);
 
     // Start worker thread
@@ -139,7 +143,7 @@ void MarginalDepthInjector::workerLoop() {
     // when competing for the same core. When cores are free, SGBM runs at full
     // speed unthrottled. nice() on Linux is per-thread and only affects scheduling
     // decisions under contention — not an artificial cap like cv::setNumThreads().
-    nice(10);
+    [[maybe_unused]] int _nice_ret = nice(10);
 
     while (_running) {
         QueueItem item;
@@ -199,44 +203,76 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     double cx_rect = _cx_rect * _cfg.scale_factor;
     double cy_rect = _cy_rect * _cfg.scale_factor;
 
-    // Convert disparity to metric depth (float32, metres)
+    // Convert disparity to metric depth (float32, metres).
+    // Use scaled focal length (f_rect) so depth is consistent with scaled-image pixel coords.
     cv::Mat depth_img = cv::Mat::zeros(disp_float.size(), CV_32F);
     for (int v = 0; v < disp_float.rows; ++v) {
         const float* d_row = disp_float.ptr<float>(v);
         float*       z_row = depth_img.ptr<float>(v);
         for (int u = 0; u < disp_float.cols; ++u) {
             if (d_row[u] > 0.f)
-                z_row[u] = static_cast<float>(_f_rect * _baseline / d_row[u]);
+                z_row[u] = static_cast<float>(f_rect * _baseline / d_row[u]);
         }
     }
 
     auto t2 = clk::now();
 
-    // Optionally run GP mesh estimator (skip when only depth image is needed)
-    DenseMesh dense_mesh;
-    if (_cfg.compute_mesh) {
-        GPMeshEstimator gp_estimator(_gp_cfg);
-        dense_mesh = gp_estimator.estimate(disp_float, f_rect, _baseline,
-                                           cx_rect, cy_rect, item.T_w_rectcam);
-        if (item.mesh && !dense_mesh.vertices.empty())
-            item.mesh->injectDensePoints(dense_mesh.vertices);
+    // Backproject depth image to world-frame point cloud (always, regardless of mesh method).
+    // Uses stride from config to subsample — reduces density without losing structure.
+    std::vector<Eigen::Vector3d> point_cloud;
+    {
+        const int str        = std::max(1, _cfg.stride);
+        const float max_z    = static_cast<float>(_cfg.max_depth);
+        point_cloud.reserve((depth_img.rows / str) * (depth_img.cols / str));
+        for (int v = 0; v < depth_img.rows; v += str) {
+            const float* z_row = depth_img.ptr<float>(v);
+            for (int u = 0; u < depth_img.cols; u += str) {
+                float z = z_row[u];
+                if (z <= 0.f || !std::isfinite(z) || z > max_z)
+                    continue;
+                double Z = z;
+                double X = (u - cx_rect) * Z / f_rect;
+                double Y = (v - cy_rect) * Z / f_rect;
+                point_cloud.push_back(item.T_w_rectcam * Eigen::Vector3d(X, Y, Z));
+            }
+        }
     }
 
     auto t3 = clk::now();
 
+    // Run mesh estimator based on method — dense pipeline is fully independent
+    // of the sparse Mesh3D; injectDensePoints() is never called.
+    DenseMesh dense_mesh;
+    if (_cfg.mesh_method == "gp") {
+        GPMeshEstimator gp_estimator(_gp_cfg);
+        dense_mesh = gp_estimator.estimate(disp_float, f_rect, _baseline,
+                                           cx_rect, cy_rect, item.T_w_rectcam);
+    } else if (_cfg.mesh_method == "pd") {
+        PrimalDualMeshEstimator pd_estimator(_pd_cfg);
+        dense_mesh = pd_estimator.estimate(disp_float, f_rect, _baseline,
+                                           cx_rect, cy_rect, item.T_w_rectcam,
+                                           _R1_mat, item.frame);
+    }
+
+    auto t4 = clk::now();
+
     auto ms = [](auto a, auto b) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
     };
-    std::cout << "[DenseDepth] SGBM=" << ms(t0,t1) << "ms  depth_cvt=" << ms(t1,t2) << "ms"
-              << (_cfg.compute_mesh ? "  GP=" + std::to_string(ms(t2,t3)) + "ms" : "  GP=skipped")
-              << "  total=" << ms(t0,t3) << "ms" << std::endl;
+    std::cout << "[DenseMesh] SGBM=" << ms(t0,t1) << "ms"
+              << "  depth=" << ms(t1,t2) << "ms"
+              << "  cloud=" << ms(t2,t3) << "ms"
+              << "  " << _cfg.mesh_method << "=" << ms(t3,t4) << "ms"
+              << "  total=" << ms(t0,t4) << "ms"
+              << "  pts=" << point_cloud.size() << std::endl;
 
     // Store result for the ROS visualizer to poll
     {
         std::lock_guard<std::mutex> lock(_result_mtx);
-        _latest_result.depth_img = depth_img.clone();
-        _latest_result.mesh      = dense_mesh;
-        _latest_result.valid     = true;
+        _latest_result.depth_img   = depth_img.clone();
+        _latest_result.point_cloud = std::move(point_cloud);
+        _latest_result.mesh        = dense_mesh;
+        _latest_result.valid       = true;
     }
 }
 

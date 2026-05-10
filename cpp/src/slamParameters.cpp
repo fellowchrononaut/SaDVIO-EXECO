@@ -77,18 +77,33 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.ZNCC_tsh              = yaml_file["ZNCC_tsh"].as<double>();
     _config.max_length_tsh        = yaml_file["max_length_tsh"].as<double>();
 
-    if (yaml_file["stereo_depth_enabled"])
-        _config.stereo_depth_enabled      = yaml_file["stereo_depth_enabled"].as<bool>();
-    if (yaml_file["stereo_depth_compute_mesh"])
-        _config.stereo_depth_compute_mesh = yaml_file["stereo_depth_compute_mesh"].as<bool>();
+    // dense_depth / dense_mesh3D / stereo_depth_enabled (backward compat aliases)
+    if (yaml_file["dense_depth"])
+        _config.dense_depth = yaml_file["dense_depth"].as<bool>();
+    else if (yaml_file["dense_mesh3D"])
+        _config.dense_depth = yaml_file["dense_mesh3D"].as<bool>();
+    else if (yaml_file["stereo_depth_enabled"])
+        _config.dense_depth = yaml_file["stereo_depth_enabled"].as<bool>();
+    if (yaml_file["dense_mesh_method"])
+        _config.dense_mesh_method     = yaml_file["dense_mesh_method"].as<std::string>();
     if (yaml_file["stereo_depth_scale"])
-        _config.stereo_depth_scale        = yaml_file["stereo_depth_scale"].as<double>();
+        _config.stereo_depth_scale    = yaml_file["stereo_depth_scale"].as<double>();
     if (yaml_file["stereo_depth_num_disp"])
         _config.stereo_depth_num_disp     = yaml_file["stereo_depth_num_disp"].as<int>();
     if (yaml_file["stereo_depth_block_size"])
         _config.stereo_depth_block_size   = yaml_file["stereo_depth_block_size"].as<int>();
     if (yaml_file["stereo_depth_stride"])
         _config.stereo_depth_stride       = yaml_file["stereo_depth_stride"].as<int>();
+    if (yaml_file["stereo_depth_uniqueness_ratio"])
+        _config.stereo_depth_uniqueness_ratio = yaml_file["stereo_depth_uniqueness_ratio"].as<int>();
+    if (yaml_file["stereo_depth_speckle_window_size"])
+        _config.stereo_depth_speckle_window_size = yaml_file["stereo_depth_speckle_window_size"].as<int>();
+    if (yaml_file["stereo_depth_speckle_range"])
+        _config.stereo_depth_speckle_range = yaml_file["stereo_depth_speckle_range"].as<int>();
+    if (yaml_file["stereo_depth_disp12_max_diff"])
+        _config.stereo_depth_disp12_max_diff = yaml_file["stereo_depth_disp12_max_diff"].as<int>();
+    if (yaml_file["stereo_depth_pre_filter_cap"])
+        _config.stereo_depth_pre_filter_cap = yaml_file["stereo_depth_pre_filter_cap"].as<int>();
 
     // Features type
     YAML::Node features_node = yaml_file["features_handled"];

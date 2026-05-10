@@ -15,22 +15,30 @@
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <string>
 
 namespace isae {
 
 struct MarginalDepthConfig {
-    int    num_disparities  = 64;
-    int    block_size       = 5;
-    double scale_factor     = 1.0;
-    int    stride           = 2;
-    bool   compute_mesh     = false; // run GP mesh estimator; false = depth image only (fast)
+    int         num_disparities = 64;
+    int         block_size      = 5;
+    double      scale_factor    = 1.0;
+    int         stride          = 2;
+    double      max_depth       = 20.0;  // metres — points beyond this are dropped
+    std::string mesh_method     = "none"; // "none"=depth only, "gp"=GP, "pd"=PD
+    int         uniqueness_ratio    = 10;
+    int         speckle_window_size = 100;
+    int         speckle_range       = 32;
+    int         disp12_max_diff     = 1;
+    int         pre_filter_cap      = 0;
 };
 
 // Holds the latest processed result, readable by the ROS visualizer.
 struct DenseResult {
-    cv::Mat   depth_img; // float32 depth in metres, same size as input image
-    DenseMesh mesh;      // GP mesh in world frame (vertices, faces, normals)
-    bool      valid = false;
+    cv::Mat                      depth_img;   // float32 depth in metres, same size as input image
+    std::vector<Eigen::Vector3d> point_cloud; // world-frame 3D points back-projected from depth_img
+    DenseMesh                    mesh;        // GP/PD mesh (vertices, faces, normals) — empty if method="none"
+    bool                         valid = false;
 };
 
 class MarginalDepthInjector {

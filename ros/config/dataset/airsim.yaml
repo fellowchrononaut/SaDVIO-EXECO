@@ -64,5 +64,5 @@ imu:
 # causing timestamp drift of 40-100ms despite both cameras rendering the same
 # virtual frame. 105ms accepts all observed drifts; image content is still
 # synchronised because AirSim renders both views at the same simulation tick.
-stereo_sync_tolerance_ms: 105
+stereo_sync_tolerance_ms: 30
 

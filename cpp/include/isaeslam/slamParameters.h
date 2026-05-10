@@ -87,13 +87,18 @@ struct Config {
     double ZNCC_tsh;             //!< Threshold on ZNCC for triangle filtering
     double max_length_tsh;       //!< Threshold on maximum length for triangle filtering
 
-    // Dense stereo mesh augmentation
-    bool   stereo_depth_enabled      = false;
-    bool   stereo_depth_compute_mesh = false; // false = depth image only; true = also run GP mesh
-    double stereo_depth_scale        = 1.0;
-    int    stereo_depth_num_disp     = 64;
-    int    stereo_depth_block_size   = 5;
-    int    stereo_depth_stride       = 2;
+    // Dense SGBM mesh pipeline — fully independent of mesh3d (sparse ZNCC mesh)
+    bool        dense_depth          = false;         // enable dense SGBM pipeline
+    std::string dense_mesh_method   = "none";        // "none"=depth only, "gp"=GP mesh, "pd"=PD mesh
+    double      stereo_depth_scale  = 1.0;           // SGBM image scale factor
+    int         stereo_depth_num_disp   = 64;
+    int         stereo_depth_block_size = 5;
+    int         stereo_depth_stride     = 2;
+    int         stereo_depth_uniqueness_ratio      = 10;
+    int         stereo_depth_speckle_window_size   = 100;
+    int         stereo_depth_speckle_range         = 32;
+    int         stereo_depth_disp12_max_diff       = 1;
+    int         stereo_depth_pre_filter_cap        = 0;
 
     std::vector<FeatureStruct> features_handled; //!< types of features the slam will work on separated with commas (,)
 };

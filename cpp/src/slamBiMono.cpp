@@ -48,7 +48,7 @@ bool SLAMBiMono::init() {
     profiling();
 
     // Construct dense stereo injector if enabled
-    if (_slam_param->_config.stereo_depth_enabled) {
+    if (_slam_param->_config.dense_depth) {
         auto cam_cfgs = _slam_param->getDataProvider()->getCamConfigs();
         if (cam_cfgs.size() >= 2) {
             auto& cL = *cam_cfgs.at(0);
@@ -63,7 +63,12 @@ bool SLAMBiMono::init() {
             dcfg.block_size       = _slam_param->_config.stereo_depth_block_size;
             dcfg.scale_factor     = _slam_param->_config.stereo_depth_scale;
             dcfg.stride           = _slam_param->_config.stereo_depth_stride;
-            dcfg.compute_mesh     = _slam_param->_config.stereo_depth_compute_mesh;
+            dcfg.mesh_method      = _slam_param->_config.dense_mesh_method;
+            dcfg.uniqueness_ratio    = _slam_param->_config.stereo_depth_uniqueness_ratio;
+            dcfg.speckle_window_size = _slam_param->_config.stereo_depth_speckle_window_size;
+            dcfg.speckle_range       = _slam_param->_config.stereo_depth_speckle_range;
+            dcfg.disp12_max_diff     = _slam_param->_config.stereo_depth_disp12_max_diff;
+            dcfg.pre_filter_cap      = _slam_param->_config.stereo_depth_pre_filter_cap;
 
             _depth_injector = std::make_shared<MarginalDepthInjector>(
                 cL.K, cL.d, cR.K, cR.d, T_right_in_left, imsz, dcfg);
@@ -281,8 +286,7 @@ bool SLAMBiMono::backEndStep() {
 
             // Queue frame for async dense mesh BEFORE discardLastFrame() frees images
             if (_depth_injector)
-                _depth_injector->queueFrame(frame_to_marg,
-                                            _slam_param->_config.mesh3D ? _mesher->_mesh_3d : nullptr);
+                _depth_injector->queueFrame(frame_to_marg, nullptr);
 
             if (_slam_param->_config.marginalization == 1)
                 _slam_param->getOptimizerBack()->marginalize(frame_to_marg,

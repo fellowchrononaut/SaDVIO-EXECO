@@ -61,12 +61,18 @@ imu:
   accelerometer_random_walk: 3.0000e-3   # [ m / s^3 / sqrt(Hz) ].  ( accel bias diffusion )
   dt_imu_cam: 0.00
 
-## Dense stereo mesh augmentation
-stereo_depth_enabled:    false
+## Dense stereo mesh (independent of mesh3d sparse pipeline)
+dense_depth:             false
+dense_mesh_method:       "none"   # "none"=depth only, "gp"=GP mesh, "pd"=PD mesh
 stereo_depth_num_disp:   64
 stereo_depth_block_size: 5
 stereo_depth_scale:      1.0
 stereo_depth_stride:     2
+stereo_depth_uniqueness_ratio:    10
+stereo_depth_speckle_window_size: 100
+stereo_depth_speckle_range:       32
+stereo_depth_disp12_max_diff:     1
+stereo_depth_pre_filter_cap:      0
 
 lidar:
   topic: /ouster/points

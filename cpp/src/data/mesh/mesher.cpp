@@ -1,5 +1,6 @@
 #include "isaeslam/data/mesh/mesher.h"
 
+#include <iostream>
 #include <opencv2/highgui/highgui.hpp>
 
 namespace isae {
@@ -78,18 +79,23 @@ void Mesher::run() {
             _n_kf++;
             auto t0 = std::chrono::high_resolution_clock::now();
 
-            _mesh_3d->updateMesh(this->createMesh2D(_curr_kf->getSensors().at(0)), _curr_kf);
-            if (_slam_mode == "nofov" && _curr_kf->getSensors().size() > 1)
-                _mesh_3d->updateMesh(this->createMesh2D(_curr_kf->getSensors().at(1)), _curr_kf);
+            // Wrap in try/catch: cv::Subdiv2D can throw cv::Exception on
+            // degenerate feature configurations (collinear points, out-of-bounds
+            // keypoints, etc.). Without this, an exception from a detached thread
+            // calls std::terminate() and kills the whole process (exit code -6).
+            try {
+                _mesh_3d->updateMesh(this->createMesh2D(_curr_kf->getSensors().at(0)), _curr_kf);
+                if (_slam_mode == "nofov" && _curr_kf->getSensors().size() > 1)
+                    _mesh_3d->updateMesh(this->createMesh2D(_curr_kf->getSensors().at(1)), _curr_kf);
+            } catch (const std::exception& e) {
+                std::cerr << "[Mesher] skipping KF due to exception: " << e.what() << std::endl;
+            } catch (...) {
+                std::cerr << "[Mesher] skipping KF due to unknown exception" << std::endl;
+            }
 
             auto t1     = std::chrono::high_resolution_clock::now();
             double dt   = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
             _avg_mesh_t = (_avg_mesh_t * ((double)_n_kf - 1) + dt) / (double)_n_kf;
-
-            // std::ofstream fw_mesh("log_slam/timing_mesh.csv",
-            //                       std::ofstream::out | std::ofstream::app);
-            // fw_mesh << dt << "\n";
-            // fw_mesh.close();
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

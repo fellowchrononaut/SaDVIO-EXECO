@@ -90,6 +90,7 @@ class SensorSubscriber : public rclcpp::Node {
 
             // Case Stereo
             if (_prov->getNCam() == 2) {
+                std::lock_guard<std::mutex> lock(_img_mutex);
                 if (!_imgs_bufl.empty() && !_imgs_bufr.empty()) {
                     double time0 = _imgs_bufl.front().header.stamp.sec * 1e9 + _imgs_bufl.front().header.stamp.nanosec;
                     double time1 = _imgs_bufr.front().header.stamp.sec * 1e9 + _imgs_bufr.front().header.stamp.nanosec;
@@ -110,12 +111,10 @@ class SensorSubscriber : public rclcpp::Node {
                             sensors.clear();
                         }
 
-                        _img_mutex.lock();
                         image0 = getGrayImageFromMsg(_imgs_bufl.front());
                         image1 = getGrayImageFromMsg(_imgs_bufr.front());
                         _imgs_bufl.pop();
                         _imgs_bufr.pop();
-                        _img_mutex.unlock();
 
                         imgs.push_back(image0);
                         imgs.push_back(image1);
@@ -273,6 +272,7 @@ class SensorSubscriberCompressed : public rclcpp::Node {
 
             // Case Stereo
             if (_prov->getNCam() == 2) {
+                std::lock_guard<std::mutex> lock(_img_mutex);
                 if (!_imgs_bufl.empty() && !_imgs_bufr.empty()) {
                     double time0 = _imgs_bufl.front().header.stamp.sec * 1e9 + _imgs_bufl.front().header.stamp.nanosec;
                     double time1 = _imgs_bufr.front().header.stamp.sec * 1e9 + _imgs_bufr.front().header.stamp.nanosec;
@@ -293,12 +293,10 @@ class SensorSubscriberCompressed : public rclcpp::Node {
                             sensors.clear();
                         }
 
-                        _img_mutex.lock();
                         image0 = getGrayImageFromMsg(_imgs_bufl.front());
                         image1 = getGrayImageFromMsg(_imgs_bufr.front());
                         _imgs_bufl.pop();
                         _imgs_bufr.pop();
-                        _img_mutex.unlock();
 
                         imgs.push_back(image0);
                         imgs.push_back(image1);

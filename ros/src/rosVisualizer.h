@@ -601,10 +601,12 @@ class RosVisualizer : public rclcpp::Node {
         _pub_dense_mesh->publish(marker);
     }
 
-    void publishDenseCloud(const isae::DenseMesh& dm) {
-        if (dm.vertices.empty())
+    void publishDenseCloud(const isae::DenseResult& result) {
+        // Prefer the direct depth backprojection; fall back to GP/PD mesh vertices.
+        const auto& pts = result.point_cloud.empty() ? result.mesh.vertices : result.point_cloud;
+        if (pts.empty())
             return;
-        auto msg = convertToPointCloud2(dm.vertices);
+        auto msg = convertToPointCloud2(pts);
         _pub_dense_cloud->publish(*msg);
     }
 
@@ -635,7 +637,7 @@ class RosVisualizer : public rclcpp::Node {
                 if (SLAM->_depth_injector->pollResult(result)) {
                     publishDenseDepth(result.depth_img);
                     publishDenseMesh(result.mesh);
-                    publishDenseCloud(result.mesh);
+                    publishDenseCloud(result);
                 }
             }
 
