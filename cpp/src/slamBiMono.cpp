@@ -72,6 +72,23 @@ bool SLAMBiMono::init() {
             dcfg.speckle_range       = _slam_param->_config.stereo_depth_speckle_range;
             dcfg.disp12_max_diff     = _slam_param->_config.stereo_depth_disp12_max_diff;
             dcfg.pre_filter_cap      = _slam_param->_config.stereo_depth_pre_filter_cap;
+            dcfg.gp_cell_size        = _slam_param->_config.dense_gp_cell_size;
+            dcfg.gp_num_test         = _slam_param->_config.dense_gp_num_test;
+            dcfg.gp_min_pts_per_cell = _slam_param->_config.dense_gp_min_pts_per_cell;
+            dcfg.gp_kernel_length    = _slam_param->_config.dense_gp_kernel_length;
+            dcfg.gp_variance_sensor  = _slam_param->_config.dense_gp_variance_sensor;
+            dcfg.gp_max_variance     = _slam_param->_config.dense_gp_max_variance;
+            dcfg.gp_full_cover       = _slam_param->_config.dense_gp_full_cover;
+            dcfg.gp_eigen_1          = _slam_param->_config.dense_gp_eigen_1;
+            dcfg.gp_eigen_2          = _slam_param->_config.dense_gp_eigen_2;
+            dcfg.gp_eigen_3          = _slam_param->_config.dense_gp_eigen_3;
+            dcfg.pd_steiner_spacing  = _slam_param->_config.dense_pd_steiner_spacing;
+            dcfg.pd_lambda           = _slam_param->_config.dense_pd_lambda;
+            dcfg.pd_num_iterations   = _slam_param->_config.dense_pd_num_iterations;
+            dcfg.pd_tau              = _slam_param->_config.dense_pd_tau;
+            dcfg.pd_sigma            = _slam_param->_config.dense_pd_sigma;
+            dcfg.pd_theta            = _slam_param->_config.dense_pd_theta;
+            dcfg.pd_min_depth        = _slam_param->_config.dense_pd_min_depth;
 
             _depth_injector = std::make_shared<MarginalDepthInjector>(
                 cL.K, cL.d, cR.K, cR.d, T_right_in_left, imsz, dcfg);

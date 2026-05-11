@@ -34,6 +34,27 @@ struct MarginalDepthConfig {
     int         speckle_range       = 32;
     int         disp12_max_diff     = 1;
     int         pre_filter_cap      = 0;
+
+    // SLAMesh-style GP meshing from dense SGBM points
+    double gp_cell_size        = 1.0;
+    int    gp_num_test         = 6;
+    int    gp_min_pts_per_cell = 8;
+    double gp_kernel_length    = 1.2;
+    double gp_variance_sensor  = 0.1;
+    double gp_max_variance     = 0.5;
+    bool   gp_full_cover       = false;
+    double gp_eigen_1          = 48.0;
+    double gp_eigen_2          = 0.95;
+    double gp_eigen_3          = 0.2;
+
+    // Primal-dual mesh optimization over SGBM inverse depth
+    int    pd_steiner_spacing = 20;
+    double pd_lambda          = 0.5;
+    int    pd_num_iterations  = 120;
+    double pd_tau             = 0.01;
+    double pd_sigma           = 0.1;
+    double pd_theta           = 1.0;
+    double pd_min_depth       = 0.5;
 };
 
 // Holds the latest processed result, readable by the ROS visualizer.

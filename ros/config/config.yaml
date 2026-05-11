@@ -57,6 +57,23 @@ stereo_depth_speckle_window_size: 100
 stereo_depth_speckle_range:       32
 stereo_depth_disp12_max_diff:     1
 stereo_depth_pre_filter_cap:      0
+dense_gp_cell_size:          1.0    # metres; SLAMesh voxel/cell size
+dense_gp_num_test:           6      # predicted GP grid side per cell
+dense_gp_min_pts_per_cell:   8
+dense_gp_kernel_length:      1.2
+dense_gp_variance_sensor:    0.1
+dense_gp_max_variance:       0.5    # reject faces above this average GP variance
+dense_gp_full_cover:         false  # true includes cell borders in the prediction grid
+dense_gp_eigen_1:            48.0   # PCA non-surface threshold
+dense_gp_eigen_2:            0.95   # PCA one-direction threshold
+dense_gp_eigen_3:            0.2    # PCA two-vs-three direction threshold
+dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
+dense_pd_lambda:             0.5    # depth/tracking L1 data weight
+dense_pd_num_iterations:     120
+dense_pd_tau:                0.01   # primal step
+dense_pd_sigma:              0.1    # dual step
+dense_pd_theta:              1.0    # extrapolation
+dense_pd_min_depth:          0.5    # metres; max depth uses stereo_depth_max_depth
 
 ## KF selection criteria
 min_lmk_number: 50              # minimum tracked landmark below which a KF is voted

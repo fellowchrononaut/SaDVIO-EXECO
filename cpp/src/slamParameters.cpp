@@ -106,6 +106,40 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.stereo_depth_disp12_max_diff = yaml_file["stereo_depth_disp12_max_diff"].as<int>();
     if (yaml_file["stereo_depth_pre_filter_cap"])
         _config.stereo_depth_pre_filter_cap = yaml_file["stereo_depth_pre_filter_cap"].as<int>();
+    if (yaml_file["dense_gp_cell_size"])
+        _config.dense_gp_cell_size = yaml_file["dense_gp_cell_size"].as<double>();
+    if (yaml_file["dense_gp_num_test"])
+        _config.dense_gp_num_test = yaml_file["dense_gp_num_test"].as<int>();
+    if (yaml_file["dense_gp_min_pts_per_cell"])
+        _config.dense_gp_min_pts_per_cell = yaml_file["dense_gp_min_pts_per_cell"].as<int>();
+    if (yaml_file["dense_gp_kernel_length"])
+        _config.dense_gp_kernel_length = yaml_file["dense_gp_kernel_length"].as<double>();
+    if (yaml_file["dense_gp_variance_sensor"])
+        _config.dense_gp_variance_sensor = yaml_file["dense_gp_variance_sensor"].as<double>();
+    if (yaml_file["dense_gp_max_variance"])
+        _config.dense_gp_max_variance = yaml_file["dense_gp_max_variance"].as<double>();
+    if (yaml_file["dense_gp_full_cover"])
+        _config.dense_gp_full_cover = yaml_file["dense_gp_full_cover"].as<bool>();
+    if (yaml_file["dense_gp_eigen_1"])
+        _config.dense_gp_eigen_1 = yaml_file["dense_gp_eigen_1"].as<double>();
+    if (yaml_file["dense_gp_eigen_2"])
+        _config.dense_gp_eigen_2 = yaml_file["dense_gp_eigen_2"].as<double>();
+    if (yaml_file["dense_gp_eigen_3"])
+        _config.dense_gp_eigen_3 = yaml_file["dense_gp_eigen_3"].as<double>();
+    if (yaml_file["dense_pd_steiner_spacing"])
+        _config.dense_pd_steiner_spacing = yaml_file["dense_pd_steiner_spacing"].as<int>();
+    if (yaml_file["dense_pd_lambda"])
+        _config.dense_pd_lambda = yaml_file["dense_pd_lambda"].as<double>();
+    if (yaml_file["dense_pd_num_iterations"])
+        _config.dense_pd_num_iterations = yaml_file["dense_pd_num_iterations"].as<int>();
+    if (yaml_file["dense_pd_tau"])
+        _config.dense_pd_tau = yaml_file["dense_pd_tau"].as<double>();
+    if (yaml_file["dense_pd_sigma"])
+        _config.dense_pd_sigma = yaml_file["dense_pd_sigma"].as<double>();
+    if (yaml_file["dense_pd_theta"])
+        _config.dense_pd_theta = yaml_file["dense_pd_theta"].as<double>();
+    if (yaml_file["dense_pd_min_depth"])
+        _config.dense_pd_min_depth = yaml_file["dense_pd_min_depth"].as<double>();
 
     // Features type
     YAML::Node features_node = yaml_file["features_handled"];

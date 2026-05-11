@@ -64,6 +64,27 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
     _zncc_cfg.max_edge_length  = cfg.max_length_threshold;
     _zncc_cfg.max_depth        = cfg.max_depth;
 
+    _gp_cfg.cell_size        = cfg.gp_cell_size;
+    _gp_cfg.num_test         = cfg.gp_num_test;
+    _gp_cfg.min_pts_per_cell = cfg.gp_min_pts_per_cell;
+    _gp_cfg.kernel_length    = cfg.gp_kernel_length;
+    _gp_cfg.variance_sensor  = cfg.gp_variance_sensor;
+    _gp_cfg.max_variance     = cfg.gp_max_variance;
+    _gp_cfg.max_depth        = cfg.max_depth;
+    _gp_cfg.full_cover       = cfg.gp_full_cover;
+    _gp_cfg.eigen_1          = cfg.gp_eigen_1;
+    _gp_cfg.eigen_2          = cfg.gp_eigen_2;
+    _gp_cfg.eigen_3          = cfg.gp_eigen_3;
+
+    _pd_cfg.steiner_spacing = cfg.pd_steiner_spacing;
+    _pd_cfg.lambda          = cfg.pd_lambda;
+    _pd_cfg.num_iterations  = cfg.pd_num_iterations;
+    _pd_cfg.tau             = cfg.pd_tau;
+    _pd_cfg.sigma           = cfg.pd_sigma;
+    _pd_cfg.theta           = cfg.pd_theta;
+    _pd_cfg.min_depth       = cfg.pd_min_depth;
+    _pd_cfg.max_depth       = cfg.max_depth;
+
     // Compute undistort+rectify maps for both cameras
     cv::initUndistortRectifyMap(K_L_cv, d_L_cv, R1, P1,
                                 img_size, CV_32FC1,

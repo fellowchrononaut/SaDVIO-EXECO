@@ -101,6 +101,27 @@ struct Config {
     int         stereo_depth_disp12_max_diff       = 1;
     int         stereo_depth_pre_filter_cap        = 0;
 
+    // Dense GP mesh controls, matching the SLAMesh local GP reconstruction.
+    double      dense_gp_cell_size        = 1.0;
+    int         dense_gp_num_test         = 6;
+    int         dense_gp_min_pts_per_cell = 8;
+    double      dense_gp_kernel_length    = 1.2;
+    double      dense_gp_variance_sensor  = 0.1;
+    double      dense_gp_max_variance     = 0.5;
+    bool        dense_gp_full_cover       = false;
+    double      dense_gp_eigen_1          = 48.0;
+    double      dense_gp_eigen_2          = 0.95;
+    double      dense_gp_eigen_3          = 0.2;
+
+    // Dense primal-dual mesh controls from the inverse-depth optimization paper.
+    int         dense_pd_steiner_spacing = 20;
+    double      dense_pd_lambda          = 0.5;
+    int         dense_pd_num_iterations  = 120;
+    double      dense_pd_tau             = 0.01;
+    double      dense_pd_sigma           = 0.1;
+    double      dense_pd_theta           = 1.0;
+    double      dense_pd_min_depth       = 0.5;
+
     std::vector<FeatureStruct> features_handled; //!< types of features the slam will work on separated with commas (,)
 };
 

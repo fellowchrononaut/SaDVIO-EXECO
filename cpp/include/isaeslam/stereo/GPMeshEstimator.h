@@ -9,13 +9,17 @@
 namespace isae {
 
 struct GPMeshConfig {
-    double cell_size         = 0.20;  // world-frame BEV cell size in metres
-    int    n_out             = 3;     // prediction grid per cell side
-    int    min_pts_per_cell  = 4;
-    int    max_pts_per_cell  = 30;
-    double kappa             = 1.0;   // Laplacian kernel lengthscale
-    double sigma2_noise      = 0.04;  // SGBM obs noise variance [m^2]
-    double max_variance      = 0.25;  // drop vertices with sigma^2 > this
+    double cell_size        = 1.0;   // SLAMesh voxel/cell size in metres
+    int    num_test         = 6;     // prediction grid per cell side, paper uses 6x6
+    int    min_pts_per_cell = 8;
+    double kernel_length    = 1.2;   // exponential kernel scale used by the reference code
+    double variance_sensor  = 0.1;   // input noise standard deviation
+    double max_variance     = 0.5;   // accept faces with average GP variance below this
+    double max_depth        = 20.0;  // metres
+    bool   full_cover       = false; // false: predict at cell-centred samples, as in SLAMesh defaults
+    double eigen_1          = 48.0;  // surface/non-surface PCA threshold
+    double eigen_2          = 0.95;  // distinctive angle threshold
+    double eigen_3          = 0.2;   // obscure angle threshold
 };
 
 class GPMeshEstimator {

@@ -567,8 +567,24 @@ class RosVisualizer : public rclcpp::Node {
     }
 
     void publishDenseMesh(const isae::DenseMesh& dm) {
-        if (dm.vertices.empty() || dm.faces.empty())
+        if (dm.vertices.empty() || dm.faces.empty()) {
+            visualization_msgs::msg::Marker clear_faces;
+            clear_faces.header.frame_id = "world";
+            clear_faces.header.stamp    = rclcpp::Node::now();
+            clear_faces.ns              = "dense_mesh";
+            clear_faces.id              = 10;
+            clear_faces.action          = visualization_msgs::msg::Marker::DELETE;
+            _pub_dense_mesh->publish(clear_faces);
+
+            visualization_msgs::msg::Marker clear_edges;
+            clear_edges.header.frame_id = "world";
+            clear_edges.header.stamp    = clear_faces.header.stamp;
+            clear_edges.ns              = "dense_mesh_edges";
+            clear_edges.id              = 11;
+            clear_edges.action          = visualization_msgs::msg::Marker::DELETE;
+            _pub_dense_mesh->publish(clear_edges);
             return;
+        }
 
         visualization_msgs::msg::Marker marker;
         marker.header.frame_id = "world";
@@ -579,30 +595,75 @@ class RosVisualizer : public rclcpp::Node {
         marker.id              = 10;
         marker.scale.x = marker.scale.y = marker.scale.z = 1.0;
         marker.pose.orientation.w = 1.0;
-        marker.color.a = 0.5f;
+        marker.color.a = 0.85f;
+
+        visualization_msgs::msg::Marker edge_marker;
+        edge_marker.header         = marker.header;
+        edge_marker.type           = visualization_msgs::msg::Marker::LINE_LIST;
+        edge_marker.action         = visualization_msgs::msg::Marker::ADD;
+        edge_marker.ns             = "dense_mesh_edges";
+        edge_marker.id             = 11;
+        edge_marker.scale.x        = 0.015;
+        edge_marker.pose.orientation.w = 1.0;
+        edge_marker.color.r        = 0.02f;
+        edge_marker.color.g        = 0.07f;
+        edge_marker.color.b        = 0.03f;
+        edge_marker.color.a        = 0.95f;
+
+        auto toPoint = [](const Eigen::Vector3d& v) {
+            geometry_msgs::msg::Point p;
+            p.x = v.x();
+            p.y = v.y();
+            p.z = v.z();
+            return p;
+        };
 
         for (const auto& face : dm.faces) {
+            bool valid_face = true;
+            for (int k = 0; k < 3; ++k) {
+                const int vi = face[k];
+                valid_face = valid_face && vi >= 0 && vi < static_cast<int>(dm.vertices.size());
+            }
+            if (!valid_face)
+                continue;
+
             for (int k = 0; k < 3; ++k) {
                 int vi = face[k];
-                if (vi < 0 || vi >= static_cast<int>(dm.vertices.size()))
-                    continue;
                 const auto& v = dm.vertices[vi];
-                geometry_msgs::msg::Point p;
-                p.x = v.x(); p.y = v.y(); p.z = v.z();
-                marker.points.push_back(p);
+                marker.points.push_back(toPoint(v));
 
                 std_msgs::msg::ColorRGBA color;
                 color.r = 0.0f;
-                color.g = 1.0f;
-                color.b = 0.0f;
-                color.a = 1.0f;
+                color.g = 0.55f;
+                color.b = 0.08f;
+                color.a = 0.85f;
                 marker.colors.push_back(color);
             }
+
+            const Eigen::Vector3d& v0 = dm.vertices[face[0]];
+            const Eigen::Vector3d& v1 = dm.vertices[face[1]];
+            const Eigen::Vector3d& v2 = dm.vertices[face[2]];
+            Eigen::Vector3d edge_offset = (v1 - v0).cross(v2 - v0);
+            if (edge_offset.norm() > 1e-12)
+                edge_offset = -0.003 * edge_offset.normalized();
+            else
+                edge_offset.setZero();
+
+            const Eigen::Vector3d e0 = v0 + edge_offset;
+            const Eigen::Vector3d e1 = v1 + edge_offset;
+            const Eigen::Vector3d e2 = v2 + edge_offset;
+            edge_marker.points.push_back(toPoint(e0));
+            edge_marker.points.push_back(toPoint(e1));
+            edge_marker.points.push_back(toPoint(e1));
+            edge_marker.points.push_back(toPoint(e2));
+            edge_marker.points.push_back(toPoint(e2));
+            edge_marker.points.push_back(toPoint(e0));
         }
 
         std::cout << "[DenseMeshRViz] publishing triangles="
                   << marker.points.size() / 3 << std::endl;
         _pub_dense_mesh->publish(marker);
+        _pub_dense_mesh->publish(edge_marker);
     }
 
     void publishDenseCloud(const isae::DenseResult& result) {

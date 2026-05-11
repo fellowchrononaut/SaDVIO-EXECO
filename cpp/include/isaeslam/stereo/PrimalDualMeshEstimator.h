@@ -12,12 +12,13 @@ namespace isae {
 
 struct PrimalDualConfig {
     int    steiner_spacing = 20;   // px, spacing between Steiner grid points
-    double lambda          = 0.5;  // TV weight
-    int    num_iterations  = 80;
-    double tau             = 0.02; // primal step
-    double sigma           = 0.5;  // dual step
+    double lambda          = 0.5;  // data/tracking weight from the paper
+    int    num_iterations  = 120;
+    double tau             = 0.01; // primal step
+    double sigma           = 0.1;  // dual step
+    double theta           = 1.0;  // Chambolle-Pock extrapolation
     double min_depth       = 0.5;  // metres
-    double max_depth       = 50.0; // metres
+    double max_depth       = 20.0; // metres
 };
 
 class PrimalDualMeshEstimator {
