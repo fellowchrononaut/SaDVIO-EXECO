@@ -75,6 +75,11 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
     _gp_cfg.eigen_1          = cfg.gp_eigen_1;
     _gp_cfg.eigen_2          = cfg.gp_eigen_2;
     _gp_cfg.eigen_3          = cfg.gp_eigen_3;
+    _gp_cfg.stitch_seams            = cfg.gp_stitch_seams;
+    _gp_cfg.seam_max_variance       = cfg.gp_seam_max_variance;
+    _gp_cfg.seam_max_edge_length    = cfg.gp_seam_max_edge_length;
+    _gp_cfg.seam_max_prediction_gap = cfg.gp_seam_max_prediction_gap;
+    _gp_cfg.seam_min_normal_cos     = cfg.gp_seam_min_normal_cos;
 
     _pd_cfg.steiner_spacing = cfg.pd_steiner_spacing;
     _pd_cfg.lambda          = cfg.pd_lambda;
@@ -301,7 +306,14 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     // Store result for the ROS visualizer to poll
     {
         std::lock_guard<std::mutex> lock(_result_mtx);
-        _latest_result.depth_img   = depth_img.clone();
+        _latest_result.depth_img = depth_img.clone();
+        if (_cfg.publish_sgbm_images) {
+            _latest_result.sgbm_left_img  = gray_L.clone();
+            _latest_result.sgbm_right_img = gray_R.clone();
+        } else {
+            _latest_result.sgbm_left_img.release();
+            _latest_result.sgbm_right_img.release();
+        }
         _latest_result.point_cloud = std::move(point_cloud);
         _latest_result.mesh        = dense_mesh;
         _latest_result.valid       = true;

@@ -106,6 +106,8 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.stereo_depth_disp12_max_diff = yaml_file["stereo_depth_disp12_max_diff"].as<int>();
     if (yaml_file["stereo_depth_pre_filter_cap"])
         _config.stereo_depth_pre_filter_cap = yaml_file["stereo_depth_pre_filter_cap"].as<int>();
+    if (yaml_file["stereo_depth_publish_sgbm_images"])
+        _config.stereo_depth_publish_sgbm_images = yaml_file["stereo_depth_publish_sgbm_images"].as<bool>();
     if (yaml_file["dense_gp_cell_size"])
         _config.dense_gp_cell_size = yaml_file["dense_gp_cell_size"].as<double>();
     if (yaml_file["dense_gp_num_test"])
@@ -126,6 +128,16 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.dense_gp_eigen_2 = yaml_file["dense_gp_eigen_2"].as<double>();
     if (yaml_file["dense_gp_eigen_3"])
         _config.dense_gp_eigen_3 = yaml_file["dense_gp_eigen_3"].as<double>();
+    if (yaml_file["dense_gp_stitch_seams"])
+        _config.dense_gp_stitch_seams = yaml_file["dense_gp_stitch_seams"].as<bool>();
+    if (yaml_file["dense_gp_seam_max_variance"])
+        _config.dense_gp_seam_max_variance = yaml_file["dense_gp_seam_max_variance"].as<double>();
+    if (yaml_file["dense_gp_seam_max_edge_length"])
+        _config.dense_gp_seam_max_edge_length = yaml_file["dense_gp_seam_max_edge_length"].as<double>();
+    if (yaml_file["dense_gp_seam_max_prediction_gap"])
+        _config.dense_gp_seam_max_prediction_gap = yaml_file["dense_gp_seam_max_prediction_gap"].as<double>();
+    if (yaml_file["dense_gp_seam_min_normal_cos"])
+        _config.dense_gp_seam_min_normal_cos = yaml_file["dense_gp_seam_min_normal_cos"].as<double>();
     if (yaml_file["dense_pd_steiner_spacing"])
         _config.dense_pd_steiner_spacing = yaml_file["dense_pd_steiner_spacing"].as<int>();
     if (yaml_file["dense_pd_lambda"])

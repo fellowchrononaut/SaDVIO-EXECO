@@ -95,6 +95,8 @@ class RosVisualizer : public rclcpp::Node {
         _pub_marker                 = this->create_publisher<visualization_msgs::msg::Marker>("mesh", 1000);
         _pub_cloud                  = this->create_publisher<sensor_msgs::msg::PointCloud2>("point_cloud", 1000);
         _pub_dense_depth            = this->create_publisher<sensor_msgs::msg::Image>("dense_depth", 10);
+        _pub_dense_sgbm_left        = this->create_publisher<sensor_msgs::msg::Image>("dense_sgbm_left", 10);
+        _pub_dense_sgbm_right       = this->create_publisher<sensor_msgs::msg::Image>("dense_sgbm_right", 10);
         _pub_dense_mesh             = this->create_publisher<visualization_msgs::msg::Marker>("dense_mesh", 10);
         _pub_dense_cloud            = this->create_publisher<sensor_msgs::msg::PointCloud2>("dense_point_cloud", 10);
         _tf_broadcaster             = std::make_shared<tf2_ros::TransformBroadcaster>(this);
@@ -566,6 +568,30 @@ class RosVisualizer : public rclcpp::Node {
         _pub_dense_depth->publish(*msg);
     }
 
+    void publishDenseSGBMImages(const isae::DenseResult& result) {
+        if (result.sgbm_left_img.empty() || result.sgbm_right_img.empty())
+            return;
+
+        std_msgs::msg::Header header;
+        header.frame_id = "world";
+        header.stamp    = rclcpp::Node::now();
+
+        auto publish_mono8 = [&](const cv::Mat& img,
+                                 const rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& pub) {
+            cv::Mat mono8;
+            if (img.type() == CV_8UC1) {
+                mono8 = img;
+            } else {
+                img.convertTo(mono8, CV_8U);
+            }
+            auto msg = cv_bridge::CvImage(header, "mono8", mono8).toImageMsg();
+            pub->publish(*msg);
+        };
+
+        publish_mono8(result.sgbm_left_img, _pub_dense_sgbm_left);
+        publish_mono8(result.sgbm_right_img, _pub_dense_sgbm_right);
+    }
+
     void publishDenseMesh(const isae::DenseMesh& dm) {
         if (dm.vertices.empty() || dm.faces.empty()) {
             visualization_msgs::msg::Marker clear_faces;
@@ -603,12 +629,12 @@ class RosVisualizer : public rclcpp::Node {
         edge_marker.action         = visualization_msgs::msg::Marker::ADD;
         edge_marker.ns             = "dense_mesh_edges";
         edge_marker.id             = 11;
-        edge_marker.scale.x        = 0.015;
+        edge_marker.scale.x        = 0.012;
         edge_marker.pose.orientation.w = 1.0;
-        edge_marker.color.r        = 0.02f;
-        edge_marker.color.g        = 0.07f;
-        edge_marker.color.b        = 0.03f;
-        edge_marker.color.a        = 0.95f;
+        edge_marker.color.r        = 0.85f;
+        edge_marker.color.g        = 0.85f;
+        edge_marker.color.b        = 0.85f;
+        edge_marker.color.a        = 1.0f;
 
         auto toPoint = [](const Eigen::Vector3d& v) {
             geometry_msgs::msg::Point p;
@@ -645,7 +671,7 @@ class RosVisualizer : public rclcpp::Node {
             const Eigen::Vector3d& v2 = dm.vertices[face[2]];
             Eigen::Vector3d edge_offset = (v1 - v0).cross(v2 - v0);
             if (edge_offset.norm() > 1e-12)
-                edge_offset = -0.003 * edge_offset.normalized();
+                edge_offset = -0.015 * edge_offset.normalized();
             else
                 edge_offset.setZero();
 
@@ -700,6 +726,7 @@ class RosVisualizer : public rclcpp::Node {
             if (SLAM->_depth_injector) {
                 isae::DenseResult result;
                 if (SLAM->_depth_injector->pollResult(result)) {
+                    publishDenseSGBMImages(result);
                     publishDenseDepth(result.depth_img);
                     publishDenseMesh(result.mesh);
                     publishDenseCloud(result);
@@ -715,7 +742,8 @@ class RosVisualizer : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr _pub_image_kps, _pub_image_matches_in_time,
         _pub_image_matches_in_frame;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pub_cloud;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr _pub_dense_depth;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr _pub_dense_depth, _pub_dense_sgbm_left,
+        _pub_dense_sgbm_right;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _pub_dense_mesh;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pub_dense_cloud;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _pub_vo_pose;

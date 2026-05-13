@@ -34,6 +34,7 @@ struct MarginalDepthConfig {
     int         speckle_range       = 32;
     int         disp12_max_diff     = 1;
     int         pre_filter_cap      = 0;
+    bool        publish_sgbm_images = false;
 
     // SLAMesh-style GP meshing from dense SGBM points
     double gp_cell_size        = 1.0;
@@ -46,6 +47,11 @@ struct MarginalDepthConfig {
     double gp_eigen_1          = 48.0;
     double gp_eigen_2          = 0.95;
     double gp_eigen_3          = 0.2;
+    bool   gp_stitch_seams            = true;
+    double gp_seam_max_variance       = 0.5;
+    double gp_seam_max_edge_length    = 0.5;
+    double gp_seam_max_prediction_gap = 0.25;
+    double gp_seam_min_normal_cos     = 0.5;
 
     // Primal-dual mesh optimization over SGBM inverse depth
     int    pd_steiner_spacing = 20;
@@ -60,6 +66,8 @@ struct MarginalDepthConfig {
 // Holds the latest processed result, readable by the ROS visualizer.
 struct DenseResult {
     cv::Mat                      depth_img;   // float32 depth in metres, same size as input image
+    cv::Mat                      sgbm_left_img;  // rectified/scaled grayscale image used by SGBM
+    cv::Mat                      sgbm_right_img; // rectified/scaled grayscale image used by SGBM
     std::vector<Eigen::Vector3d> point_cloud; // world-frame 3D points back-projected from depth_img
     DenseMesh                    mesh;        // GP/PD mesh (vertices, faces, normals) — empty if method="none"
     bool                         valid = false;

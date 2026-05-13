@@ -20,6 +20,11 @@ struct GPMeshConfig {
     double eigen_1          = 48.0;  // surface/non-surface PCA threshold
     double eigen_2          = 0.95;  // distinctive angle threshold
     double eigen_3          = 0.2;   // obscure angle threshold
+    bool   stitch_seams               = true; // connect compatible neighbouring GP cell patches
+    double seam_max_variance          = 0.5;  // accept seam faces below this average GP variance
+    double seam_max_edge_length       = 0.5;  // metres; rejects long bridge triangles
+    double seam_max_prediction_gap    = 0.25; // metres along the GP prediction axis
+    double seam_min_normal_cos        = 0.5;  // abs(dot) between seam and patch normals
 };
 
 class GPMeshEstimator {

@@ -30,6 +30,26 @@ struct Region {
     Eigen::Vector3d max = Eigen::Vector3d::Zero();
 };
 
+struct PatchInfo {
+    CellKey cell;
+    int prediction_axis = 0;
+    int base_vertex = 0;
+    std::vector<float> variances;
+};
+
+struct PatchKey {
+    CellKey cell;
+    int prediction_axis = 0;
+
+    bool operator<(const PatchKey& other) const {
+        if (cell < other.cell)
+            return true;
+        if (other.cell < cell)
+            return false;
+        return prediction_axis < other.prediction_axis;
+    }
+};
+
 std::vector<double> evenLinSpaced(int n, double min_v, double max_v, bool full_cover) {
     std::vector<double> values(std::max(1, n), min_v);
     if (n <= 1)
@@ -283,6 +303,213 @@ void appendGridFaces(DenseMesh& mesh, int base_vertex, const std::vector<float>&
     }
 }
 
+int gridIndex(int row, int col, int n) {
+    return row * n + col;
+}
+
+int vertexIndex(const PatchInfo& patch, int row, int col, int n) {
+    return patch.base_vertex + gridIndex(row, col, n);
+}
+
+float vertexVariance(const PatchInfo& patch, int row, int col, int n) {
+    return patch.variances[gridIndex(row, col, n)];
+}
+
+CellKey shiftedCell(CellKey key, int axis) {
+    if (axis == 0)
+        ++key.x;
+    else if (axis == 1)
+        ++key.y;
+    else
+        ++key.z;
+    return key;
+}
+
+bool unitNormal(const Eigen::Vector3d& p0,
+                const Eigen::Vector3d& p1,
+                const Eigen::Vector3d& p2,
+                Eigen::Vector3d& normal) {
+    normal = (p1 - p0).cross(p2 - p0);
+    const double n = normal.norm();
+    if (n < 1e-12 || !std::isfinite(n))
+        return false;
+    normal /= n;
+    return true;
+}
+
+bool localBoundaryNormal(const DenseMesh& mesh,
+                         const PatchInfo& patch,
+                         int seam_axis_index,
+                         bool positive_side,
+                         int segment,
+                         const GPMeshConfig& cfg,
+                         Eigen::Vector3d& normal) {
+    const int n = std::max(1, cfg.num_test);
+    if (n < 2)
+        return false;
+
+    int r0 = 0, c0 = 0, r1 = 0, c1 = 0, ri = 0, ci = 0;
+    if (seam_axis_index == 0) {
+        r0 = positive_side ? n - 1 : 0;
+        c0 = segment;
+        r1 = r0;
+        c1 = segment + 1;
+        ri = positive_side ? n - 2 : 1;
+        ci = segment;
+    } else {
+        r0 = segment;
+        c0 = positive_side ? n - 1 : 0;
+        r1 = segment + 1;
+        c1 = c0;
+        ri = segment;
+        ci = positive_side ? n - 2 : 1;
+    }
+
+    const Eigen::Vector3d& p0 = mesh.vertices[vertexIndex(patch, r0, c0, n)];
+    const Eigen::Vector3d& p1 = mesh.vertices[vertexIndex(patch, r1, c1, n)];
+    const Eigen::Vector3d& pi = mesh.vertices[vertexIndex(patch, ri, ci, n)];
+    return unitNormal(p0, p1, pi, normal);
+}
+
+double maxTriangleEdgeLength(const Eigen::Vector3d& p0,
+                             const Eigen::Vector3d& p1,
+                             const Eigen::Vector3d& p2) {
+    return std::max({(p0 - p1).norm(), (p1 - p2).norm(), (p2 - p0).norm()});
+}
+
+bool seamTrianglePasses(const DenseMesh& mesh,
+                        int i0,
+                        int i1,
+                        int i2,
+                        double v0,
+                        double v1,
+                        double v2,
+                        const Eigen::Vector3d& normal_a,
+                        const Eigen::Vector3d& normal_b,
+                        const GPMeshConfig& cfg,
+                        Eigen::Vector3d& seam_normal) {
+    const double avg_variance = (v0 + v1 + v2) / 3.0;
+    if (avg_variance > cfg.seam_max_variance)
+        return false;
+
+    const Eigen::Vector3d& p0 = mesh.vertices[i0];
+    const Eigen::Vector3d& p1 = mesh.vertices[i1];
+    const Eigen::Vector3d& p2 = mesh.vertices[i2];
+    if (cfg.seam_max_edge_length > 0.0 &&
+        maxTriangleEdgeLength(p0, p1, p2) > cfg.seam_max_edge_length)
+        return false;
+
+    if (!unitNormal(p0, p1, p2, seam_normal))
+        return false;
+
+    const double min_cos = std::max(0.0, std::min(1.0, cfg.seam_min_normal_cos));
+    if (std::abs(seam_normal.dot(normal_a)) < min_cos ||
+        std::abs(seam_normal.dot(normal_b)) < min_cos)
+        return false;
+
+    return true;
+}
+
+void appendOrientedFace(DenseMesh& mesh,
+                        int i0,
+                        int i1,
+                        int i2,
+                        const Eigen::Vector3d& seam_normal,
+                        const Eigen::Vector3d& reference_normal) {
+    if (seam_normal.dot(reference_normal) >= 0.0)
+        mesh.faces.emplace_back(i0, i1, i2);
+    else
+        mesh.faces.emplace_back(i0, i2, i1);
+}
+
+void appendSeamFacesForPair(DenseMesh& mesh,
+                            const PatchInfo& patch,
+                            const PatchInfo& neighbor,
+                            int seam_axis_index,
+                            const GPMeshConfig& cfg) {
+    const int n = std::max(1, cfg.num_test);
+    if (n < 2)
+        return;
+
+    for (int s = 0; s < n - 1; ++s) {
+        int ar0 = 0, ac0 = 0, ar1 = 0, ac1 = 0;
+        int br0 = 0, bc0 = 0, br1 = 0, bc1 = 0;
+        if (seam_axis_index == 0) {
+            ar0 = n - 1; ac0 = s;
+            ar1 = n - 1; ac1 = s + 1;
+            br0 = 0;     bc0 = s;
+            br1 = 0;     bc1 = s + 1;
+        } else {
+            ar0 = s;     ac0 = n - 1;
+            ar1 = s + 1; ac1 = n - 1;
+            br0 = s;     bc0 = 0;
+            br1 = s + 1; bc1 = 0;
+        }
+
+        const int a0 = vertexIndex(patch, ar0, ac0, n);
+        const int a1 = vertexIndex(patch, ar1, ac1, n);
+        const int b0 = vertexIndex(neighbor, br0, bc0, n);
+        const int b1 = vertexIndex(neighbor, br1, bc1, n);
+
+        if (cfg.seam_max_prediction_gap > 0.0) {
+            const double gap0 = std::abs(coord(mesh.vertices[a0], patch.prediction_axis) -
+                                         coord(mesh.vertices[b0], patch.prediction_axis));
+            const double gap1 = std::abs(coord(mesh.vertices[a1], patch.prediction_axis) -
+                                         coord(mesh.vertices[b1], patch.prediction_axis));
+            if (std::max(gap0, gap1) > cfg.seam_max_prediction_gap)
+                continue;
+        }
+
+        Eigen::Vector3d normal_a, normal_b;
+        if (!localBoundaryNormal(mesh, patch, seam_axis_index, true, s, cfg, normal_a) ||
+            !localBoundaryNormal(mesh, neighbor, seam_axis_index, false, s, cfg, normal_b))
+            continue;
+
+        Eigen::Vector3d seam_normal;
+        if (seamTrianglePasses(mesh,
+                               a0, b0, b1,
+                               vertexVariance(patch, ar0, ac0, n),
+                               vertexVariance(neighbor, br0, bc0, n),
+                               vertexVariance(neighbor, br1, bc1, n),
+                               normal_a, normal_b, cfg, seam_normal)) {
+            appendOrientedFace(mesh, a0, b0, b1, seam_normal, normal_a);
+        }
+
+        if (seamTrianglePasses(mesh,
+                               a0, b1, a1,
+                               vertexVariance(patch, ar0, ac0, n),
+                               vertexVariance(neighbor, br1, bc1, n),
+                               vertexVariance(patch, ar1, ac1, n),
+                               normal_a, normal_b, cfg, seam_normal)) {
+            appendOrientedFace(mesh, a0, b1, a1, seam_normal, normal_a);
+        }
+    }
+}
+
+void appendSeamFaces(DenseMesh& mesh, const std::vector<PatchInfo>& patches, const GPMeshConfig& cfg) {
+    if (!cfg.stitch_seams || patches.empty())
+        return;
+
+    std::map<PatchKey, int> patch_lookup;
+    for (int i = 0; i < static_cast<int>(patches.size()); ++i)
+        patch_lookup.emplace(PatchKey{patches[i].cell, patches[i].prediction_axis}, i);
+
+    for (const auto& patch : patches) {
+        const int loc_axis_x = (patch.prediction_axis + 1) % 3;
+        const int loc_axis_y = (patch.prediction_axis + 2) % 3;
+
+        const CellKey x_neighbor = shiftedCell(patch.cell, loc_axis_x);
+        auto x_it = patch_lookup.find(PatchKey{x_neighbor, patch.prediction_axis});
+        if (x_it != patch_lookup.end())
+            appendSeamFacesForPair(mesh, patch, patches[x_it->second], 0, cfg);
+
+        const CellKey y_neighbor = shiftedCell(patch.cell, loc_axis_y);
+        auto y_it = patch_lookup.find(PatchKey{y_neighbor, patch.prediction_axis});
+        if (y_it != patch_lookup.end())
+            appendSeamFacesForPair(mesh, patch, patches[y_it->second], 1, cfg);
+    }
+}
+
 } // namespace
 
 DenseMesh GPMeshEstimator::estimate(const cv::Mat& disp_float,
@@ -319,6 +546,8 @@ DenseMesh GPMeshEstimator::estimate(const cv::Mat& disp_float,
         }
     }
 
+    std::vector<PatchInfo> patches;
+
     for (const auto& kv : cell_map) {
         const auto& points = kv.second;
         if (static_cast<int>(points.size()) < _cfg.min_pts_per_cell)
@@ -346,9 +575,17 @@ DenseMesh GPMeshEstimator::estimate(const cv::Mat& disp_float,
             mesh.vertices.insert(mesh.vertices.end(), layer_vertices.begin(), layer_vertices.end());
             mesh.vertex_variance.insert(mesh.vertex_variance.end(), layer_variances.begin(), layer_variances.end());
             appendGridFaces(mesh, base_vertex, layer_variances, _cfg);
+
+            PatchInfo patch;
+            patch.cell = kv.first;
+            patch.prediction_axis = dir;
+            patch.base_vertex = base_vertex;
+            patch.variances = std::move(layer_variances);
+            patches.push_back(std::move(patch));
         }
     }
 
+    appendSeamFaces(mesh, patches, _cfg);
     mesh.computeFaceNormals();
     return mesh;
 }

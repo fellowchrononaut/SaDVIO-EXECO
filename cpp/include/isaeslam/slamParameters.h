@@ -100,6 +100,7 @@ struct Config {
     int         stereo_depth_speckle_range         = 32;
     int         stereo_depth_disp12_max_diff       = 1;
     int         stereo_depth_pre_filter_cap        = 0;
+    bool        stereo_depth_publish_sgbm_images   = false;
 
     // Dense GP mesh controls, matching the SLAMesh local GP reconstruction.
     double      dense_gp_cell_size        = 1.0;
@@ -112,6 +113,11 @@ struct Config {
     double      dense_gp_eigen_1          = 48.0;
     double      dense_gp_eigen_2          = 0.95;
     double      dense_gp_eigen_3          = 0.2;
+    bool        dense_gp_stitch_seams            = true;
+    double      dense_gp_seam_max_variance       = 0.5;
+    double      dense_gp_seam_max_edge_length    = 0.5;
+    double      dense_gp_seam_max_prediction_gap = 0.25;
+    double      dense_gp_seam_min_normal_cos     = 0.5;
 
     // Dense primal-dual mesh controls from the inverse-depth optimization paper.
     int         dense_pd_steiner_spacing = 20;

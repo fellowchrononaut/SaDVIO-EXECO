@@ -72,6 +72,7 @@ bool SLAMBiMono::init() {
             dcfg.speckle_range       = _slam_param->_config.stereo_depth_speckle_range;
             dcfg.disp12_max_diff     = _slam_param->_config.stereo_depth_disp12_max_diff;
             dcfg.pre_filter_cap      = _slam_param->_config.stereo_depth_pre_filter_cap;
+            dcfg.publish_sgbm_images = _slam_param->_config.stereo_depth_publish_sgbm_images;
             dcfg.gp_cell_size        = _slam_param->_config.dense_gp_cell_size;
             dcfg.gp_num_test         = _slam_param->_config.dense_gp_num_test;
             dcfg.gp_min_pts_per_cell = _slam_param->_config.dense_gp_min_pts_per_cell;
@@ -82,6 +83,11 @@ bool SLAMBiMono::init() {
             dcfg.gp_eigen_1          = _slam_param->_config.dense_gp_eigen_1;
             dcfg.gp_eigen_2          = _slam_param->_config.dense_gp_eigen_2;
             dcfg.gp_eigen_3          = _slam_param->_config.dense_gp_eigen_3;
+            dcfg.gp_stitch_seams            = _slam_param->_config.dense_gp_stitch_seams;
+            dcfg.gp_seam_max_variance       = _slam_param->_config.dense_gp_seam_max_variance;
+            dcfg.gp_seam_max_edge_length    = _slam_param->_config.dense_gp_seam_max_edge_length;
+            dcfg.gp_seam_max_prediction_gap = _slam_param->_config.dense_gp_seam_max_prediction_gap;
+            dcfg.gp_seam_min_normal_cos     = _slam_param->_config.dense_gp_seam_min_normal_cos;
             dcfg.pd_steiner_spacing  = _slam_param->_config.dense_pd_steiner_spacing;
             dcfg.pd_lambda           = _slam_param->_config.dense_pd_lambda;
             dcfg.pd_num_iterations   = _slam_param->_config.dense_pd_num_iterations;
