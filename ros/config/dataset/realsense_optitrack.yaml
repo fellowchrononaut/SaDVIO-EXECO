@@ -1,0 +1,69 @@
+# General sensor definitions for the May 2026 RealSense + OptiTrack ROS 2 bags.
+dataset: realsense_optitrack
+ncam: 2
+
+# Bags checked:
+# /home/deos/s.jois/Execo/Simulator_Validation/RealSense_Captures/rosbag2_2026_05_06-*
+#
+# Relevant topics:
+#   /camera/camera/infra1/image_rect_raw
+#   /camera/camera/infra2/image_rect_raw
+#   /camera/camera/imu
+#   /vrpn_mocap/camera_d435/pose  (ground truth, not consumed by SaDVIO)
+
+camera_0:
+  topic: /camera/camera/infra1/image_rect_raw
+  # Sensor extrinsics wrt. the body-frame.
+  # Stereo baseline is 95.02 mm. This follows the existing SaDVIO RealSense
+  # convention where camera_1 is the body/reference camera and camera_0 is offset.
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [0.0, 0.0, 1.0, 0.0,
+           -1.0, 0.0, 0.0, 0.09502,
+           0.0, -1.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 30
+  resolution: [848, 480]
+  projection_model: pinhole
+  intrinsics: [435.786865234375, 435.786865234375, 425.9694519042969, 241.12521362304688]
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+camera_1:
+  topic: /camera/camera/infra2/image_rect_raw
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [0.0, 0.0, 1.0, 0.0,
+           -1.0, 0.0, 0.0, 0.0,
+           0.0, -1.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 30
+  resolution: [848, 480]
+  projection_model: pinhole
+  intrinsics: [435.786865234375, 435.786865234375, 425.9694519042969, 241.12521362304688]
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+imu:
+  topic: /camera/camera/imu
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [1.0, 0.0, 0.0, 0.0,
+           0.0, 1.0, 0.0, 0.0,
+           0.0, 0.0, 1.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 200
+  gyroscope_noise_density: 0.00017
+  gyroscope_random_walk: 0.0001
+  accelerometer_noise_density: 0.0015
+  accelerometer_random_walk: 0.001
+  dt_imu_cam: 0.0
+
+# The checked bags have hardware-synchronised stereo pairs at about 30 Hz.
+stereo_sync_tolerance_ms: 5
