@@ -67,9 +67,10 @@ class SensorSubscriber : public rclcpp::Node {
         double gy = imu_msg.angular_velocity.y;
         double gz = imu_msg.angular_velocity.z;
 
-        // Create an Eigen vector for the acceleration and gyroscope values
-        acc << ax, ay, az;
-        gyr << gx, gy, gz;
+        // Apply T_BS (sensor->body) rotation to transform measurements into the body frame
+        Eigen::Matrix3d R_BS = _prov->getIMUConfig()->T_s_f.rotation();
+        acc = R_BS * Eigen::Vector3d(ax, ay, az);
+        gyr = R_BS * Eigen::Vector3d(gx, gy, gz);
     }
 
     void sync_process() {
@@ -249,9 +250,10 @@ class SensorSubscriberCompressed : public rclcpp::Node {
         double gy = imu_msg.angular_velocity.y;
         double gz = imu_msg.angular_velocity.z;
 
-        // Create an Eigen vector for the acceleration and gyroscope values
-        acc << ax, ay, az;
-        gyr << gx, gy, gz;
+        // Apply T_BS (sensor->body) rotation to transform measurements into the body frame
+        Eigen::Matrix3d R_BS = _prov->getIMUConfig()->T_s_f.rotation();
+        acc = R_BS * Eigen::Vector3d(ax, ay, az);
+        gyr = R_BS * Eigen::Vector3d(gx, gy, gz);
     }
 
     void sync_process() {
