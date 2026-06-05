@@ -1,0 +1,25 @@
+services:
+  sad_vio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sad_vio:latest
+    container_name: sad_vio
+    network_mode: host
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY:-:1}
+      - QT_X11_NO_MITSHM=1
+      - DEBIAN_FRONTEND=noninteractive
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
+    deploy:
+      resources:
+        limits:
+          cpus: '22'
+        reservations:
+          devices:
+            - count: all
+              capabilities: [gpu]
