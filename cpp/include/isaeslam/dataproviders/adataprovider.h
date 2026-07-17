@@ -1,6 +1,7 @@
 #ifndef AIMAGEPROVIDER_H
 #define AIMAGEPROVIDER_H
 
+#include <mutex>  // EXECO_QUEUE_MUTEX
 #include <fstream>
 #include <iostream>
 #include <queue>
@@ -54,6 +55,7 @@ class ADataProvider {
     void addFrameToTheQueue(std::vector<std::shared_ptr<ASensor>> sensors, double time);
 
     void addFrameToTheQueue(std::shared_ptr<Frame> frame);
+    std::mutex _frame_queue_mutex; // EXECO_QUEUE_MUTEX
 
   protected:
     void loadSensorsConfiguration(const std::string &path);

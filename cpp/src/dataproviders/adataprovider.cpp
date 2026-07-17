@@ -12,17 +12,18 @@ ADataProvider::ADataProvider(std::string path, Config slam_config) {
 }
 
 std::shared_ptr<Frame> ADataProvider::next() {
-    std::mutex img_mutex;
-    std::lock_guard<std::mutex> lock(img_mutex);
-    std::shared_ptr<Frame> f = std::make_shared<Frame>();
-
-    while (_frame_queue.empty())
+    // EXECO_QUEUE_MUTEX: real shared lock (upstream locked a function-local mutex)
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(_frame_queue_mutex);
+            if (!_frame_queue.empty()) {
+                std::shared_ptr<Frame> f = _frame_queue.front();
+                _frame_queue.pop();
+                return f;
+            }
+        }
         cv::waitKey(1);
-
-    f = _frame_queue.front();
-    _frame_queue.pop();
-
-    return f;
+    }
 }
 
 void ADataProvider::loadSensorsConfiguration(const std::string &path) {
@@ -270,10 +271,16 @@ void ADataProvider::addFrameToTheQueue(std::vector<std::shared_ptr<ASensor>> sen
     f->init(sensors, time);
 
     // add to queue
-    _frame_queue.push(f);
+    {
+        std::lock_guard<std::mutex> lock(_frame_queue_mutex); // EXECO_QUEUE_MUTEX
+        _frame_queue.push(f);
+    }
 }
 
-void ADataProvider::addFrameToTheQueue(std::shared_ptr<Frame> frame) { _frame_queue.push(frame); }
+void ADataProvider::addFrameToTheQueue(std::shared_ptr<Frame> frame) {
+    std::lock_guard<std::mutex> lock(_frame_queue_mutex); // EXECO_QUEUE_MUTEX
+    _frame_queue.push(frame);
+}
 
 void EUROCGrabber::load_filenames() {
     // Load cam0

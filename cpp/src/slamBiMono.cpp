@@ -1,8 +1,36 @@
 
 #include "isaeslam/slamCore.h"
 #include <opencv2/core.hpp>
+#include <cstdlib>
+#include <fstream>
+#include <filesystem>
 
 namespace isae {
+
+// EXECO_PERFRAME_LOG: env-gated per-frame pose log (offline harness only —
+// mirrors what the ROS wrapper publishes every frame via _frame_to_display,
+// vs. profiling()'s results.csv which only writes at keyframe cadence).
+static void execo_log_perframe(const std::shared_ptr<Frame> &f, uint nframes) {
+    static const bool enabled = (std::getenv("EXECO_PERFRAME_LOG") != nullptr);
+    if (!enabled)
+        return;
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+    static bool header_written = false;
+    std::ofstream fw("log_slam/results_perframe.csv",
+                      header_written ? std::ofstream::app : std::ofstream::trunc);
+    if (!header_written) {
+        fw << "timestamp (ns), nframes, T_wf(00), T_wf(01), T_wf(02), T_wf(03), T_wf(10), T_wf(11), T_wf(12), "
+           << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23)\n";
+        header_written = true;
+    }
+    const Eigen::Affine3d T_w_f = f->getFrame2WorldTransform();
+    const Eigen::Matrix3d R     = T_w_f.linear();
+    const Eigen::Vector3d twc   = T_w_f.translation();
+    fw << f->getTimestamp() << "," << nframes << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << ","
+       << twc.x() << "," << R(1, 0) << "," << R(1, 1) << "," << R(1, 2) << "," << twc.y() << "," << R(2, 0) << ","
+       << R(2, 1) << "," << R(2, 2) << "," << twc.z() << "\n";
+}
 
 bool SLAMBiMono::init() {
 
@@ -285,6 +313,7 @@ bool SLAMBiMono::frontEndStep() {
 
     // Send the frame to the viewer
     _frame_to_display = _frame;
+    execo_log_perframe(_frame, _nframes);
 
     return true;
 }

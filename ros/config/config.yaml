@@ -45,8 +45,8 @@ ZNCC_tsh: 0.8                   # Threshold on ZNCC for triangle filtering
 max_length_tsh: 2               # Threshold on maximum length for triangle filtering
 
 ## Dense stereo mesh (independent of mesh3d sparse pipeline)
-dense_depth:             true
-dense_mesh_method:       "gp"   # "none"=depth only, "gp"=GP, "pd"=primal-dual, "zncc"=SGBM+Delaunay+ZNCC
+dense_depth:             false
+dense_mesh_method:       "none"   # "none"=depth only, "gp"=GP, "pd"=primal-dual, "zncc"=SGBM+Delaunay+ZNCC
 stereo_depth_num_disp:   64
 stereo_depth_block_size: 9
 stereo_depth_scale:      1.0
