@@ -388,6 +388,68 @@ void EUROCGrabber::load_filenames() {
 
 bool EUROCGrabber::addNextFrame() {
 
+    // EXECO: monocular path (ncam == 1), added for the RGB spectral-control arm.
+    // The stereo body below requires both cam queues and unconditionally does
+    // img_sensors.at(1), which throws
+    //   std::out_of_range: vector::_M_range_check: __n (which is 1) >= this->size() (which is 1)
+    // when a single camera is configured. Structure mirrors the stereo cases.
+    if (_prov->getNCam() == 1) {
+        if ((_prov->getIMUConfig() && _imu_queue.empty()) || _cam0_filename_queue.empty() ||
+            _cam0_timestamp_queue.empty() || _imu_timestamp_queue.empty())
+            return false;
+
+        std::vector<std::shared_ptr<ASensor>> sensors;
+        double imu_ts     = _imu_timestamp_queue.front();
+        long long cam0_ts = _cam0_timestamp_queue.front();
+
+        // Case 1 : imu is in the future, discard the image
+        if (imu_ts > cam0_ts + _time_tolerance * 1e9) {
+            _cam0_timestamp_queue.pop();
+            _cam0_filename_queue.pop();
+            return true;
+        }
+
+        // Case 2 : imu is too far in the past, imu-only frame
+        else if (imu_ts < cam0_ts - _time_tolerance * 1e9) {
+            if (_prov->getIMUConfig()) {
+                sensors.push_back(_imu_queue.front());
+                _prov->addFrameToTheQueue(sensors, imu_ts);
+                _imu_queue.pop();
+            }
+            _imu_timestamp_queue.pop();
+            return true;
+        }
+
+        // Case 3 : imu and cam0 are synced
+        else {
+            std::string path_img0 =
+                _folder_path + "/cam0/data/" + std::to_string((uint64_t)cam0_ts) + ".png";
+            cv::Mat img_left = cv::imread(path_img0, cv::IMREAD_GRAYSCALE);
+            if (img_left.empty()) {
+                std::cerr << path_img0 << " not opened " << std::endl;
+                _cam0_timestamp_queue.pop();
+                _cam0_filename_queue.pop();
+                return false;
+            }
+            _cam0_filename_queue.pop();
+            _cam0_timestamp_queue.pop();
+
+            std::vector<cv::Mat> imgs;
+            imgs.push_back(img_left);
+            std::vector<std::shared_ptr<isae::ImageSensor>> img_sensors = _prov->createImageSensors(imgs);
+            sensors.push_back(img_sensors.at(0));
+
+            if (_prov->getIMUConfig()) {
+                sensors.push_back(_imu_queue.front());
+                _imu_queue.pop();
+            }
+            _imu_timestamp_queue.pop();
+
+            _prov->addFrameToTheQueue(sensors, imu_ts);
+        }
+        return true;
+    }
+
     if ((_prov->getIMUConfig() && _imu_queue.empty()) || _cam0_filename_queue.empty() || _cam1_filename_queue.empty() ||
         _cam0_timestamp_queue.empty() || _cam1_timestamp_queue.empty() || _imu_timestamp_queue.empty())
         return false;

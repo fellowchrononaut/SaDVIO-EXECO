@@ -6,7 +6,7 @@
 dataset_id : "airsim"
 
 ## slam mode in {mono, bimono, nofov, monovio, bimonovio}
-slam_mode : "bimono"
+slam_mode : "mono"
 enable_visu : 1
 multithreading : 0
 

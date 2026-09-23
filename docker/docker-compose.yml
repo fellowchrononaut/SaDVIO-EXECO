@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: sad_vio:latest
-    container_name: sad_vio
+    container_name: sad_vio_dense
     network_mode: host
     stdin_open: true
     tty: true
@@ -15,11 +15,11 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /dev:/dev
+      - ~/EXECO/Simulator_Validation:/Simulator_Validation
     deploy:
       resources:
-        limits:
-          cpus: '22'
         reservations:
           devices:
-            - count: all
+            - driver: nvidia
+              count: all
               capabilities: [gpu]

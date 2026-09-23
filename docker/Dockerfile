@@ -65,7 +65,7 @@ RUN cd SaDVIO/cpp && \
     cmake .. && \
     make
 
-# Download and extract EUROC dataset.
+# Download and extract EUROC dataset. Deprecated because the link does not work anymore.
 RUN apt-get update && apt-get install -y zip
-RUN wget http://robotics.ethz.ch/~asl-datasets/ijrr_euroc_mav_dataset/vicon_room1/V1_01_easy/V1_01_easy.zip
-RUN mkdir -p $DIRPATH/euroc && unzip V1_01_easy.zip -d $DIRPATH/V1_01_easy
+#RUN wget http://robotics.ethz.ch/~asl-datasets/ijrr_euroc_mav_dataset/vicon_room1/V1_01_easy/V1_01_easy.zip
+#RUN mkdir -p $DIRPATH/euroc && unzip V1_01_easy.zip -d $DIRPATH/V1_01_easy

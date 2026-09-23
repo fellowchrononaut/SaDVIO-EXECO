@@ -1,6 +1,39 @@
 #include "isaeslam/slamCore.h"
+#include <cstdlib>
+#include <fstream>
+#include <filesystem>
 
 namespace isae {
+
+// EXECO_PERFRAME_LOG: env-gated per-frame pose log. PORTED VERBATIM from
+// slamBiMono.cpp (12-09-2026) -- it existed only in the stereo class, so in
+// slam_mode "mono" isaeslam tracked correctly but never wrote the file the
+// offline harness reads. run_validation_Nway.py uses results_perframe.csv both
+// as its completion signal and as its only trajectory output, so every mono
+// offline run reported "no poses written" and the compare step silently fell
+// back to whatever older VIO bags were left in the run directory.
+// profiling()'s results.csv is keyframe-cadence only and is not a substitute.
+static void execo_log_perframe(const std::shared_ptr<Frame> &f, uint nframes) {
+    static const bool enabled = (std::getenv("EXECO_PERFRAME_LOG") != nullptr);
+    if (!enabled)
+        return;
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+    static bool header_written = false;
+    std::ofstream fw("log_slam/results_perframe.csv",
+                      header_written ? std::ofstream::app : std::ofstream::trunc);
+    if (!header_written) {
+        fw << "timestamp (ns), nframes, T_wf(00), T_wf(01), T_wf(02), T_wf(03), T_wf(10), T_wf(11), T_wf(12), "
+           << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23)\n";
+        header_written = true;
+    }
+    const Eigen::Affine3d T_w_f = f->getFrame2WorldTransform();
+    const Eigen::Matrix3d R     = T_w_f.linear();
+    const Eigen::Vector3d twc   = T_w_f.translation();
+    fw << f->getTimestamp() << "," << nframes << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << ","
+       << twc.x() << "," << R(1, 0) << "," << R(1, 1) << "," << R(1, 2) << "," << twc.y() << "," << R(2, 0) << ","
+       << R(2, 1) << "," << R(2, 2) << "," << twc.z() << "\n";
+}
 
 bool SLAMMono::init() {
 
@@ -263,6 +296,7 @@ bool SLAMMono::frontEndStep() {
 
     // Send the frame to the viewer
     _frame_to_display = _frame;
+    execo_log_perframe(_frame, _nframes);
 
     return true;
 }
