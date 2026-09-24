@@ -46,7 +46,7 @@ max_length_tsh: 2               # Threshold on maximum length for triangle filte
 
 ## Dense stereo mesh (independent of mesh3d sparse pipeline)
 dense_depth:             false
-dense_mesh_method:       "none"   # "none"=depth only, "gp"=GP, "pd"=primal-dual, "zncc"=SGBM+Delaunay+ZNCC
+dense_mesh_method:       "none"   # "none"=depth only, "gp"=GP, "pd"=primal-dual, "zncc"=SGBM+Delaunay+ZNCC, "vdbgpdf"=VDB-GPDF map
 stereo_depth_num_disp:   64
 stereo_depth_block_size: 9
 stereo_depth_scale:      1.0
@@ -95,6 +95,11 @@ dense_gp_register_depth_weighting: false # weight residuals by min(1, (ref/depth
 dense_gp_register_depth_ref:  2.0    # metres
 dense_gp_global_mesh_path:    "log_slam/dense_gp_global_mesh.ply"  # plus dense_gp_registration.csv next to it
 dense_gp_save_every:          5      # keyframes between PLY saves (0 = never)
+## VDB-GPDF map (dense_mesh_method "vdbgpdf"; build with -DISAESLAM_WITH_VDBGPDF=ON; doc/dense_vdb_gpdf.md)
+dense_vdbgpdf_preset:     "stereo"  # config/vdbgpdf/<preset>.yaml: stereo (VDB-GPDF), stereo_tsdf (TSDF, best stereo mesh), rgbd, lidar
+dense_vdbgpdf_stride:     2         # pixel stride of the stereo points fed to the map (2: ~100 k points per 848x480 keyframe)
+dense_vdbgpdf_mesh_every: 5         # keyframes between marching cubes + PLY save (0 = never save)
+dense_vdbgpdf_mesh_path:  "log_slam/dense_vdbgpdf_mesh.ply"
 dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
 dense_pd_lambda:             0.5    # depth/tracking L1 data weight
 dense_pd_num_iterations:     120

@@ -1,0 +1,29 @@
+# VDB-GPDF preset: upstream vdb_gpdf_mapping_realsense_d455.yaml (VDB_GPDF main branch), GP/volume keys only.
+# Loaded by SaDVIO for dense_vdbgpdf_preset: rgbd (doc/dense_vdb_gpdf.md).
+fusion: gpdf
+min_scan_range: 0.1 # Ignore points closer than this value (meters) (default 0.4)
+max_scan_range: 4.0 # Ignore points far than this value (meters) (default 12.0)
+fill_holes: true
+sdf_trunc: 0.1 # this param is for vdbfusion comparison
+space_carving: true # this param is for vdbfusion comparison
+distance_method: 0
+voxel_size_local: 0.02
+voxel_overlapping: -1 # positive: enable with value; negative: disable
+voxel_downsample: 5 
+voxel_size_global: 0.05
+variance_method: 0
+variance_cap: 0.1
+variance_on_surface: 0.001
+recon_min_weight: 0.1
+surface_normal_method: 0 # 0 for pcl, 1 for raycasting
+surface_normal_num: 20
+surface_value: -1 # -1 for in 1 for out
+query_iterval: 0.05
+query_trunc_in: 3
+query_trunc_out: 2
+freespace_iterval: 0.05
+freespace_trunc_out: 2 # positive: enable with value; negative: disable
+query_downsample: -1 # positive: enable with value; negative: disable
+map_lambda_scale: 900 
+map_noise: 0.01
+smooth_param: 100

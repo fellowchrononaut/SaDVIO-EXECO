@@ -180,6 +180,15 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.dense_gp_global_mesh_path = yaml_file["dense_gp_global_mesh_path"].as<std::string>();
     if (yaml_file["dense_gp_save_every"])
         _config.dense_gp_save_every = yaml_file["dense_gp_save_every"].as<int>();
+    if (yaml_file["dense_vdbgpdf_preset"])
+        _config.dense_vdbgpdf_preset = yaml_file["dense_vdbgpdf_preset"].as<std::string>();
+    _config.dense_vdbgpdf_preset_path = path_config_folder + "/vdbgpdf/" + _config.dense_vdbgpdf_preset + ".yaml";
+    if (yaml_file["dense_vdbgpdf_stride"])
+        _config.dense_vdbgpdf_stride = yaml_file["dense_vdbgpdf_stride"].as<int>();
+    if (yaml_file["dense_vdbgpdf_mesh_every"])
+        _config.dense_vdbgpdf_mesh_every = yaml_file["dense_vdbgpdf_mesh_every"].as<int>();
+    if (yaml_file["dense_vdbgpdf_mesh_path"])
+        _config.dense_vdbgpdf_mesh_path = yaml_file["dense_vdbgpdf_mesh_path"].as<std::string>();
     if (yaml_file["dense_pd_steiner_spacing"])
         _config.dense_pd_steiner_spacing = yaml_file["dense_pd_steiner_spacing"].as<int>();
     if (yaml_file["dense_pd_lambda"])

@@ -2,6 +2,7 @@
 #define DENSE_MESH_H
 
 #include <Eigen/Core>
+#include <string>
 #include <vector>
 #include <cmath>
 
@@ -24,6 +25,10 @@ struct DenseMesh {
     void computeCurvature();
     std::vector<DihedralEdge> computeDihedralAngles() const;
 };
+
+// Binary little-endian PLY (x y z variance per vertex, 0 where vertex_variance is missing). Written to
+// <path>.tmp and renamed, so a reader never sees a partial file.
+bool writeDenseMeshPly(const DenseMesh& mesh, const std::string& path, const std::string& comment);
 
 } // namespace isae
 

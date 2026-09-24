@@ -142,6 +142,13 @@ struct Config {
     std::string dense_gp_global_mesh_path          = "log_slam/dense_gp_global_mesh.ply"; // PLY written every dense_gp_save_every keyframes
     int         dense_gp_save_every                = 5;       // keyframes between PLY saves (0 = never)
 
+    // VDB-GPDF map (dense_mesh_method "vdbgpdf")
+    std::string dense_vdbgpdf_preset     = "stereo";  // <config>/vdbgpdf/<preset>.yaml
+    int         dense_vdbgpdf_stride     = 2;
+    int         dense_vdbgpdf_mesh_every = 5;         // keyframes between mesh extraction + PLY save (0 = never save)
+    std::string dense_vdbgpdf_mesh_path  = "log_slam/dense_vdbgpdf_mesh.ply";
+    std::string dense_vdbgpdf_preset_path;            // resolved from the config folder and dense_vdbgpdf_preset
+
     // Dense primal-dual mesh controls from the inverse-depth optimization paper.
     int         dense_pd_steiner_spacing = 20;
     double      dense_pd_lambda          = 0.5;

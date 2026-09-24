@@ -173,6 +173,10 @@ bool SLAMBiMonoVIO::init() {
             dcfg.gp_register_depth_ref        = _slam_param->_config.dense_gp_register_depth_ref;
             dcfg.gp_global_mesh_path          = _slam_param->_config.dense_gp_global_mesh_path;
             dcfg.gp_save_every                = _slam_param->_config.dense_gp_save_every;
+            dcfg.vdbgpdf_preset_path          = _slam_param->_config.dense_vdbgpdf_preset_path;
+            dcfg.vdbgpdf_stride               = _slam_param->_config.dense_vdbgpdf_stride;
+            dcfg.vdbgpdf_mesh_every           = _slam_param->_config.dense_vdbgpdf_mesh_every;
+            dcfg.vdbgpdf_mesh_path            = _slam_param->_config.dense_vdbgpdf_mesh_path;
             dcfg.pd_steiner_spacing  = _slam_param->_config.dense_pd_steiner_spacing;
             dcfg.pd_lambda           = _slam_param->_config.dense_pd_lambda;
             dcfg.pd_num_iterations   = _slam_param->_config.dense_pd_num_iterations;

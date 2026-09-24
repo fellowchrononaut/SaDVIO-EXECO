@@ -119,6 +119,25 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
                   << std::endl;
     }
 
+    if (cfg.mesh_method == "vdbgpdf") {
+#ifdef ISAESLAM_WITH_VDBGPDF
+        VDBGPDFMapConfig vcfg;
+        loadVDBGPDFPreset(cfg.vdbgpdf_preset_path, vcfg);
+        _vdb_map = std::make_unique<VDBGPDFMap>(vcfg);
+        const std::filesystem::path mesh_path(cfg.vdbgpdf_mesh_path);
+        const std::filesystem::path dir = mesh_path.has_parent_path() ? mesh_path.parent_path()
+                                                                      : std::filesystem::path(".");
+        std::filesystem::create_directories(dir);
+        _vdb_log.open(dir / "dense_vdbgpdf_keyframes.csv", std::ios::trunc);
+        _vdb_log << "timestamp_ns,keyframe,points,integrate_ms,x,y,z,qx,qy,qz,qw\n";
+        std::cout << "[DenseMesh] VDB-GPDF map on (preset " << cfg.vdbgpdf_preset_path << ", stride "
+                  << cfg.vdbgpdf_stride << ", keep_all_keyframes=" << cfg.keep_all_keyframes << ") -> "
+                  << cfg.vdbgpdf_mesh_path << std::endl;
+#else
+        throw std::runtime_error("[DenseMesh] dense_mesh_method=vdbgpdf needs a build with -DISAESLAM_WITH_VDBGPDF=ON");
+#endif
+    }
+
     _pd_cfg.steiner_spacing = cfg.pd_steiner_spacing;
     _pd_cfg.lambda          = cfg.pd_lambda;
     _pd_cfg.num_iterations  = cfg.pd_num_iterations;
@@ -161,6 +180,8 @@ MarginalDepthInjector::~MarginalDepthInjector() {
         _worker.join();
     if (_gp_map && _cfg.gp_save_every > 0)
         _gp_map->savePly(_cfg.gp_global_mesh_path);
+    if (_vdb_map && _cfg.vdbgpdf_mesh_every > 0)
+        writeDenseMeshPly(_vdb_map->mesh(), _cfg.vdbgpdf_mesh_path, "SaDVIO dense VDB-GPDF map");
 }
 
 void MarginalDepthInjector::queueFrame(const std::shared_ptr<Frame>& frame,
@@ -314,6 +335,8 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     DenseMesh dense_mesh;
     if (_cfg.mesh_method == "gp" && _gp_map) {
         integrateGlobalMap(item, disp_float, f_rect, cx_rect, cy_rect, point_cloud, dense_mesh);
+    } else if (_cfg.mesh_method == "vdbgpdf" && _vdb_map) {
+        integrateVDBGPDF(item, disp_float, f_rect, cx_rect, cy_rect, dense_mesh);
     } else if (_cfg.mesh_method == "gp") {
         GPMeshEstimator gp_estimator(_gp_cfg);
         dense_mesh = gp_estimator.estimate(disp_float, f_rect, _baseline,
@@ -415,6 +438,53 @@ void MarginalDepthInjector::integrateGlobalMap(const QueueItem& item, const cv::
     if (_cfg.gp_save_every > 0 && _integrated % _cfg.gp_save_every == 0 &&
         !_gp_map->savePly(_cfg.gp_global_mesh_path))
         std::cerr << "[DenseMesh] could not write " << _cfg.gp_global_mesh_path << std::endl;
+}
+
+void MarginalDepthInjector::integrateVDBGPDF(const QueueItem& item, const cv::Mat& disp_float, double f_rect,
+                                             double cx_rect, double cy_rect, DenseMesh& dense_mesh) {
+    using clk = std::chrono::steady_clock;
+    const auto t0 = clk::now();
+    const int str = std::max(1, _cfg.vdbgpdf_stride);
+    std::vector<Eigen::Vector3d> points_world;
+    points_world.reserve((disp_float.rows / str) * (disp_float.cols / str));
+    for (int v = 0; v < disp_float.rows; v += str) {
+        const float* row_ptr = disp_float.ptr<float>(v);
+        for (int u = 0; u < disp_float.cols; u += str) {
+            const float disp = row_ptr[u];
+            if (disp <= 0.0f || !std::isfinite(disp))
+                continue;
+            const double Z = f_rect * _baseline / static_cast<double>(disp);
+            if (Z <= 0.0 || Z > _cfg.max_depth || !std::isfinite(Z))
+                continue;
+            points_world.push_back(item.T_w_rectcam *
+                                   Eigen::Vector3d((u - cx_rect) * Z / f_rect, (v - cy_rect) * Z / f_rect, Z));
+        }
+    }
+    _vdb_map->integrate(points_world, item.T_w_rectcam.translation());
+    ++_integrated;
+    const auto t1 = clk::now();
+    if (_vdb_log.is_open()) {
+        const Eigen::Quaterniond q(item.T_w_rectcam.linear());
+        const Eigen::Vector3d& t = item.T_w_rectcam.translation();
+        _vdb_log << std::setprecision(10) << (item.frame ? item.frame->getTimestamp() : 0ULL) << "," << _integrated
+                 << "," << points_world.size() << ","
+                 << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "," << t.x() << ","
+                 << t.y() << "," << t.z() << "," << q.x() << "," << q.y() << "," << q.z() << "," << q.w() << "\n";
+        _vdb_log.flush();
+    }
+
+    // Marching cubes over the whole map is the expensive part; run it every vdbgpdf_mesh_every keyframes
+    if (_vdb_mesh.faces.empty() || (_cfg.vdbgpdf_mesh_every > 0 && _integrated % _cfg.vdbgpdf_mesh_every == 0)) {
+        _vdb_mesh = _vdb_map->mesh();
+        if (_cfg.vdbgpdf_mesh_every > 0 &&
+            !writeDenseMeshPly(_vdb_mesh, _cfg.vdbgpdf_mesh_path, "SaDVIO dense VDB-GPDF map"))
+            std::cerr << "[DenseMesh] could not write " << _cfg.vdbgpdf_mesh_path << std::endl;
+    }
+    dense_mesh = _vdb_mesh;
+    const auto ms = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count(); };
+    std::cout << "[DenseMesh] vdbgpdf kf=" << _integrated << " pts=" << points_world.size()
+              << " integrate=" << ms(t0, t1) << "ms mesh=" << ms(t1, clk::now()) << "ms faces=" << _vdb_mesh.faces.size()
+              << std::endl;
 }
 
 bool MarginalDepthInjector::pollResult(DenseResult& out) {

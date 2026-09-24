@@ -1,5 +1,8 @@
 #include "isaeslam/stereo/DenseMesh.h"
 #include <Eigen/Geometry>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -189,6 +192,41 @@ std::vector<DihedralEdge> DenseMesh::computeDihedralAngles() const {
     }
 
     return result;
+}
+
+bool writeDenseMeshPly(const DenseMesh& m, const std::string& path, const std::string& comment) {
+    const std::filesystem::path out(path);
+    if (out.has_parent_path())
+        std::filesystem::create_directories(out.parent_path());
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f)
+            return false;
+        f << "ply\nformat binary_little_endian 1.0\n"
+          << "comment " << comment << "\n"
+          << "element vertex " << m.vertices.size() << "\n"
+          << "property float x\nproperty float y\nproperty float z\nproperty float variance\n"
+          << "element face " << m.faces.size() << "\n"
+          << "property list uchar int vertex_indices\nend_header\n";
+        for (size_t i = 0; i < m.vertices.size(); ++i) {
+            const float xyzv[4] = {static_cast<float>(m.vertices[i].x()), static_cast<float>(m.vertices[i].y()),
+                                   static_cast<float>(m.vertices[i].z()),
+                                   i < m.vertex_variance.size() ? m.vertex_variance[i] : 0.f};
+            f.write(reinterpret_cast<const char*>(xyzv), sizeof(xyzv));
+        }
+        for (const auto& face : m.faces) {
+            const uint8_t three = 3;
+            const int32_t idx[3] = {face[0], face[1], face[2]};
+            f.write(reinterpret_cast<const char*>(&three), 1);
+            f.write(reinterpret_cast<const char*>(idx), sizeof(idx));
+        }
+        if (!f)
+            return false;
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    return !ec;
 }
 
 } // namespace isae

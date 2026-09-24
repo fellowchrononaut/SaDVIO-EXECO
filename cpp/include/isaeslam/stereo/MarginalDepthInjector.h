@@ -7,6 +7,7 @@
 #include "isaeslam/stereo/PrimalDualMeshEstimator.h"
 #include "isaeslam/stereo/SGBMZNCCMeshEstimator.h"
 #include "isaeslam/stereo/StereoMatcher.h"
+#include "isaeslam/stereo/VDBGPDFMap.h"
 #include "isaeslam/data/mesh/mesh.h"
 #include "isaeslam/data/frame.h"
 #include <Eigen/Core>
@@ -33,7 +34,7 @@ struct MarginalDepthConfig {
     double      scale_factor    = 1.0;
     int         stride          = 2;
     double      max_depth       = 20.0;  // metres — points beyond this are dropped
-    std::string mesh_method     = "none"; // "none"=depth only, "gp"=GP, "pd"=PD, "zncc"=SGBM+Delaunay+ZNCC
+    std::string mesh_method     = "none"; // "none"=depth only, "gp"=GP, "pd"=PD, "zncc"=SGBM+Delaunay+ZNCC, "vdbgpdf"=VDB-GPDF map
     double      zncc_threshold  = 0.8;
     double      max_length_threshold = 2.0;
     int         uniqueness_ratio    = 10;
@@ -79,6 +80,12 @@ struct MarginalDepthConfig {
     double      gp_register_depth_ref        = 2.0;
     std::string gp_global_mesh_path          = "log_slam/dense_gp_global_mesh.ply";
     int         gp_save_every                = 5;
+
+    // VDB-GPDF global map (mesh_method "vdbgpdf", doc/dense_vdb_gpdf.md; needs ISAESLAM_WITH_VDBGPDF)
+    std::string vdbgpdf_preset_path;                                      // preset yaml, upstream key names
+    int         vdbgpdf_stride     = 2;                                   // pixel stride of the points fed to the map
+    int         vdbgpdf_mesh_every = 5;                                   // keyframes between mesh extraction + PLY save
+    std::string vdbgpdf_mesh_path  = "log_slam/dense_vdbgpdf_mesh.ply";
 
     // Primal-dual mesh optimization over SGBM inverse depth
     int    pd_steiner_spacing = 20;
@@ -155,6 +162,13 @@ class MarginalDepthInjector {
                             double cx_rect, double cy_rect, std::vector<Eigen::Vector3d>& point_cloud,
                             DenseMesh& dense_mesh);
     std::unique_ptr<GPGlobalMap> _gp_map;
+
+    // VDB-GPDF map (only used by the worker thread)
+    void integrateVDBGPDF(const QueueItem& item, const cv::Mat& disp_float, double f_rect, double cx_rect,
+                          double cy_rect, DenseMesh& dense_mesh);
+    std::unique_ptr<VDBGPDFMap> _vdb_map;
+    DenseMesh _vdb_mesh; // last extracted mesh, republished between extractions
+    std::ofstream _vdb_log; // dense_vdbgpdf_keyframes.csv: pose each keyframe was fused with
     int _integrated = 0;
     std::ofstream _reg_log;
     std::atomic<bool> _running{true};

@@ -1,0 +1,29 @@
+# VDB-GPDF preset: upstream vdb_gpdf_mapping_newer_college.yaml (VDB_GPDF main branch), GP/volume keys only.
+# Loaded by SaDVIO for dense_vdbgpdf_preset: lidar (doc/dense_vdb_gpdf.md).
+fusion: gpdf
+space_carving: true
+min_scan_range: 1.0 # Ignore points closer than this value (meters) (default 0.4)
+max_scan_range: 50.0 # Ignore points far than this value (meters) (default 12.0)
+fill_holes: true
+sdf_trunc: 0.2 # this param is for vdbfusion comparison
+distance_method: 0
+voxel_size_local: 0.1
+voxel_overlapping: -1 # positive: enable with value; negative: disable
+voxel_downsample: 1
+voxel_size_global: 0.1
+variance_method: 0
+variance_cap: 0.5
+variance_on_surface: 0.001
+recon_min_weight: 0.5
+surface_normal_method: 0 # 0 for pcl, 1 for raycasting
+surface_normal_num: 10
+surface_value: -1  # -1 for in 1 for out
+query_iterval: 0.1
+query_trunc_in: 1
+query_trunc_out: 2
+freespace_iterval: 0.1
+freespace_trunc_out: -1 # positive: enable with value; negative: disable
+query_downsample: 0.1 # positive: enable with value; negative: disable
+map_lambda_scale: 100
+map_noise: 0.01
+smooth_param: 100
