@@ -119,6 +119,26 @@ struct Config {
     double      dense_gp_seam_max_prediction_gap = 0.25;
     double      dense_gp_seam_min_normal_cos     = 0.5;
 
+    // Global GP map: SLAMesh map update (A) and optional frame-to-model registration (B).
+    bool        dense_keep_all_keyframes           = false;   // queue every marginalised keyframe instead of only the latest
+    bool        dense_gp_global_map                = false;   // A: fuse keyframes into one GP map (SLAMesh map update)
+    double      dense_gp_variance_map_update       = 0.5;     // SLAMesh variance_map_update
+    int         dense_gp_max_raw_points_per_cell   = 2000;    // raw points kept per non-surface cell
+    bool        dense_gp_register                  = false;   // B: SLAMesh frame-to-model registration (needs dense_gp_global_map)
+    int         dense_gp_register_times            = 5;       // SLAMesh register_times
+    double      dense_gp_variance_register         = 0.1;     // SLAMesh variance_register
+    int         dense_gp_cross_cell_overlap_length = 1;       // SLAMesh cross_cell_overlap_length
+    double      dense_gp_register_converge_thr     = 1e-5;    // SLAMesh converge_thr
+    double      dense_gp_register_huber            = 0.1;     // SLAMesh Huber loss delta
+    int         dense_gp_register_min_matches      = 30;      // keep the VO pose below this many pairs
+    double      dense_gp_register_max_translation  = 0.5;     // metres; reject larger corrections
+    double      dense_gp_register_max_rotation_deg = 10.0;    // degrees; reject larger corrections
+    bool        dense_gp_register_carry_correction = true;    // start each keyframe from the last accepted correction
+    bool        dense_gp_register_depth_weighting  = false;   // weight residuals by min(1, (ref/z)^2)
+    double      dense_gp_register_depth_ref        = 2.0;     // metres
+    std::string dense_gp_global_mesh_path          = "log_slam/dense_gp_global_mesh.ply"; // PLY written every dense_gp_save_every keyframes
+    int         dense_gp_save_every                = 5;       // keyframes between PLY saves (0 = never)
+
     // Dense primal-dual mesh controls from the inverse-depth optimization paper.
     int         dense_pd_steiner_spacing = 20;
     double      dense_pd_lambda          = 0.5;

@@ -116,6 +116,24 @@ bool SLAMBiMono::init() {
             dcfg.gp_seam_max_edge_length    = _slam_param->_config.dense_gp_seam_max_edge_length;
             dcfg.gp_seam_max_prediction_gap = _slam_param->_config.dense_gp_seam_max_prediction_gap;
             dcfg.gp_seam_min_normal_cos     = _slam_param->_config.dense_gp_seam_min_normal_cos;
+            dcfg.keep_all_keyframes           = _slam_param->_config.dense_keep_all_keyframes;
+            dcfg.gp_global_map                = _slam_param->_config.dense_gp_global_map;
+            dcfg.gp_variance_map_update       = _slam_param->_config.dense_gp_variance_map_update;
+            dcfg.gp_max_raw_points_per_cell   = _slam_param->_config.dense_gp_max_raw_points_per_cell;
+            dcfg.gp_register                  = _slam_param->_config.dense_gp_register;
+            dcfg.gp_register_times            = _slam_param->_config.dense_gp_register_times;
+            dcfg.gp_variance_register         = _slam_param->_config.dense_gp_variance_register;
+            dcfg.gp_cross_cell_overlap_length = _slam_param->_config.dense_gp_cross_cell_overlap_length;
+            dcfg.gp_register_converge_thr     = _slam_param->_config.dense_gp_register_converge_thr;
+            dcfg.gp_register_huber            = _slam_param->_config.dense_gp_register_huber;
+            dcfg.gp_register_min_matches      = _slam_param->_config.dense_gp_register_min_matches;
+            dcfg.gp_register_max_translation  = _slam_param->_config.dense_gp_register_max_translation;
+            dcfg.gp_register_max_rotation_deg = _slam_param->_config.dense_gp_register_max_rotation_deg;
+            dcfg.gp_register_carry_correction = _slam_param->_config.dense_gp_register_carry_correction;
+            dcfg.gp_register_depth_weighting  = _slam_param->_config.dense_gp_register_depth_weighting;
+            dcfg.gp_register_depth_ref        = _slam_param->_config.dense_gp_register_depth_ref;
+            dcfg.gp_global_mesh_path          = _slam_param->_config.dense_gp_global_mesh_path;
+            dcfg.gp_save_every                = _slam_param->_config.dense_gp_save_every;
             dcfg.pd_steiner_spacing  = _slam_param->_config.dense_pd_steiner_spacing;
             dcfg.pd_lambda           = _slam_param->_config.dense_pd_lambda;
             dcfg.pd_num_iterations   = _slam_param->_config.dense_pd_num_iterations;
@@ -124,8 +142,13 @@ bool SLAMBiMono::init() {
             dcfg.pd_theta            = _slam_param->_config.dense_pd_theta;
             dcfg.pd_min_depth        = _slam_param->_config.dense_pd_min_depth;
 
+            // Images of a radial-tangential camera are undistorted when loaded and cL.K is the new
+            // camera matrix, but cL.d still holds the original coefficients. Pass zero distortion
+            // for those cameras so the dense rectification does not undistort a second time.
+            const Eigen::Vector4d d_L = cL.undistort ? Eigen::Vector4d::Zero() : Eigen::Vector4d(cL.d);
+            const Eigen::Vector4d d_R = cR.undistort ? Eigen::Vector4d::Zero() : Eigen::Vector4d(cR.d);
             _depth_injector = std::make_shared<MarginalDepthInjector>(
-                cL.K, cL.d, cR.K, cR.d, T_right_in_left, imsz, dcfg);
+                cL.K, d_L, cR.K, d_R, T_right_in_left, imsz, dcfg);
         }
     }
 

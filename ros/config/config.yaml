@@ -73,6 +73,25 @@ dense_gp_seam_max_variance:  0.5    # reject seam faces above this average GP va
 dense_gp_seam_max_edge_length:    0.5  # metres; rejects long bridge triangles
 dense_gp_seam_max_prediction_gap: 0.25 # metres along the GP prediction axis
 dense_gp_seam_min_normal_cos:     0.5  # abs(dot) between seam and local patch normals
+dense_keep_all_keyframes:     false  # true: queue every marginalised keyframe (no drops); needed for a complete global map
+## Global GP map (doc/dense_gp_global_map.md): A = SLAMesh map update, B = SLAMesh frame-to-model registration
+dense_gp_global_map:          false  # A: fuse keyframes into one world GP map instead of one mesh per keyframe
+dense_gp_variance_map_update: 0.5    # SLAMesh variance_map_update: fuse only vertices below this variance
+dense_gp_max_raw_points_per_cell: 2000  # raw points kept per non-surface cell
+dense_gp_register:            false  # B: register each keyframe to the map before fusing (needs dense_gp_global_map)
+dense_gp_register_times:      5      # SLAMesh register_times
+dense_gp_variance_register:   0.1    # SLAMesh variance_register (code default); 0.6 biases stereo keyframes, see doc
+dense_gp_cross_cell_overlap_length: 1  # SLAMesh cross_cell_overlap_length (search +-N cells along the GP axis)
+dense_gp_register_converge_thr: 1.0e-5 # SLAMesh converge_thr
+dense_gp_register_huber:      0.1    # SLAMesh Huber loss delta
+dense_gp_register_min_matches: 30    # keep the VO pose when fewer pairs are found
+dense_gp_register_max_translation: 0.5   # metres; reject larger corrections
+dense_gp_register_max_rotation_deg: 10.0 # degrees; reject larger corrections
+dense_gp_register_carry_correction: true # start each keyframe from the last accepted correction
+dense_gp_register_depth_weighting: false # weight residuals by min(1, (ref/depth)^2) (not in SLAMesh)
+dense_gp_register_depth_ref:  2.0    # metres
+dense_gp_global_mesh_path:    "log_slam/dense_gp_global_mesh.ply"  # plus dense_gp_registration.csv next to it
+dense_gp_save_every:          5      # keyframes between PLY saves (0 = never)
 dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
 dense_pd_lambda:             0.5    # depth/tracking L1 data weight
 dense_pd_num_iterations:     120

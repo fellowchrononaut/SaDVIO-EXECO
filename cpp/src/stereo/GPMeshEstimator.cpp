@@ -1,4 +1,5 @@
 #include "isaeslam/stereo/GPMeshEstimator.h"
+#include "isaeslam/stereo/GPMeshDetail.h"
 
 #include <Eigen/Cholesky>
 #include <Eigen/Eigenvalues>
@@ -11,31 +12,7 @@
 #include <vector>
 
 namespace isae {
-namespace {
-
-struct CellKey {
-    int x = 0;
-    int y = 0;
-    int z = 0;
-
-    bool operator<(const CellKey& other) const {
-        if (x != other.x) return x < other.x;
-        if (y != other.y) return y < other.y;
-        return z < other.z;
-    }
-};
-
-struct Region {
-    Eigen::Vector3d min = Eigen::Vector3d::Zero();
-    Eigen::Vector3d max = Eigen::Vector3d::Zero();
-};
-
-struct PatchInfo {
-    CellKey cell;
-    int prediction_axis = 0;
-    int base_vertex = 0;
-    std::vector<float> variances;
-};
+namespace gp_detail {
 
 struct PatchKey {
     CellKey cell;
@@ -510,7 +487,9 @@ void appendSeamFaces(DenseMesh& mesh, const std::vector<PatchInfo>& patches, con
     }
 }
 
-} // namespace
+} // namespace gp_detail
+
+using namespace gp_detail;
 
 DenseMesh GPMeshEstimator::estimate(const cv::Mat& disp_float,
                                      double f_rect,

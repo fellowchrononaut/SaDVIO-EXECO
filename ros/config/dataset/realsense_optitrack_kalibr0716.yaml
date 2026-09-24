@@ -1,0 +1,65 @@
+# RealSense D455 + OptiTrack ROS 2 bags (2026-05-06), with the Kalibr stereo calibration of
+# kalibr_work/rosbag2_2026_09_03-08_07_16 (reprojection error +-0.073 / 0.076 px) instead of the
+# SDK's rectified intrinsics.
+#
+# The SDK's image_rect_raw streams assume both IR cameras share one principal point
+# (realsense_optitrack.yaml: cx = 425.969 for both). Kalibr measures cx0 - cx1 = 0.883 px and a
+# 0.22 deg relative rotation; SaDVIO's own stereo rectification uses these, so disparity no longer
+# carries the ~0.9 px offset behind the 5-9 % trajectory-scale error of the real arm (see
+# Simulator_Validation/RealSense_Captures_060526/scale_attribution_20260906/KALIBR_HANDOFF.md).
+dataset: realsense_optitrack_kalibr0716
+ncam: 2
+
+camera_0:
+  topic: /camera/camera/infra1/image_rect_raw
+  # T_B_c0 = T_B_c1 * T_cn_cnm1 (Kalibr cam0 -> cam1); body frame at camera_1 as in realsense_optitrack.yaml
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [-0.00380849787332, 1.83548530499e-05, 0.999992747477, -5.6740828333e-06,
+           -0.999992747013, -3.56529299668e-05, -0.00380849721714, 0.0951185785458,
+           3.55827669864e-05, -0.999999999196, 1.84905040303e-05, 0.000130294796521,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 30
+  resolution: [848, 480]
+  projection_model: pinhole
+  intrinsics: [435.03183878017074, 435.41099292783167, 427.07924139225565, 240.70677159307277]
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0018520313339133946, -0.0015943180361202634, 9.397790951941346e-05, 0.0003015416402466975]
+
+camera_1:
+  topic: /camera/camera/infra2/image_rect_raw
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [0.0, 0.0, 1.0, 0.0,
+           -1.0, 0.0, 0.0, 0.0,
+           0.0, -1.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 30
+  resolution: [848, 480]
+  projection_model: pinhole
+  intrinsics: [434.3759893184689, 434.83741729525764, 426.19583348252416, 240.57722364797291]
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0031071049477456635, -0.0026078929349326583, 0.00013707827628890783, -0.00024742639386505307]
+
+imu:
+  topic: /camera/camera/imu
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [1.0, 0.0, 0.0, 0.0,
+           0.0, 1.0, 0.0, 0.0,
+           0.0, 0.0, 1.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+  rate_hz: 200
+  gyroscope_noise_density: 0.00017
+  gyroscope_random_walk: 0.0001
+  accelerometer_noise_density: 0.0015
+  accelerometer_random_walk: 0.001
+  dt_imu_cam: 0.0
+
+stereo_sync_tolerance_ms: 5

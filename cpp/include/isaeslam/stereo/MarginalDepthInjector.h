@@ -2,6 +2,7 @@
 #define MARGINAL_DEPTH_INJECTOR_H
 
 #include "isaeslam/stereo/DenseMesh.h"
+#include "isaeslam/stereo/GPGlobalMap.h"
 #include "isaeslam/stereo/GPMeshEstimator.h"
 #include "isaeslam/stereo/PrimalDualMeshEstimator.h"
 #include "isaeslam/stereo/SGBMZNCCMeshEstimator.h"
@@ -14,6 +15,8 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <deque>
+#include <fstream>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -52,6 +55,26 @@ struct MarginalDepthConfig {
     double gp_seam_max_edge_length    = 0.5;
     double gp_seam_max_prediction_gap = 0.25;
     double gp_seam_min_normal_cos     = 0.5;
+
+    // Global GP map: SLAMesh map update (A) and optional frame-to-model registration (B)
+    bool        keep_all_keyframes           = false;
+    bool        gp_global_map                = false;
+    double      gp_variance_map_update       = 0.5;
+    int         gp_max_raw_points_per_cell   = 2000;
+    bool        gp_register                  = false;
+    int         gp_register_times            = 5;
+    double      gp_variance_register         = 0.1;
+    int         gp_cross_cell_overlap_length = 1;
+    double      gp_register_converge_thr     = 1e-5;
+    double      gp_register_huber            = 0.1;
+    int         gp_register_min_matches      = 30;
+    double      gp_register_max_translation  = 0.5;
+    double      gp_register_max_rotation_deg = 10.0;
+    bool        gp_register_carry_correction = true;
+    bool        gp_register_depth_weighting  = false;
+    double      gp_register_depth_ref        = 2.0;
+    std::string gp_global_mesh_path          = "log_slam/dense_gp_global_mesh.ply";
+    int         gp_save_every                = 5;
 
     // Primal-dual mesh optimization over SGBM inverse depth
     int    pd_steiner_spacing = 20;
@@ -117,10 +140,19 @@ class MarginalDepthInjector {
     PrimalDualConfig _pd_cfg;
     SGBMZNCCConfig _zncc_cfg;
 
-    // Queue (single-slot, drop policy)
+    // Queue: single-slot drop policy by default; FIFO when cfg.keep_all_keyframes
     std::mutex _q_mtx;
     std::condition_variable _q_cv;
-    QueueItem _pending;
+    std::deque<QueueItem> _queue;
+    size_t _dropped = 0;
+
+    // Global GP map (only used by the worker thread)
+    void integrateGlobalMap(const QueueItem& item, const cv::Mat& disp_float, double f_rect,
+                            double cx_rect, double cy_rect, std::vector<Eigen::Vector3d>& point_cloud,
+                            DenseMesh& dense_mesh);
+    std::unique_ptr<GPGlobalMap> _gp_map;
+    int _integrated = 0;
+    std::ofstream _reg_log;
     std::atomic<bool> _running{true};
     std::thread _worker;
 

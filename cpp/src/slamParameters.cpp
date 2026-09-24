@@ -138,6 +138,42 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.dense_gp_seam_max_prediction_gap = yaml_file["dense_gp_seam_max_prediction_gap"].as<double>();
     if (yaml_file["dense_gp_seam_min_normal_cos"])
         _config.dense_gp_seam_min_normal_cos = yaml_file["dense_gp_seam_min_normal_cos"].as<double>();
+    if (yaml_file["dense_keep_all_keyframes"])
+        _config.dense_keep_all_keyframes = yaml_file["dense_keep_all_keyframes"].as<bool>();
+    if (yaml_file["dense_gp_global_map"])
+        _config.dense_gp_global_map = yaml_file["dense_gp_global_map"].as<bool>();
+    if (yaml_file["dense_gp_variance_map_update"])
+        _config.dense_gp_variance_map_update = yaml_file["dense_gp_variance_map_update"].as<double>();
+    if (yaml_file["dense_gp_max_raw_points_per_cell"])
+        _config.dense_gp_max_raw_points_per_cell = yaml_file["dense_gp_max_raw_points_per_cell"].as<int>();
+    if (yaml_file["dense_gp_register"])
+        _config.dense_gp_register = yaml_file["dense_gp_register"].as<bool>();
+    if (yaml_file["dense_gp_register_times"])
+        _config.dense_gp_register_times = yaml_file["dense_gp_register_times"].as<int>();
+    if (yaml_file["dense_gp_variance_register"])
+        _config.dense_gp_variance_register = yaml_file["dense_gp_variance_register"].as<double>();
+    if (yaml_file["dense_gp_cross_cell_overlap_length"])
+        _config.dense_gp_cross_cell_overlap_length = yaml_file["dense_gp_cross_cell_overlap_length"].as<int>();
+    if (yaml_file["dense_gp_register_converge_thr"])
+        _config.dense_gp_register_converge_thr = yaml_file["dense_gp_register_converge_thr"].as<double>();
+    if (yaml_file["dense_gp_register_huber"])
+        _config.dense_gp_register_huber = yaml_file["dense_gp_register_huber"].as<double>();
+    if (yaml_file["dense_gp_register_min_matches"])
+        _config.dense_gp_register_min_matches = yaml_file["dense_gp_register_min_matches"].as<int>();
+    if (yaml_file["dense_gp_register_max_translation"])
+        _config.dense_gp_register_max_translation = yaml_file["dense_gp_register_max_translation"].as<double>();
+    if (yaml_file["dense_gp_register_max_rotation_deg"])
+        _config.dense_gp_register_max_rotation_deg = yaml_file["dense_gp_register_max_rotation_deg"].as<double>();
+    if (yaml_file["dense_gp_register_carry_correction"])
+        _config.dense_gp_register_carry_correction = yaml_file["dense_gp_register_carry_correction"].as<bool>();
+    if (yaml_file["dense_gp_register_depth_weighting"])
+        _config.dense_gp_register_depth_weighting = yaml_file["dense_gp_register_depth_weighting"].as<bool>();
+    if (yaml_file["dense_gp_register_depth_ref"])
+        _config.dense_gp_register_depth_ref = yaml_file["dense_gp_register_depth_ref"].as<double>();
+    if (yaml_file["dense_gp_global_mesh_path"])
+        _config.dense_gp_global_mesh_path = yaml_file["dense_gp_global_mesh_path"].as<std::string>();
+    if (yaml_file["dense_gp_save_every"])
+        _config.dense_gp_save_every = yaml_file["dense_gp_save_every"].as<int>();
     if (yaml_file["dense_pd_steiner_spacing"])
         _config.dense_pd_steiner_spacing = yaml_file["dense_pd_steiner_spacing"].as<int>();
     if (yaml_file["dense_pd_lambda"])
