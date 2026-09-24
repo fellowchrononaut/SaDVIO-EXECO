@@ -108,6 +108,12 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.stereo_depth_pre_filter_cap = yaml_file["stereo_depth_pre_filter_cap"].as<int>();
     if (yaml_file["stereo_depth_publish_sgbm_images"])
         _config.stereo_depth_publish_sgbm_images = yaml_file["stereo_depth_publish_sgbm_images"].as<bool>();
+    if (yaml_file["stereo_depth_matcher"])
+        _config.stereo_depth_matcher = yaml_file["stereo_depth_matcher"].as<std::string>();
+    if (yaml_file["stereo_depth_ffs_engine"])
+        _config.stereo_depth_ffs_engine = yaml_file["stereo_depth_ffs_engine"].as<std::string>();
+    if (yaml_file["stereo_depth_ffs_lr_check"])
+        _config.stereo_depth_ffs_lr_check = yaml_file["stereo_depth_ffs_lr_check"].as<double>();
     if (yaml_file["dense_gp_cell_size"])
         _config.dense_gp_cell_size = yaml_file["dense_gp_cell_size"].as<double>();
     if (yaml_file["dense_gp_num_test"])

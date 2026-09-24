@@ -6,6 +6,7 @@
 #include "isaeslam/stereo/GPMeshEstimator.h"
 #include "isaeslam/stereo/PrimalDualMeshEstimator.h"
 #include "isaeslam/stereo/SGBMZNCCMeshEstimator.h"
+#include "isaeslam/stereo/StereoMatcher.h"
 #include "isaeslam/data/mesh/mesh.h"
 #include "isaeslam/data/frame.h"
 #include <Eigen/Core>
@@ -24,6 +25,9 @@
 namespace isae {
 
 struct MarginalDepthConfig {
+    std::string stereo_matcher  = "sgbm"; // "sgbm" or "ffs" (Fast-FoundationStereo, needs ISAESLAM_WITH_FFS)
+    std::string ffs_engine_path;          // TensorRT engine for "ffs"
+    double      ffs_lr_check_px = 0.0;    // "ffs": left-right consistency threshold in px (0 = off)
     int         num_disparities = 64;
     int         block_size      = 5;
     double      scale_factor    = 1.0;
@@ -133,7 +137,7 @@ class MarginalDepthInjector {
     // Rectified camera intrinsics
     double _f_rect, _cx_rect, _cy_rect, _baseline;
 
-    cv::Ptr<cv::StereoSGBM> _sgbm;
+    std::unique_ptr<StereoMatcher> _matcher;
     MarginalDepthConfig _cfg;
 
     GPMeshConfig _gp_cfg;

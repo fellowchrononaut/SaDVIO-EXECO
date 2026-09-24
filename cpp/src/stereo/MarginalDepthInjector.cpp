@@ -136,19 +136,19 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
                                 img_size, CV_32FC1,
                                 _map_R_x, _map_R_y);
 
-    // Set up SGBM
-    int block_size = cfg.block_size;
-    int num_disp   = cfg.num_disparities;
-    int P1_sgbm    = 8  * 1 * block_size * block_size;
-    int P2_sgbm    = 32 * 1 * block_size * block_size;
-    _sgbm = cv::StereoSGBM::create(0, num_disp, block_size,
-                                    P1_sgbm, P2_sgbm,
-                                    cfg.disp12_max_diff,
-                                    cfg.pre_filter_cap,
-                                    cfg.uniqueness_ratio,
-                                    cfg.speckle_window_size,
-                                    cfg.speckle_range,
-                                    cv::StereoSGBM::MODE_SGBM_3WAY);
+    // Set up the disparity backend (SGBM or Fast-FoundationStereo)
+    StereoMatcherConfig mcfg;
+    mcfg.matcher             = cfg.stereo_matcher;
+    mcfg.num_disparities     = cfg.num_disparities;
+    mcfg.block_size          = cfg.block_size;
+    mcfg.uniqueness_ratio    = cfg.uniqueness_ratio;
+    mcfg.speckle_window_size = cfg.speckle_window_size;
+    mcfg.speckle_range       = cfg.speckle_range;
+    mcfg.disp12_max_diff     = cfg.disp12_max_diff;
+    mcfg.pre_filter_cap      = cfg.pre_filter_cap;
+    mcfg.ffs_engine_path     = cfg.ffs_engine_path;
+    mcfg.ffs_lr_check_px     = cfg.ffs_lr_check_px;
+    _matcher = createStereoMatcher(mcfg);
 
     // Start worker thread
     _worker = std::thread(&MarginalDepthInjector::workerLoop, this);
@@ -262,15 +262,10 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     else
         gray_R = rect_R;
 
-    // Run SGBM
-    cv::Mat disp_raw;
-    _sgbm->compute(gray_L, gray_R, disp_raw);
+    // Disparity in pixels (float, <= 0 = invalid)
+    cv::Mat disp_float = _matcher->compute(gray_L, gray_R);
 
     auto t1 = clk::now();
-
-    // Convert to float (SGBM output is 16-bit fixed-point, divide by 16)
-    cv::Mat disp_float;
-    disp_raw.convertTo(disp_float, CV_32F, 1.0 / 16.0);
 
     // Scale intrinsics if images were rescaled
     double f_rect  = _f_rect  * _cfg.scale_factor;
@@ -340,7 +335,7 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     auto ms = [](auto a, auto b) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
     };
-    std::cout << "[DenseMesh] SGBM=" << ms(t0,t1) << "ms"
+    std::cout << "[DenseMesh] " << _matcher->name() << "=" << ms(t0,t1) << "ms"
               << "  depth=" << ms(t1,t2) << "ms"
               << "  cloud=" << ms(t2,t3) << "ms"
               << "  " << _cfg.mesh_method << "=" << ms(t3,t4) << "ms"

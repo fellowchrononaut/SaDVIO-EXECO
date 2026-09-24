@@ -101,6 +101,9 @@ struct Config {
     int         stereo_depth_disp12_max_diff       = 1;
     int         stereo_depth_pre_filter_cap        = 0;
     bool        stereo_depth_publish_sgbm_images   = false;
+    std::string stereo_depth_matcher      = "sgbm";  // "sgbm" or "ffs" (Fast-FoundationStereo TensorRT engine)
+    std::string stereo_depth_ffs_engine;              // TensorRT engine path for "ffs"
+    double      stereo_depth_ffs_lr_check = 0.0;      // "ffs" left-right check threshold in px (0 = off)
 
     // Dense GP mesh controls, matching the SLAMesh local GP reconstruction.
     double      dense_gp_cell_size        = 1.0;

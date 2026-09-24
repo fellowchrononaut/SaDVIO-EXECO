@@ -137,6 +137,9 @@ bool SLAMBiMonoVIO::init() {
             dcfg.disp12_max_diff     = _slam_param->_config.stereo_depth_disp12_max_diff;
             dcfg.pre_filter_cap      = _slam_param->_config.stereo_depth_pre_filter_cap;
             dcfg.publish_sgbm_images = _slam_param->_config.stereo_depth_publish_sgbm_images;
+            dcfg.stereo_matcher      = _slam_param->_config.stereo_depth_matcher;
+            dcfg.ffs_engine_path     = _slam_param->_config.stereo_depth_ffs_engine;
+            dcfg.ffs_lr_check_px     = _slam_param->_config.stereo_depth_ffs_lr_check;
             dcfg.gp_cell_size        = _slam_param->_config.dense_gp_cell_size;
             dcfg.gp_num_test         = _slam_param->_config.dense_gp_num_test;
             dcfg.gp_min_pts_per_cell = _slam_param->_config.dense_gp_min_pts_per_cell;

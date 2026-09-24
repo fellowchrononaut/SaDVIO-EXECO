@@ -74,6 +74,8 @@ if(OpenMP_CXX_FOUND)
 else()
     target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} ${CERES_LIBRARIES} ${YAML_CPP_LIBRARIES} ${PCL_LIBRARIES} ${Boost_SYSTEM_LIBRARY})
 endif()
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_FFS.cmake)
+isaeslam_enable_ffs(${PROJECT_NAME})
 
 install(
   TARGETS ${PROJECT_NAME}

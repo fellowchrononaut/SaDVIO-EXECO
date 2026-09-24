@@ -58,6 +58,9 @@ stereo_depth_speckle_range:       32
 stereo_depth_disp12_max_diff:     1
 stereo_depth_pre_filter_cap:      0
 stereo_depth_publish_sgbm_images: true   # publish rectified/scaled left/right images used by SGBM
+stereo_depth_matcher:    "sgbm"   # "sgbm" or "ffs" = Fast-FoundationStereo (build with -DISAESLAM_WITH_FFS=ON; doc/dense_ffs_stereo.md)
+stereo_depth_ffs_engine: ""       # "ffs": TensorRT engine from the upstream single-ONNX export (trtexec, same GPU/TensorRT)
+stereo_depth_ffs_lr_check: 0.0    # "ffs": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
 dense_gp_cell_size:          1.0    # metres; SLAMesh voxel/cell size
 dense_gp_num_test:           6      # predicted GP grid side per cell
 dense_gp_min_pts_per_cell:   8
