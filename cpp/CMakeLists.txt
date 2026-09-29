@@ -60,6 +60,8 @@ else()
 endif()
 include(cmake/ISAESLAM_FFS.cmake)
 isaeslam_enable_ffs(${PROJECT_NAME})
+include(cmake/ISAESLAM_LAS2.cmake)
+isaeslam_enable_las2(${PROJECT_NAME})
 include(cmake/ISAESLAM_VDBGPDF.cmake)
 isaeslam_enable_vdbgpdf(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR})
 

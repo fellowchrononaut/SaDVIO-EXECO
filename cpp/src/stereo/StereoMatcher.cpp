@@ -1,5 +1,6 @@
 #include "isaeslam/stereo/StereoMatcher.h"
 #include "isaeslam/stereo/FFSStereoMatcher.h"
+#include "isaeslam/stereo/LAS2StereoMatcher.h"
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
 
@@ -39,8 +40,16 @@ std::unique_ptr<StereoMatcher> createStereoMatcher(const StereoMatcherConfig& cf
                                  "-DISAESLAM_WITH_FFS=ON (TensorRT + CUDA runtime)");
 #endif
     }
+    if (cfg.matcher == "las2") {
+#ifdef ISAESLAM_WITH_LAS2
+        return std::make_unique<LAS2StereoMatcher>(cfg);
+#else
+        throw std::runtime_error("[StereoMatcher] stereo_depth_matcher=las2 needs a build with "
+                                 "-DISAESLAM_WITH_LAS2=ON (OpenVINO runtime)");
+#endif
+    }
     throw std::runtime_error("[StereoMatcher] unknown stereo_depth_matcher '" + cfg.matcher +
-                             "' (expected sgbm or ffs)");
+                             "' (expected sgbm, ffs or las2)");
 }
 
 } // namespace isae

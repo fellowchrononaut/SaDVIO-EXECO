@@ -101,9 +101,19 @@ struct Config {
     int         stereo_depth_disp12_max_diff       = 1;
     int         stereo_depth_pre_filter_cap        = 0;
     bool        stereo_depth_publish_sgbm_images   = false;
-    std::string stereo_depth_matcher      = "sgbm";  // "sgbm" or "ffs" (Fast-FoundationStereo TensorRT engine)
+    std::string stereo_depth_matcher      = "sgbm";  // "sgbm", "ffs" (Fast-FoundationStereo TensorRT engine)
+                                                      // or "las2" (Lite Any Stereo V2 on OpenVINO)
     std::string stereo_depth_ffs_engine;              // TensorRT engine path for "ffs"
     double      stereo_depth_ffs_lr_check = 0.0;      // "ffs" left-right check threshold in px (0 = off)
+    std::string stereo_depth_las2_model_dir;          // "las2": folder of las2_<size>_<HxW>.onnx exports
+    std::string stereo_depth_las2_size       = "m";   // "las2": s, m, l or h
+    std::string stereo_depth_las2_resolution = "480x864"; // "las2": model input HxW
+    std::string stereo_depth_las2_onnx;               // "las2": explicit ONNX path, overrides the three above
+    std::string stereo_depth_las2_onnx_path;          // resolved from the keys above
+    std::string stereo_depth_las2_device     = "CPU"; // "las2": OpenVINO device
+    std::string stereo_depth_las2_precision  = "f32"; // "las2": f32, f16 or bf16
+    int         stereo_depth_las2_threads    = 0;     // "las2": OpenVINO inference threads (0 = all cores)
+    double      stereo_depth_las2_lr_check   = 0.0;   // "las2" left-right check threshold in px (0 = off)
 
     // Dense GP mesh controls, matching the SLAMesh local GP reconstruction.
     double      dense_gp_cell_size        = 1.0;

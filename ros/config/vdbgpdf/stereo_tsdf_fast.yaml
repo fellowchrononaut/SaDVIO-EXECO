@@ -1,0 +1,30 @@
+# SaDVIO stereo TSDF preset for low compute: 10 cm voxels, 0.2 m truncation (fusion: tsdf). Use with
+# dense_vdbgpdf_stride: 4 (a quarter of the points of stride 2): F@10 74 on FFS at 57 ms/keyframe on one
+# 5.7 GHz core vs 75 at 440 ms for stereo_tsdf (doc/dense_vdb_gpdf.md). Other keys as stereo.yaml.
+fusion: tsdf
+min_scan_range: 0.1 # Ignore points closer than this value (meters) (default 0.4)
+max_scan_range: 8.0 # SaDVIO: 4.0 in the D455 preset; 8 m doubles F@10 on ExECoSim FFS depth (doc/dense_vdb_gpdf.md)
+fill_holes: true
+sdf_trunc: 0.2 # SaDVIO: 0.1 in stereo.yaml
+space_carving: true # this param is for vdbfusion comparison
+distance_method: 0
+voxel_size_local: 0.02
+voxel_overlapping: -1 # positive: enable with value; negative: disable
+voxel_downsample: 5 
+voxel_size_global: 0.1 # SaDVIO: 0.05 in stereo.yaml
+variance_method: 0
+variance_cap: 0.1
+variance_on_surface: 0.001
+recon_min_weight: 0.1
+surface_normal_method: 0 # 0 for pcl, 1 for raycasting
+surface_normal_num: 20
+surface_value: -1 # -1 for in 1 for out
+query_iterval: 0.05
+query_trunc_in: 3
+query_trunc_out: 2
+freespace_iterval: 0.05
+freespace_trunc_out: 2 # positive: enable with value; negative: disable
+query_downsample: -1 # positive: enable with value; negative: disable
+map_lambda_scale: 900 
+map_noise: 0.01
+smooth_param: 100

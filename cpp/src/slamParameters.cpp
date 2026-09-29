@@ -114,6 +114,26 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.stereo_depth_ffs_engine = yaml_file["stereo_depth_ffs_engine"].as<std::string>();
     if (yaml_file["stereo_depth_ffs_lr_check"])
         _config.stereo_depth_ffs_lr_check = yaml_file["stereo_depth_ffs_lr_check"].as<double>();
+    if (yaml_file["stereo_depth_las2_model_dir"])
+        _config.stereo_depth_las2_model_dir = yaml_file["stereo_depth_las2_model_dir"].as<std::string>();
+    if (yaml_file["stereo_depth_las2_size"])
+        _config.stereo_depth_las2_size = yaml_file["stereo_depth_las2_size"].as<std::string>();
+    if (yaml_file["stereo_depth_las2_resolution"])
+        _config.stereo_depth_las2_resolution = yaml_file["stereo_depth_las2_resolution"].as<std::string>();
+    if (yaml_file["stereo_depth_las2_onnx"])
+        _config.stereo_depth_las2_onnx = yaml_file["stereo_depth_las2_onnx"].as<std::string>();
+    _config.stereo_depth_las2_onnx_path = !_config.stereo_depth_las2_onnx.empty()
+        ? _config.stereo_depth_las2_onnx
+        : _config.stereo_depth_las2_model_dir + "/las2_" + _config.stereo_depth_las2_size + "_" +
+              _config.stereo_depth_las2_resolution + ".onnx";
+    if (yaml_file["stereo_depth_las2_device"])
+        _config.stereo_depth_las2_device = yaml_file["stereo_depth_las2_device"].as<std::string>();
+    if (yaml_file["stereo_depth_las2_precision"])
+        _config.stereo_depth_las2_precision = yaml_file["stereo_depth_las2_precision"].as<std::string>();
+    if (yaml_file["stereo_depth_las2_threads"])
+        _config.stereo_depth_las2_threads = yaml_file["stereo_depth_las2_threads"].as<int>();
+    if (yaml_file["stereo_depth_las2_lr_check"])
+        _config.stereo_depth_las2_lr_check = yaml_file["stereo_depth_las2_lr_check"].as<double>();
     if (yaml_file["dense_gp_cell_size"])
         _config.dense_gp_cell_size = yaml_file["dense_gp_cell_size"].as<double>();
     if (yaml_file["dense_gp_num_test"])

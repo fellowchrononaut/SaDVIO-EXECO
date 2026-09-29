@@ -26,9 +26,15 @@
 namespace isae {
 
 struct MarginalDepthConfig {
-    std::string stereo_matcher  = "sgbm"; // "sgbm" or "ffs" (Fast-FoundationStereo, needs ISAESLAM_WITH_FFS)
+    std::string stereo_matcher  = "sgbm"; // "sgbm", "ffs" (Fast-FoundationStereo, needs ISAESLAM_WITH_FFS)
+                                          // or "las2" (Lite Any Stereo V2, needs ISAESLAM_WITH_LAS2)
     std::string ffs_engine_path;          // TensorRT engine for "ffs"
     double      ffs_lr_check_px = 0.0;    // "ffs": left-right consistency threshold in px (0 = off)
+    std::string las2_onnx_path;           // "las2": ONNX model (resolved from dir/size/resolution)
+    std::string las2_device      = "CPU"; // "las2": OpenVINO device
+    std::string las2_precision   = "f32"; // "las2": f32, f16 or bf16
+    int         las2_threads     = 0;     // "las2": OpenVINO inference threads (0 = default)
+    double      las2_lr_check_px = 0.0;   // "las2": left-right consistency threshold in px (0 = off)
     int         num_disparities = 64;
     int         block_size      = 5;
     double      scale_factor    = 1.0;

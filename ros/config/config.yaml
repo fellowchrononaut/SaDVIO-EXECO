@@ -58,9 +58,18 @@ stereo_depth_speckle_range:       32
 stereo_depth_disp12_max_diff:     1
 stereo_depth_pre_filter_cap:      0
 stereo_depth_publish_sgbm_images: true   # publish rectified/scaled left/right images used by SGBM
-stereo_depth_matcher:    "sgbm"   # "sgbm" or "ffs" = Fast-FoundationStereo (build with -DISAESLAM_WITH_FFS=ON; doc/dense_ffs_stereo.md)
+stereo_depth_matcher:    "sgbm"   # "sgbm", "ffs" = Fast-FoundationStereo (build with -DISAESLAM_WITH_FFS=ON; doc/dense_ffs_stereo.md)
+                                  # or "las2" = Lite Any Stereo V2 on the CPU (build with -DISAESLAM_WITH_LAS2=ON; doc/dense_las2_stereo.md)
 stereo_depth_ffs_engine: ""       # "ffs": TensorRT engine from the upstream single-ONNX export (trtexec, same GPU/TensorRT)
 stereo_depth_ffs_lr_check: 0.0    # "ffs": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
+stereo_depth_las2_model_dir:  "/root/SaDVIO-Dense/las2/models"  # "las2": folder of las2_<size>_<HxW>.onnx (upstream export_onnx.py)
+stereo_depth_las2_size:       "m"        # "las2": s | m | l | h (feed-forward S/M/L, iterative H; slower and more accurate in that order)
+stereo_depth_las2_resolution: "480x864"  # "las2": model input HxW: 480x864 (full) | 320x576 | 256x448 (images are downscaled to fit, never up)
+stereo_depth_las2_onnx:       ""         # "las2": explicit ONNX path, overrides model_dir/size/resolution
+stereo_depth_las2_device:     "CPU"      # "las2": OpenVINO device
+stereo_depth_las2_precision:  "f32"      # "las2": f32 | f16 | bf16 inference precision hint (M full res: 1.3x / 1.8x faster, doc/dense_las2_stereo.md §5)
+stereo_depth_las2_threads:    8          # "las2": OpenVINO inference threads, 0 = all cores (leave cores for the front-end)
+stereo_depth_las2_lr_check:   0.0        # "las2": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
 dense_gp_cell_size:          1.0    # metres; SLAMesh voxel/cell size
 dense_gp_num_test:           6      # predicted GP grid side per cell
 dense_gp_min_pts_per_cell:   8

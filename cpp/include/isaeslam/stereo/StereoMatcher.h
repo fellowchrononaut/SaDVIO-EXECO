@@ -10,7 +10,7 @@ namespace isae {
 
 // Dense disparity backends for MarginalDepthInjector (doc/dense_ffs_stereo.md).
 struct StereoMatcherConfig {
-    std::string matcher = "sgbm"; // "sgbm" = OpenCV SGBM, "ffs" = Fast-FoundationStereo (TensorRT)
+    std::string matcher = "sgbm"; // "sgbm" = OpenCV SGBM, "ffs" = Fast-FoundationStereo (TensorRT), "las2" = Lite Any Stereo V2 (OpenVINO)
 
     // SGBM
     int num_disparities     = 64;
@@ -24,6 +24,13 @@ struct StereoMatcherConfig {
     // Fast-FoundationStereo: TensorRT engine built with trtexec from the upstream single-ONNX export
     std::string ffs_engine_path;
     double      ffs_lr_check_px = 0.0; // > 0: second (mirrored) inference, drop pixels with |dL - dR| above this
+
+    // Lite Any Stereo V2: ONNX from upstream export_onnx.py, compiled by OpenVINO at start-up
+    std::string las2_onnx_path;
+    std::string las2_device      = "CPU";  // OpenVINO device name
+    std::string las2_precision   = "f32";  // inference precision hint: "f32", "f16" or "bf16"
+    int         las2_threads     = 0;      // 0 = OpenVINO default (all cores)
+    double      las2_lr_check_px = 0.0;    // as ffs_lr_check_px
 };
 
 // Computes a disparity map (CV_32F, pixels, <= 0 = invalid) from a rectified stereo pair.
@@ -44,7 +51,7 @@ class SGBMStereoMatcher : public StereoMatcher {
     cv::Ptr<cv::StereoSGBM> _sgbm;
 };
 
-// Throws std::runtime_error for an unknown matcher, or "ffs" in a build without ISAESLAM_WITH_FFS.
+// Throws std::runtime_error for an unknown matcher, or "ffs"/"las2" in a build without ISAESLAM_WITH_FFS/_LAS2.
 std::unique_ptr<StereoMatcher> createStereoMatcher(const StereoMatcherConfig& cfg);
 
 } // namespace isae

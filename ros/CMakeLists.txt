@@ -76,6 +76,8 @@ else()
 endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_FFS.cmake)
 isaeslam_enable_ffs(${PROJECT_NAME})
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_LAS2.cmake)
+isaeslam_enable_las2(${PROJECT_NAME})
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_VDBGPDF.cmake)
 isaeslam_enable_vdbgpdf(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/../cpp)
 

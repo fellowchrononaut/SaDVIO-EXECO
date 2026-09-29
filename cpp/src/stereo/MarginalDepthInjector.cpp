@@ -155,7 +155,7 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
                                 img_size, CV_32FC1,
                                 _map_R_x, _map_R_y);
 
-    // Set up the disparity backend (SGBM or Fast-FoundationStereo)
+    // Set up the disparity backend (SGBM, Fast-FoundationStereo or Lite Any Stereo V2)
     StereoMatcherConfig mcfg;
     mcfg.matcher             = cfg.stereo_matcher;
     mcfg.num_disparities     = cfg.num_disparities;
@@ -167,6 +167,11 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
     mcfg.pre_filter_cap      = cfg.pre_filter_cap;
     mcfg.ffs_engine_path     = cfg.ffs_engine_path;
     mcfg.ffs_lr_check_px     = cfg.ffs_lr_check_px;
+    mcfg.las2_onnx_path      = cfg.las2_onnx_path;
+    mcfg.las2_device         = cfg.las2_device;
+    mcfg.las2_precision      = cfg.las2_precision;
+    mcfg.las2_threads        = cfg.las2_threads;
+    mcfg.las2_lr_check_px    = cfg.las2_lr_check_px;
     _matcher = createStereoMatcher(mcfg);
 
     // Start worker thread

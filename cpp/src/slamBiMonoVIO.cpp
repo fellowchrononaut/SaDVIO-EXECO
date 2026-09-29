@@ -140,6 +140,11 @@ bool SLAMBiMonoVIO::init() {
             dcfg.stereo_matcher      = _slam_param->_config.stereo_depth_matcher;
             dcfg.ffs_engine_path     = _slam_param->_config.stereo_depth_ffs_engine;
             dcfg.ffs_lr_check_px     = _slam_param->_config.stereo_depth_ffs_lr_check;
+            dcfg.las2_onnx_path      = _slam_param->_config.stereo_depth_las2_onnx_path;
+            dcfg.las2_device         = _slam_param->_config.stereo_depth_las2_device;
+            dcfg.las2_precision      = _slam_param->_config.stereo_depth_las2_precision;
+            dcfg.las2_threads        = _slam_param->_config.stereo_depth_las2_threads;
+            dcfg.las2_lr_check_px    = _slam_param->_config.stereo_depth_las2_lr_check;
             dcfg.gp_cell_size        = _slam_param->_config.dense_gp_cell_size;
             dcfg.gp_num_test         = _slam_param->_config.dense_gp_num_test;
             dcfg.gp_min_pts_per_cell = _slam_param->_config.dense_gp_min_pts_per_cell;
