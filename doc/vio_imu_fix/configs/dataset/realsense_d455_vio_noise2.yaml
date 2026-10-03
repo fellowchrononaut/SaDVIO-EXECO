@@ -1,0 +1,61 @@
+# RealSense D455 + OptiTrack bags (2026-05-06), offline EuRoC trees built by tools/prepare_realsense.py.
+# Body frame = IMU frame (camera_imu_optical_frame).
+# - Cameras: Kalibr stereo calibration of kalibr_work/rosbag2_2026_09_03-08_07_16 (same intrinsics as the repo's
+#   realsense_optitrack_kalibr0716.yaml).
+# - Camera-IMU extrinsic: NOT CALIBRATED. Nominal D455 factory values: IMU axes aligned with the left IR optical
+#   frame, cam0 origin at (-0.03022, 0.0074, 0.01602) m in the IMU frame. T_BS(cam1) = T_imu_cam0 * inv(Kalibr
+#   T_cam1_cam0). Rotation checked against the data separately (gyro vs visual rotation rates).
+# - IMU noise: variant with the repo realsense_optitrack_kalibr0716.yaml values (inflated random walks).
+# - Camera-IMU time offset: unknown (estimate_td can estimate it online).
+dataset: realsense_d455_vio_noise2
+ncam: 2
+
+camera_0:
+  topic: /camera/camera/infra1/image_rect_raw
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [1.0, 0.0, 0.0, -0.03022,
+           0.0, 1.0, 0.0, 0.0074,
+           0.0, 0.0, 1.0, 0.01602,
+           0.0, 0.0, 0.0, 1.0]
+  rate_hz: 30
+  resolution: [848, 480]
+  projection_model: pinhole
+  intrinsics: [435.03183878017074, 435.41099292783167, 427.07924139225565, 240.70677159307277]
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0018520313339133946, -0.0015943180361202634, 9.397790951941346e-05, 0.0003015416402466975]
+
+camera_1:
+  topic: /camera/camera/infra2/image_rect_raw
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [0.999992747013, -0.000035582767, -0.003808497873, 0.064897862406,
+           0.000035652930, 0.999999999196, 0.000018354853, 0.007533686157,
+           0.003808497217, -0.000018490504, 0.999992747477, 0.016387930474,
+           0.0, 0.0, 0.0, 1.0]
+  rate_hz: 30
+  resolution: [848, 480]
+  projection_model: pinhole
+  intrinsics: [434.3759893184689, 434.83741729525764, 426.19583348252416, 240.57722364797291]
+  distortion_model: radial-tangential
+  distortion_coefficients: [0.0031071049477456635, -0.0026078929349326583, 0.00013707827628890783, -0.00024742639386505307]
+
+imu:
+  topic: /camera/camera/imu
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [1.0, 0.0, 0.0, 0.0,
+           0.0, 1.0, 0.0, 0.0,
+           0.0, 0.0, 1.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+  rate_hz: 200
+  gyroscope_noise_density: 0.00017      # repo realsense config
+  gyroscope_random_walk: 0.0001        # repo realsense config
+  accelerometer_noise_density: 0.0015  # repo realsense config
+  accelerometer_random_walk: 0.001     # repo realsense config
+  dt_imu_cam: 0.0
+
+stereo_sync_tolerance_ms: 5

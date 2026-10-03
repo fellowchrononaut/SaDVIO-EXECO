@@ -8,3 +8,9 @@ Documentation/
 
 cpp/build
 .vscode/
+
+# IMU-fix evaluation: per-run outputs and console logs stay local (metrics are in doc/vio_imu_fix/all_runs_metrics.csv)
+doc/vio_imu_fix/runs/
+doc/vio_imu_fix/logs/
+__pycache__/
+/RAL_2024___SaDVIO.pdf

@@ -1,0 +1,219 @@
+#################################################################################
+# Details about the dataset
+#################################################################################
+
+## dataset_id in {kitti, eth, gazebo_fisheye, gazebo_pinhole, oivio, isae}
+dataset_id : "tumvi_512_ds"
+
+## slam mode in {mono, bimono, nofov, monovio, bimonovio}
+slam_mode : "mono"
+enable_visu : 0
+multithreading : 0
+
+## contrast enhancer parameters (0: nothing, 1: clahe, 2: histogram equalization, 
+## 3: image normalization, 4: adaptive gamma correction)
+contrast_enhancer : 1
+clahe_clip : 2
+downsampling: 1
+
+#################################################################################
+# Details about the SLAM Algorithm
+############################<#####################################################
+
+## pose estimator method to used in {epipolar, epipolar_custom, pnp}
+pose_estimator: "pnp"
+
+## select optimizer to use in {Analytic, Numeric, AngularAnalytic}
+optimizer: "AngularAnalytic"
+
+## type of tracker in {matcher, klt}
+tracker: "klt"
+
+## estimate the delay between camera and IMU or not
+estimate_td: 0
+
+## LocalMap parameters
+min_kf_number: 1                # number of keyframes that are added by default when the map starts
+max_kf_number: 12               # size of the sliding window
+fixed_frame_number: 1         # number of keyframe that will remain static during windowed BA
+marginalization: 0              # marginalization of old variables or not 
+sparsification: 0         # sparsification of the prior or not   
+
+## Mesh parameters
+mesh3d: 0                      # mesh3d computation or not
+ZNCC_tsh: 0.8                   # Threshold on ZNCC for triangle filtering
+max_length_tsh: 2               # Threshold on maximum length for triangle filtering
+
+## Dense stereo mesh (independent of mesh3d sparse pipeline)
+dense_depth:             false
+dense_mesh_method:       "none"   # "none"=depth only, "gp"=GP, "pd"=primal-dual, "zncc"=SGBM+Delaunay+ZNCC, "vdbgpdf"=VDB-GPDF map
+stereo_depth_num_disp:   64
+stereo_depth_block_size: 9
+stereo_depth_scale:      1.0
+stereo_depth_stride:     4
+stereo_depth_max_depth:  20.0
+stereo_depth_uniqueness_ratio:    10
+stereo_depth_speckle_window_size: 100
+stereo_depth_speckle_range:       32
+stereo_depth_disp12_max_diff:     1
+stereo_depth_pre_filter_cap:      0
+stereo_depth_publish_sgbm_images: true   # publish rectified/scaled left/right images used by SGBM
+stereo_depth_matcher:    "sgbm"   # "sgbm", "ffs" = Fast-FoundationStereo (build with -DISAESLAM_WITH_FFS=ON; doc/dense_ffs_stereo.md)
+                                  # or "las2" = Lite Any Stereo V2 on the CPU (build with -DISAESLAM_WITH_LAS2=ON; doc/dense_las2_stereo.md)
+stereo_depth_ffs_engine: ""       # "ffs": TensorRT engine from the upstream single-ONNX export (trtexec, same GPU/TensorRT)
+stereo_depth_ffs_lr_check: 0.0    # "ffs": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
+stereo_depth_las2_model_dir:  "/root/SaDVIO-Dense/las2/models"  # "las2": folder of las2_<size>_<HxW>.onnx (upstream export_onnx.py)
+stereo_depth_las2_size:       "m"        # "las2": s | m | l | h (feed-forward S/M/L, iterative H; slower and more accurate in that order)
+stereo_depth_las2_resolution: "480x864"  # "las2": model input HxW: 480x864 (full) | 320x576 | 256x448 (images are downscaled to fit, never up)
+stereo_depth_las2_onnx:       ""         # "las2": explicit ONNX path, overrides model_dir/size/resolution
+stereo_depth_las2_device:     "CPU"      # "las2": OpenVINO device
+stereo_depth_las2_precision:  "f32"      # "las2": f32 | f16 | bf16 inference precision hint (M full res: 1.3x / 1.8x faster, doc/dense_las2_stereo.md §5)
+stereo_depth_las2_threads:    8          # "las2": OpenVINO inference threads, 0 = all cores (leave cores for the front-end)
+stereo_depth_las2_lr_check:   0.0        # "las2": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
+dense_gp_cell_size:          1.0    # metres; SLAMesh voxel/cell size
+dense_gp_num_test:           6      # predicted GP grid side per cell
+dense_gp_min_pts_per_cell:   8
+dense_gp_kernel_length:      1.2
+dense_gp_variance_sensor:    0.1
+dense_gp_max_variance:       0.5    # reject faces above this average GP variance
+dense_gp_full_cover:         false  # true includes cell borders in the prediction grid
+dense_gp_eigen_1:            48.0   # PCA non-surface threshold
+dense_gp_eigen_2:            0.95   # PCA one-direction threshold
+dense_gp_eigen_3:            0.2    # PCA two-vs-three direction threshold
+dense_gp_stitch_seams:       true   # add triangles between compatible neighbouring GP patches
+dense_gp_seam_max_variance:  0.5    # reject seam faces above this average GP variance
+dense_gp_seam_max_edge_length:    0.5  # metres; rejects long bridge triangles
+dense_gp_seam_max_prediction_gap: 0.25 # metres along the GP prediction axis
+dense_gp_seam_min_normal_cos:     0.5  # abs(dot) between seam and local patch normals
+dense_keep_all_keyframes:     false  # true: queue every marginalised keyframe (no drops); needed for a complete global map
+## Global GP map (doc/dense_gp_global_map.md): A = SLAMesh map update, B = SLAMesh frame-to-model registration
+dense_gp_global_map:          false  # A: fuse keyframes into one world GP map instead of one mesh per keyframe
+dense_gp_variance_map_update: 0.5    # SLAMesh variance_map_update: fuse only vertices below this variance
+dense_gp_max_raw_points_per_cell: 2000  # raw points kept per non-surface cell
+dense_gp_register:            false  # B: register each keyframe to the map before fusing (needs dense_gp_global_map)
+dense_gp_register_times:      5      # SLAMesh register_times
+dense_gp_variance_register:   0.1    # SLAMesh variance_register (code default); 0.6 biases stereo keyframes, see doc
+dense_gp_cross_cell_overlap_length: 1  # SLAMesh cross_cell_overlap_length (search +-N cells along the GP axis)
+dense_gp_register_converge_thr: 1.0e-5 # SLAMesh converge_thr
+dense_gp_register_huber:      0.1    # SLAMesh Huber loss delta
+dense_gp_register_min_matches: 30    # keep the VO pose when fewer pairs are found
+dense_gp_register_max_translation: 0.5   # metres; reject larger corrections
+dense_gp_register_max_rotation_deg: 10.0 # degrees; reject larger corrections
+dense_gp_register_carry_correction: true # start each keyframe from the last accepted correction
+dense_gp_register_depth_weighting: false # weight residuals by min(1, (ref/depth)^2) (not in SLAMesh)
+dense_gp_register_depth_ref:  2.0    # metres
+dense_gp_global_mesh_path:    "log_slam/dense_gp_global_mesh.ply"  # plus dense_gp_registration.csv next to it
+dense_gp_save_every:          5      # keyframes between PLY saves (0 = never)
+## VDB-GPDF map (dense_mesh_method "vdbgpdf"; build with -DISAESLAM_WITH_VDBGPDF=ON; doc/dense_vdb_gpdf.md)
+dense_vdbgpdf_preset:     "stereo"  # config/vdbgpdf/<preset>.yaml: stereo (VDB-GPDF), stereo_tsdf (TSDF, best stereo mesh), rgbd, lidar
+dense_vdbgpdf_stride:     2         # pixel stride of the stereo points fed to the map (2: ~100 k points per 848x480 keyframe)
+dense_vdbgpdf_mesh_every: 5         # keyframes between marching cubes + PLY save (0 = never save)
+dense_vdbgpdf_mesh_path:  "log_slam/dense_vdbgpdf_mesh.ply"
+dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
+dense_pd_lambda:             0.5    # depth/tracking L1 data weight
+dense_pd_num_iterations:     120
+dense_pd_tau:                0.01   # primal step
+dense_pd_sigma:              0.1    # dual step
+dense_pd_theta:              1.0    # extrapolation
+dense_pd_min_depth:          0.5    # metres; max depth uses stereo_depth_max_depth
+
+## KF selection criteria
+min_lmk_number: 50              # minimum tracked landmark below which a KF is voted
+min_movement_parallax: 0.05     # parallax below which no frame is to be added (stop, small motion) in degree
+max_movement_parallax: 4        # maximum parallax between two images above which a frame is added in degree
+
+
+################################################################################
+# Details about the SLAM Algorithm
+#################################################################################
+features_handled: 
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvORBFeatureDetector"
+  #   number_detected_features: 250
+  #   n_features_per_cell: 1
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 16
+  #   tracker_width: 16
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 50
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 16
+  #   matcher_width: 16
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvKAZEFeatureDetector"
+  #   number_detected_features: 250
+  #   n_features_per_cell: 250
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 16
+  #   tracker_width: 16
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 30
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 16
+  #   matcher_width: 16
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  - label_feature: "pointxd"
+    detector_label: "cvFASTFeatureDetector"
+    number_detected_features: 150
+    n_features_per_cell: 1
+    tracker_label: "Point2DFeatureTracker"
+    tracker_height: 24
+    tracker_width: 24
+    tracker_nlvls_pyramids: 3
+    tracker_max_err: 30
+    matcher_label: "Point2DFeatureMatcher"
+    max_matching_dist: 32
+    matcher_width: 32
+    matcher_height: 32
+    lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvGFTTFeatureDetector"
+  #   number_detected_features: 200
+  #   n_features_per_cell: 1
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 24
+  #   tracker_width: 24
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 30
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 16
+  #   matcher_width: 16
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvBRISKFeatureDetector"
+  #   number_detected_features: 300
+  #   n_features_per_cell: 300
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 16
+  #   tracker_width: 16
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 50
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 32
+  #   matcher_width: 32
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "linexd"
+  #   detector_label: "Line2DFeatureDetector"
+  #   number_detected_features: 300
+  #   n_features_per_cell: 300        # TODO chack why crash if < num detected features
+  #   tracker_label: "Line2DFeatureTracker"
+  #   tracker_height: 64
+  #   tracker_width: 64
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 50
+  #   matcher_label: "Line2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 64
+  #   matcher_width: 64
+  #   lmk_triangulator: "Line3DLandmarkInitializer"

@@ -1,0 +1,57 @@
+# TUM-VI 512x512 stereo-inertial rig (room*/magistrale* exports).
+# Generated from Basalt's tumvi_512_ds_calib.json (configs/tumvi_512_ds_calib.basalt.json):
+# double-sphere intrinsics; camera T_BS = Basalt T_imu_cam (camera -> body), body = IMU frame.
+# Basalt extrinsics agree with the dataset's Kalibr camchain to 0.03 deg / 2 mm.
+# IMU noise: TUM-VI dso/imu_config.yaml 'inflated' values (recommended for Kalibr-type models).
+dataset: tumvi_512
+ncam: 2
+
+camera_0:
+  topic: /cam0/image_raw
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [-0.999524541366, 0.007615963929, -0.029877889835, 0.045480948121,
+         0.029594157535, -0.034981981298, -0.998949671817, -0.071453700028,
+         -0.008653152451, -0.999358923549, 0.034739960776, -0.046315428445,
+         0.000000000000, 0.000000000000, 0.000000000000, 1.000000000000]
+  rate_hz: 20
+  resolution: [512, 512]
+  projection_model: double_sphere
+  intrinsics: [-0.172130860343532, 0.593117759394474, 158.286000349670, 158.274345547875, 254.961165781917, 256.889439450178] # xi, alpha, fu, fv, cu, cv
+  distortion_model: None
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0]
+
+camera_1:
+  topic: /cam1/image_raw
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [-0.999520499021, 0.008208224754, -0.029856273751, -0.055469842222,
+         0.029959657596, 0.012774716980, -0.999469472031, -0.069993342445,
+         -0.007822464614, -0.999884709180, -0.013014507094, -0.049092582975,
+         0.000000000000, 0.000000000000, 0.000000000000, 1.000000000000]
+  rate_hz: 20
+  resolution: [512, 512]
+  projection_model: double_sphere
+  intrinsics: [-0.171147807160079, 0.592554339665851, 157.918301441763, 157.890128612563, 252.565476097030, 255.024894161947] # xi, alpha, fu, fv, cu, cv
+  distortion_model: None
+  distortion_coefficients: [0.0, 0.0, 0.0, 0.0]
+
+imu:
+  topic: /imu0
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [1.0, 0.0, 0.0, 0.0,
+           0.0, 1.0, 0.0, 0.0,
+           0.0, 0.0, 1.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+  rate_hz: 200
+  gyroscope_noise_density: 0.00016     # [rad/s/sqrt(Hz)]
+  gyroscope_random_walk: 0.000022      # [rad/s^2/sqrt(Hz)]
+  accelerometer_noise_density: 0.0028  # [m/s^2/sqrt(Hz)]
+  accelerometer_random_walk: 0.00086   # [m/s^3/sqrt(Hz)]
+  dt_imu_cam: 0.0                      # hardware-synchronized rig
+
+stereo_sync_tolerance_ms: 1
