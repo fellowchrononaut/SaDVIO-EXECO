@@ -35,9 +35,9 @@ static void execo_log_perframe(const std::shared_ptr<Frame> &f, uint nframes) {
 bool SLAMBiMono::init() {
 
     // get first frame and set keyframe
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     while (_frame->getSensors().empty()) {
-        _frame = _slam_param->getDataProvider()->next();
+        _frame = nextFrame();
     }
 
     // Prior on the first frame, it is set as the origin
@@ -46,6 +46,11 @@ bool SLAMBiMono::init() {
 
     // detect all features on all sensors
     detectFeatures(_frame->getSensors().at(0));
+
+    // Matches in time are those of the frames before a re-initialization, whose sensors are gone: clear them
+    // (initLandmarks would triangulate from features without a sensor)
+    _matches_in_time.clear();
+    _matches_in_time_lmk.clear();
 
     // Track features in frame
     trackFeatures(_frame->getSensors().at(0),
@@ -176,7 +181,7 @@ bool SLAMBiMono::init() {
 bool SLAMBiMono::frontEndStep() {
 
     // Get next frame
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
 
     // Ignore frames without images
     if (_frame->getSensors().empty())
@@ -251,7 +256,12 @@ bool SLAMBiMono::frontEndStep() {
         Eigen::Affine3d T_last_curr, T_w_f;
         T_last_curr = getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform();
         ESKFEstimator eskf;
+        const Eigen::Affine3d T_pnp = T_last_curr;
         eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
+        if (!plausibleUpdate(T_pnp, T_last_curr)) {
+            std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
+            T_last_curr = T_pnp;
+        }
         T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
         _frame->setdTCov(cov);
         _frame->setWorld2FrameTransform(T_w_f.inverse());
@@ -325,10 +335,9 @@ bool SLAMBiMono::frontEndStep() {
         _avg_lmk_init_t = (_avg_lmk_init_t * (_nkeyframes - 1) + isae::timer::silentToc()) / _nkeyframes;
 
         // Wait the end of optim
-        while (_frame_to_optim != nullptr) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        waitBackEnd();
         _frame_to_optim = _frame;
+        logKfFeatures(_frame);
 
     } else {
         // If no KF is voted, the frame is discarded and the landmarks are cleaned
@@ -338,7 +347,9 @@ bool SLAMBiMono::frontEndStep() {
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
     if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
         (_successive_fails > 5)) {
-
+        std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
+                  << std::endl;
+        waitBackEnd(); // the back end must not add a pending KF to the reset map
         _is_init = false;
         _local_map->reset();
         _slam_param->getOptimizerBack()->resetMarginalization();

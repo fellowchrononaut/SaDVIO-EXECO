@@ -7,7 +7,7 @@ namespace isae {
 bool SLAMBiMonoVIO::init() {
 
     // get first frame that must contain IMU
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     if (!_frame || !_frame->getIMU()) {
         return false;
     }
@@ -16,34 +16,29 @@ bool SLAMBiMonoVIO::init() {
     Eigen::Affine3d T_i_f = Eigen::Affine3d::Identity();
 
     // Align the global frame with the gravity direction (if IMU available)
-    Eigen::Vector3d acc_mean(0.0, 0.0, 0.0);
-    Eigen::Vector3d gyr_mean(0.0, 0.0, 0.0);
+    std::vector<Eigen::Vector3d> accs, gyrs;
     _last_IMU = _frame->getIMU();
     int count = 0;
 
-    // Average IMU measurement to reduce noise influence
+    // Collect the first IMU measurements
     while (count < 10 || _frame->getSensors().size() == 0) {
         if (!_frame->getIMU()) {
-            _frame = _slam_param->getDataProvider()->next();
+            _frame = nextFrame();
             continue;
         }
-        acc_mean += _frame->getIMU()->getAcc();
-        gyr_mean += _frame->getIMU()->getGyr();
-        _frame = _slam_param->getDataProvider()->next();
+        accs.push_back(_frame->getIMU()->getAcc());
+        gyrs.push_back(_frame->getIMU()->getGyr());
+        _frame = nextFrame();
         count++;
     }
-    acc_mean /= count;
-    gyr_mean /= count;
 
-    // Compute normalized direction vectors
-    Eigen::Vector3d acc_mean_norm = acc_mean.normalized();
-    Eigen::Vector3d g_norm        = (-g).normalized();
-
-    // We use the rodriguez formula to compute the rotation matrix (TODO implement it in geometry)
-    Eigen::Vector3d k = acc_mean_norm.cross(g_norm);
-    Eigen::Matrix3d K = geometry::skewMatrix(k.normalized());
-    T_i_f.affine().block(0, 0, 3, 3) =
-        (Eigen::Matrix3d::Identity() + k.norm() * K + (1 - acc_mean_norm.dot(g_norm)) * K * K);
+    // Gravity alignment, and bias guess if the IMU was static
+    Eigen::Vector3d ba, bg;
+    Eigen::Matrix3d R_i_f;
+    bool is_static   = staticImuInitialization(accs, gyrs, R_i_f, ba, bg);
+    T_i_f.linear()   = R_i_f;
+    if (!is_static)
+        std::cout << "IMU not static at start: biases left to the inertial initialization" << std::endl;
     // Prior on the first frame, it is set as the origin
     _frame->setWorld2FrameTransform(T_i_f.inverse());
     // _frame->setPrior(T_i_f.inverse(), 100 * Vector6d::Ones());
@@ -62,9 +57,7 @@ bool SLAMBiMonoVIO::init() {
     _last_IMU = imu_kf;
     _local_map->addFrame(_frame);
 
-    // Init bias (assuming that we are not moving)
-    Eigen::Vector3d ba = acc_mean + T_i_f.rotation().transpose() * g;
-    Eigen::Vector3d bg = gyr_mean;
+    // Initial biases
     _frame->getIMU()->setBa(ba);
     _frame->getIMU()->setBg(bg);
     std::cout << "Bias accel " << ba.transpose() << std::endl;
@@ -101,8 +94,14 @@ bool SLAMBiMonoVIO::init() {
 
     // Launch optimization of the inertial variables
     Eigen::Matrix3d dRi;
-    _slam_param->getOptimizerFront()->VIInit(_local_map, dRi);
+    double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi);
+    if (!inertialInitAccepted(scale)) {
+        _is_init = false;
+        _local_map->reset();
+        return false;
+    }
     _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
+    logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
 
     std::cout << "Orientation update : " << dRi << std::endl;
     std::cout << "Gyro bias : " << getLastKF()->getIMU()->getBg().transpose() << std::endl;
@@ -210,7 +209,7 @@ bool SLAMBiMonoVIO::init() {
 
 bool SLAMBiMonoVIO::step_init() {
     // Get next frame
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
 
     // Process IMU data
     if (_frame->getIMU()) {
@@ -220,6 +219,9 @@ bool SLAMBiMonoVIO::step_init() {
         // Ignore measurement if it failed
         if (_frame->getIMU()->processIMU()) {
             _last_IMU = _frame->getIMU();
+        } else {
+            _n_rejected_imu++;
+            _frame->clearIMU(); // never keep an unprocessed IMU measurement
         }
     }
 
@@ -403,7 +405,7 @@ bool SLAMBiMonoVIO::step_init() {
 bool SLAMBiMonoVIO::frontEndStep() {
 
     // Get next frame
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
 
     isae::timer::tic();
 
@@ -415,6 +417,9 @@ bool SLAMBiMonoVIO::frontEndStep() {
         // Ignore measurement if it failed
         if (_frame->getIMU()->processIMU()) {
             _last_IMU = _frame->getIMU();
+        } else {
+            _n_rejected_imu++;
+            _frame->clearIMU(); // never keep an unprocessed IMU measurement
         }
     }
 
@@ -477,7 +482,12 @@ bool SLAMBiMonoVIO::frontEndStep() {
         Eigen::Affine3d T_last_curr, T_w_f;
         T_last_curr = getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform();
         ESKFEstimator eskf;
+        const Eigen::Affine3d T_pnp = T_last_curr;
         eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
+        if (!plausibleUpdate(T_pnp, T_last_curr)) {
+            std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
+            T_last_curr = T_pnp;
+        }
         T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
         _frame->setdTCov(cov);
         _frame->setWorld2FrameTransform(T_w_f.inverse());
@@ -586,9 +596,7 @@ bool SLAMBiMonoVIO::frontEndStep() {
         _avg_match_frame_t = (_avg_match_frame_t * (_nkeyframes - 1) + track_dt) / _nkeyframes;
 
         // Wait the end of optim
-        while (_frame_to_optim != nullptr) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        waitBackEnd();
 
         // Landmark Initialization:
         // - Triangulate new points : LR + (n-1) / n
@@ -602,6 +610,8 @@ bool SLAMBiMonoVIO::frontEndStep() {
 
         // Send frame to optim to optimizer
         _frame_to_optim = _frame;
+        logKfFeatures(_frame);
+        _parallax_to_optim = _parallax;
         _last_IMU       = _frame_to_optim->getIMU();
 
     } else {
@@ -619,6 +629,7 @@ bool SLAMBiMonoVIO::frontEndStep() {
                   << (getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).matrix() << "\n ---"
                   << std::endl;
 
+        waitBackEnd(); // the back end must not add a pending KF to the reset map
         _is_init = false;
         _local_map->reset();
         _slam_param->getOptimizerBack()->resetMarginalization();
@@ -643,9 +654,14 @@ bool SLAMBiMonoVIO::backEndStep() {
         isae::timer::tic();
         if (_local_map->getMarginalizationFlag()) {
 
-            if (_parallax < 0.5) {
-                _frame_to_optim->getIMU()->setLastKF(nullptr);
-                _local_map->removeFrame(_local_map->getFrames().at(_local_map->getFrames().size() - 2));
+            std::deque<std::shared_ptr<Frame>> &frames = _local_map->getFrames();
+            std::shared_ptr<Frame> kf_prev = frames.size() >= 3 ? frames.at(frames.size() - 3) : nullptr;
+            if (_parallax_to_optim < 0.5 && canBridge(_frame_to_optim, kf_prev)) {
+                // Not enough parallax: drop the previous KF but keep its IMU information, by integrating the
+                // new KF's preintegration from the KF before it
+                std::shared_ptr<Frame> kf_drop = frames.at(frames.size() - 2);
+                bridgePreintegration(_frame_to_optim, kf_prev);
+                _local_map->removeFrame(kf_drop);
                 _nkeyframes--;
             } else {
                 // Queue frame for async dense mesh BEFORE discardLastFrame()
@@ -659,6 +675,7 @@ bool SLAMBiMonoVIO::backEndStep() {
 
                 // Uncomment below to enable global map
                 // _global_map->addFrame(_local_map->getFrames().at(0));
+                releaseImuHistory(_local_map->getFrames().at(0));
                 _map_mutex.lock();
                 _local_map->discardLastFrame();
                 _map_mutex.unlock();
@@ -673,22 +690,26 @@ bool SLAMBiMonoVIO::backEndStep() {
         // Optimize Local Map
         isae::timer::tic();
         if (_slam_param->_config.estimate_td && (geometry::log_so3(_frame_to_optim->getIMU()->getDeltaR()).norm() > 0.05)) {
-            double td = 0;
+            // The window estimates the absolute offset (each frame knows the offset it was read with); it replaces
+            // dt_imu_cam instead of being added to it, which re-applied the same correction in every window
+            std::atomic<double> &dt_imu_cam = _slam_param->getDataProvider()->getIMUConfig()->dt_imu_cam;
+            const double td_prev            = dt_imu_cam.load();
+            double td                       = td_prev;
             _slam_param->getOptimizerBack()->localMapVIOptimizationTd(_local_map, td, _local_map->getFixedFrameNumber());
-            _slam_param->getDataProvider()->getIMUConfig()->dt_imu_cam += td;
-            std::cout << "Global time offset : " << _slam_param->getDataProvider()->getIMUConfig()->dt_imu_cam
-                      << std::endl;
+            if (std::isfinite(td) && std::abs(td - td_prev) < 0.05)
+                dt_imu_cam = td;
+            else
+                std::cout << "Time offset update rejected: " << td << std::endl;
+            std::cout << "Global time offset : " << dt_imu_cam.load() << std::endl;
         } else {
             _slam_param->getOptimizerBack()->localMapVIOptimization(_local_map, _local_map->getFixedFrameNumber());
         }
+        logVIODiag(_frame_to_optim, _slam_param->getOptimizerBack()->getLastVIStats());
 
         // Vector6d dV = geometry::se3_RTtoVec6d(
         //     _frame_to_optim->getWorld2FrameTransform() * T_w_f.inverse());
         // optim_err = ((optim_err * (_nkeyframes - 1)) / _nkeyframes) + dV.norm() / _nkeyframes;
         // std::cout << "avg error before optim : " << optim_err << std::endl;
-
-        // Update current IMU biases after optimization
-        _frame_to_optim->getIMU()->updateBiases();
 
         float optim_dt = isae::timer::silentToc();
         _avg_wdw_opt_t = (_avg_wdw_opt_t * (_nkeyframes - 1) + optim_dt) / _nkeyframes;

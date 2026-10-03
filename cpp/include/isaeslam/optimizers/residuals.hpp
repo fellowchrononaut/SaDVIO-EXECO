@@ -110,8 +110,8 @@ class Relative6DPose : public ceres::SizedCostFunction<6, 6, 6> {
                                       geometry::skewMatrix(tb - ta) * T_w_a_up.rotation() *
                                       geometry::so3_rightJacobian(dw);
 
-                // d(dt) / d(ta)
-                J.block(3, 3, 3, 3) = -T_b_a_prior.rotation();
+                // d(dt) / d(ta): t_w_a_up = t_w_a + R_w_a * ta (original rotation)
+                J.block(3, 3, 3, 3) = -T_b_a_prior.rotation() * T_w_a_up.rotation().transpose() * _T_w_a.rotation();
                 J                   = _sqrt_inf * J;
             }
 
@@ -123,8 +123,8 @@ class Relative6DPose : public ceres::SizedCostFunction<6, 6, 6> {
                 // d(log(dr)) / d(taub)
                 J.block(0, 0, 3, 3) = geometry::so3_rightJacobian(w).inverse() * geometry::so3_rightJacobian(dw);
 
-                // d(dt) / d(tb)
-                J.block(3, 3, 3, 3) = T_b_a_prior.rotation() * T_w_a_up.rotation().transpose() * T_w_b_up.rotation();
+                // d(dt) / d(tb): t_w_b_up = t_w_b + R_w_b * tb (original rotation)
+                J.block(3, 3, 3, 3) = T_b_a_prior.rotation() * T_w_a_up.rotation().transpose() * _T_w_b.rotation();
                 J                   = _sqrt_inf * J;
             }
         }
@@ -155,8 +155,10 @@ class IMUFactor : public ceres::SizedCostFunction<9, 6, 6, 3, 3, 3, 3> {
             _imu_j->getFrame()->getWorld2FrameTransform() * geometry::se3_doubleVec6dtoRT(parameters[1]);
         Eigen::Vector3d v_i  = _imu_i->getVelocity() + Eigen::Map<const Eigen::Vector3d>(parameters[2]);
         Eigen::Vector3d v_j  = _imu_j->getVelocity() + Eigen::Map<const Eigen::Vector3d>(parameters[3]);
-        Eigen::Vector3d d_ba = Eigen::Map<const Eigen::Vector3d>(parameters[4]);
-        Eigen::Vector3d d_bg = Eigen::Map<const Eigen::Vector3d>(parameters[5]);
+        // Bias change w.r.t. the linearization point of the preintegration: (current bias of KF i +
+        // increment) - bias the deltas were integrated with
+        Eigen::Vector3d d_ba = _imu_i->getBa() + Eigen::Map<const Eigen::Vector3d>(parameters[4]) - _imu_j->getBaLin();
+        Eigen::Vector3d d_bg = _imu_i->getBg() + Eigen::Map<const Eigen::Vector3d>(parameters[5]) - _imu_j->getBgLin();
         double dtij          = (_imu_j->getFrame()->getTimestamp() - _imu_i->getFrame()->getTimestamp()) * 1e-9;
 
         // Get the information matrix
@@ -204,9 +206,8 @@ class IMUFactor : public ceres::SizedCostFunction<9, 6, 6, 3, 3, 3, 3> {
                 J_dTfj                   = Eigen::Matrix<double, 9, 6, Eigen::RowMajor>::Zero();
                 Eigen::Vector3d w_dfj    = Eigen::Vector3d(parameters[1][0], parameters[1][1], parameters[1][2]);
                 Eigen::Matrix3d J_r_wdfj = geometry::so3_rightJacobian(w_dfj);
-                J_dTfj.block(0, 0, 3, 3) = -geometry::so3_rightJacobian(r_dr).inverse() *
-                                           _imu_j->getFrame()->getWorld2FrameTransform().rotation() *
-                                           geometry::exp_so3(w_dfj).transpose() * J_r_wdfj;
+                // T_fj_w includes the increment: its rotation is R_fj0 Exp(w)
+                J_dTfj.block(0, 0, 3, 3) = -geometry::so3_rightJacobian(r_dr).inverse() * T_fj_w.rotation() * J_r_wdfj;
                 J_dTfj.block(6, 0, 3, 3) = -T_fi_w.rotation() * T_fj_w.rotation().transpose() *
                                            geometry::skewMatrix(T_fj_w.translation()) * T_fj_w.rotation() * J_r_wdfj;
                 J_dTfj.block(6, 3, 3, 3) = -T_fi_w.rotation() * geometry::exp_so3(w_dfj).transpose();
@@ -329,8 +330,9 @@ class IMUFactorInit : public ceres::SizedCostFunction<9, 2, 3, 3, 3, 3, 1> {
         Eigen::Matrix3d R_w_i  = geometry::exp_so3(w_w_i);
         Eigen::Vector3d v_i    = _imu_i->getVelocity() + Eigen::Map<const Eigen::Vector3d>(parameters[1]);
         Eigen::Vector3d v_j    = _imu_j->getVelocity() + Eigen::Map<const Eigen::Vector3d>(parameters[2]);
-        Eigen::Vector3d d_ba   = Eigen::Map<const Eigen::Vector3d>(parameters[3]);
-        Eigen::Vector3d d_bg   = Eigen::Map<const Eigen::Vector3d>(parameters[4]);
+        // Bias change w.r.t. the linearization point of the preintegration (see IMUFactor)
+        Eigen::Vector3d d_ba = _imu_i->getBa() + Eigen::Map<const Eigen::Vector3d>(parameters[3]) - _imu_j->getBaLin();
+        Eigen::Vector3d d_bg = _imu_i->getBg() + Eigen::Map<const Eigen::Vector3d>(parameters[4]) - _imu_j->getBgLin();
         double lambda          = *parameters[5];
         Eigen::Affine3d T_fi_w = _imu_i->getFrame()->getWorld2FrameTransform();
         Eigen::Affine3d T_fj_w = _imu_j->getFrame()->getWorld2FrameTransform();
@@ -347,11 +349,12 @@ class IMUFactorInit : public ceres::SizedCostFunction<9, 2, 3, 3, 3, 3, 1> {
         Eigen::Vector3d r_dr = geometry::log_so3(dR);
         Eigen::Vector3d r_dv = T_fi_w.rotation() * R_w_i * ((v_j - v_i) - g * dtij) -
                                (_imu_j->getDeltaV() + _imu_j->_J_dv_bg * d_bg + _imu_j->_J_dv_ba * d_ba);
-        Eigen::Vector3d r_dp =
-            T_fi_w.rotation() * R_w_i *
-                (std::exp(lambda) * (T_fj_w.inverse().translation() - T_fi_w.inverse().translation()) - v_i * dtij -
-                 0.5 * g * dtij * dtij) -
-            (_imu_j->getDeltaP() + _imu_j->_J_dp_bg * d_bg + _imu_j->_J_dp_ba * d_ba);
+        // Positions are in the visual world (scaled by s), velocities and gravity in the gravity-aligned
+        // frame: after VIInit the map is moved with T_f_I = (R_f_w R_w_i, s t_f_w), i.e. p_I = s R_w_i^T p_w
+        Eigen::Vector3d dp_w    = T_fj_w.inverse().translation() - T_fi_w.inverse().translation();
+        Eigen::Vector3d inertial = v_i * dtij + 0.5 * g * dtij * dtij;
+        Eigen::Vector3d r_dp     = T_fi_w.rotation() * std::exp(lambda) * dp_w - T_fi_w.rotation() * R_w_i * inertial -
+                               (_imu_j->getDeltaP() + _imu_j->_J_dp_bg * d_bg + _imu_j->_J_dp_ba * d_ba);
         Eigen::Map<Eigen::Matrix<double, 9, 1>> err(residuals);
         err.block(0, 0, 3, 1) = r_dr;
         err.block(3, 0, 3, 1) = r_dv;
@@ -366,10 +369,7 @@ class IMUFactorInit : public ceres::SizedCostFunction<9, 2, 3, 3, 3, 3, 1> {
                 J_Rwi                   = Eigen::Matrix<double, 9, 2, Eigen::RowMajor>::Zero();
                 J_Rwi.block(3, 0, 3, 2) = -T_fi_w.rotation() * R_w_i * geometry::skewMatrix((v_j - v_i) - g * dtij) *
                                           geometry::so3_rightJacobian(w_w_i).block(0, 0, 3, 2);
-                J_Rwi.block(6, 0, 3, 2) = -T_fi_w.rotation() * R_w_i *
-                                          geometry::skewMatrix(std::exp(lambda) * (T_fj_w.inverse().translation() -
-                                                                                   T_fi_w.inverse().translation()) -
-                                                               v_i * dtij - 0.5 * g * dtij * dtij) *
+                J_Rwi.block(6, 0, 3, 2) = T_fi_w.rotation() * R_w_i * geometry::skewMatrix(inertial) *
                                           geometry::so3_rightJacobian(w_w_i).block(0, 0, 3, 2);
                 J_Rwi = inf_sqrt * J_Rwi;
             }
@@ -415,8 +415,7 @@ class IMUFactorInit : public ceres::SizedCostFunction<9, 2, 3, 3, 3, 3, 1> {
             if (jacobians[5] != NULL) {
                 Eigen::Map<Eigen::Matrix<double, 9, 1>> J_scale(jacobians[5]);
                 J_scale = Eigen::Matrix<double, 9, 1>::Zero();
-                J_scale.block(6, 0, 3, 1) =
-                    T_fi_w.rotation() * R_w_i * (T_fj_w.inverse().translation() - T_fi_w.inverse().translation());
+                J_scale.block(6, 0, 3, 1) = std::exp(lambda) * T_fi_w.rotation() * dp_w;
                 J_scale = inf_sqrt * J_scale;
             }
         }
@@ -429,6 +428,9 @@ class IMUFactorInit : public ceres::SizedCostFunction<9, 2, 3, 3, 3, 3, 1> {
 
 /*!
  * @brief An experimental IMU factor refining only roll, pitch, biases and scale
+ *
+ * Not used and not validated: it scales the velocities, and its scale Jacobian omits exp(lambda) and
+ * the square-root information (see doc/VIO_fix_+_LIO_Prospects.md, Issue 3).
  */
 class IMUFactorInitBis : public ceres::SizedCostFunction<9, 2, 3, 3, 1> {
   public:
@@ -714,18 +716,21 @@ class IMUPriordx : public ceres::SizedCostFunction<15, 6, 3, 3, 3> {
                 Eigen::Map<Eigen::Matrix<double, 15, 3, Eigen::RowMajor>> J_v(jacobians[1]);
                 J_v.setZero();
                 J_v.block(6, 0, 3, 3) = Eigen::Matrix3d::Identity();
+                J_v                   = _sqrt_inf * J_v;
             }
 
             if (jacobians[2] != NULL) {
                 Eigen::Map<Eigen::Matrix<double, 15, 3, Eigen::RowMajor>> J_ba(jacobians[2]);
                 J_ba.setZero();
                 J_ba.block(9, 0, 3, 3) = Eigen::Matrix3d::Identity();
+                J_ba                   = _sqrt_inf * J_ba;
             }
 
             if (jacobians[3] != NULL) {
                 Eigen::Map<Eigen::Matrix<double, 15, 3, Eigen::RowMajor>> J_bg(jacobians[3]);
                 J_bg.setZero();
                 J_bg.block(12, 0, 3, 3) = Eigen::Matrix3d::Identity();
+                J_bg                    = _sqrt_inf * J_bg;
             }
         }
 
@@ -742,7 +747,7 @@ class IMUPriordx : public ceres::SizedCostFunction<15, 6, 3, 3, 3> {
  */
 class Prior1D : public ceres::SizedCostFunction<1, 1> {
   public:
-    Prior1D(const double sqrt_inf, const double _prior) : _sqrt_inf(sqrt_inf) {}
+    Prior1D(const double sqrt_inf, const double prior) : _sqrt_inf(sqrt_inf), _prior(prior) {}
     Prior1D() {}
 
     virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const {

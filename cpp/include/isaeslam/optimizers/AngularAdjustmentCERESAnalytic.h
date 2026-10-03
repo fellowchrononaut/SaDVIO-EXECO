@@ -11,6 +11,11 @@ namespace isae {
  */
 class AngularAdjustmentCERESAnalytic : public AOptimizer {
   public:
+    //! Angular noise of a feature, in pixels (divided by the focal length): the same in the window, in the
+    //! time-offset window and in the marginalization (the last two used 1 px, which made the marginalized
+    //! information 2.25 times more confident than the window's)
+    static constexpr double kAngularSigmaPx = 1.5;
+
     AngularAdjustmentCERESAnalytic()  = default;
     ~AngularAdjustmentCERESAnalytic() = default;
 
@@ -239,13 +244,19 @@ class AngularErrCeres_pointxd_td_velo : public ceres::SizedCostFunction<2, 6, 3,
  */
 class AngularErrCeres_pointxd_td : public ceres::SizedCostFunction<2, 6, 3, 1> {
   public:
+    /*!
+     * @param td_built Time offset the frame was read with: the parameter is the absolute offset, the frame is
+     * shifted by (parameter - td_built)
+     */
     AngularErrCeres_pointxd_td(const Eigen::Vector3d &bearing_vector,
                                const std::shared_ptr<IMU> &imu,
                                const Eigen::Affine3d &T_s_f,
                                const Eigen::Affine3d &T_f_w,
                                const Eigen::Vector3d &t_w_lmk,
-                               const double sigma = 1)
-        : _bearing_vector(bearing_vector), _imu(imu), _T_s_f(T_s_f), _T_f_w(T_f_w), _t_w_lmk(t_w_lmk), _sigma(sigma) {}
+                               const double sigma    = 1,
+                               const double td_built = 0)
+        : _bearing_vector(bearing_vector), _imu(imu), _T_s_f(T_s_f), _T_f_w(T_f_w), _t_w_lmk(t_w_lmk), _sigma(sigma),
+          _td_built(td_built) {}
     ~AngularErrCeres_pointxd_td() {}
 
     virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const {
@@ -254,15 +265,12 @@ class AngularErrCeres_pointxd_td : public ceres::SizedCostFunction<2, 6, 3, 1> {
         Eigen::Vector3d dt = Eigen::Map<const Eigen::Vector3d>(parameters[1]);
         double weight      = 1 / (_sigma);
 
-        // Update due to td
-        double td             = *parameters[2];
-        Eigen::Vector3d gyr   = _imu->getGyr();
-        Eigen::Vector3d vel   = _imu->getVelocity();
-        Eigen::Matrix3d dR_td = geometry::exp_so3(gyr * td);
-        Eigen::Vector3d dt_td = vel * td;
-        Eigen::Affine3d dT_td = Eigen::Affine3d::Identity();
-        dT_td.linear()        = dR_td;
-        dT_td.translation()   = dt_td;
+        // The image was taken at t + td: T_w_f(t + td) = T_w_f(t) [Exp(w td) | v_f td], with the bias-corrected
+        // angular rate w and the velocity v_f in the frame axes
+        double td             = *parameters[2] - _td_built;
+        Eigen::Vector3d w     = _imu->getGyr() - _imu->getBg();
+        Eigen::Vector3d v_f   = _T_f_w.rotation() * _imu->getVelocity();
+        Eigen::Matrix3d R_td  = geometry::exp_so3(w * td);
 
         // Compute tangent plane
         Eigen::Vector3d b1;
@@ -282,64 +290,44 @@ class AngularErrCeres_pointxd_td : public ceres::SizedCostFunction<2, 6, 3, 1> {
         P.col(1)           = b2;
         Eigen::MatrixXd Pt = P.transpose();
 
-        // Get Landmark P3D pose
-        Eigen::Affine3d dT_td_inv = dT_td.inverse();
-        Eigen::Affine3d T_f_w_td  = dT_td_inv * _T_f_w;
-        Eigen::Vector3d t_s_lmk   = _T_s_f * T_f_w_td * dT * (_t_w_lmk + dt);
-        double t_s_lmk_norm       = t_s_lmk.norm();
-        Eigen::Vector3d b_s_lmk   = t_s_lmk / t_s_lmk_norm;
+        // Landmark in the frame at t (x_f), at t + td (y), and in the sensor
+        Eigen::Vector3d p_w     = _t_w_lmk + dt;
+        Eigen::Vector3d x_f     = _T_f_w * dT * p_w;
+        Eigen::Vector3d y       = R_td.transpose() * (x_f - v_f * td);
+        Eigen::Vector3d t_s_lmk = _T_s_f * y;
+        double t_s_lmk_norm     = t_s_lmk.norm();
+        Eigen::Vector3d b_s_lmk = t_s_lmk / t_s_lmk_norm;
 
         Eigen::Map<Eigen::Vector2d> res(residuals);
         res = weight * Pt * (b_s_lmk - _bearing_vector);
 
         if (jacobians != NULL) {
 
-            Eigen::MatrixXd J_e_lmk = Eigen::MatrixXd::Zero(2, 3);
-            J_e_lmk += Pt * (Eigen::Matrix3d::Identity() - b_s_lmk * b_s_lmk.transpose()) * _T_s_f.linear() *
-                       T_f_w_td.linear() / t_s_lmk_norm;
+            // d residual / d y
+            Eigen::Matrix<double, 2, 3> J_e_y =
+                weight * Pt * (Eigen::Matrix3d::Identity() - b_s_lmk * b_s_lmk.transpose()) * _T_s_f.linear() /
+                t_s_lmk_norm;
+            Eigen::Matrix3d J_y_xf = R_td.transpose();
 
             if (jacobians[0] != NULL) {
-                Eigen::MatrixXd J_bear_frame = Eigen::MatrixXd::Zero(3, 6);
-                J_bear_frame.block(0, 0, 3, 3) =
-                    -dT.linear() * isae::geometry::skewMatrix(_t_w_lmk + dt) *
-                    geometry::so3_rightJacobian(isae::geometry::se3_RTtoVec6d(dT).block<3, 1>(0, 0));
-                J_bear_frame.block(0, 3, 3, 3) = Eigen::Matrix3d::Identity();
+                Eigen::Matrix<double, 3, 6> J_xf_dT;
+                J_xf_dT.block(0, 0, 3, 3) = -_T_f_w.linear() * dT.linear() * geometry::skewMatrix(p_w) *
+                                            geometry::so3_rightJacobian(geometry::se3_RTtoVec6d(dT).block<3, 1>(0, 0));
+                J_xf_dT.block(0, 3, 3, 3) = _T_f_w.linear();
 
                 Eigen::Map<Eigen::Matrix<double, 2, 6, Eigen::RowMajor>> J_frame(jacobians[0]);
-                J_frame = weight * J_e_lmk * J_bear_frame;
+                J_frame = J_e_y * J_y_xf * J_xf_dT;
             }
 
             if (jacobians[1] != NULL) {
                 Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>> J_lmk(jacobians[1]);
-                J_lmk = weight * J_e_lmk * dT.linear();
+                J_lmk = J_e_y * J_y_xf * _T_f_w.linear() * dT.linear();
             }
 
             if (jacobians[2] != NULL) {
+                // dy/dtd = -R_td^T (w x (x_f - v_f td) + v_f)
                 Eigen::Map<Eigen::Vector2d> J_td(jacobians[2]);
-                J_td.setZero();
-
-                Eigen::MatrixXd J_e_alpha = Eigen::MatrixXd::Zero(2, 3);
-                J_e_alpha +=
-                    Pt * (Eigen::Matrix3d::Identity() - b_s_lmk * b_s_lmk.transpose()) * _T_s_f.linear() / t_s_lmk_norm;
-
-                Eigen::MatrixXd J_alpha_dTtdinv = Eigen::MatrixXd::Zero(3, 6);
-                Eigen::Matrix3d Jr              = geometry::so3_rightJacobian(gyr * td);
-                J_alpha_dTtdinv.block(0, 0, 3, 3) =
-                    -dT_td_inv.rotation() * geometry::skewMatrix(_T_f_w * dT * (_t_w_lmk + dt));
-                J_alpha_dTtdinv.block(0, 3, 3, 3) = Eigen::Matrix3d::Identity();
-                // J_Tfwtd_td.block(0, 0, 3, 1) = -_T_f_w.rotation().transpose() * geometry::exp_so3(gyr * td) * Jr *
-                // gyr; J_Tfwtd_td.block(3, 0, 3, 1) =
-                //     geometry::exp_so3(gyr * td).transpose() * geometry::skewMatrix(_T_f_w.translation()) *
-                //         geometry::exp_so3(gyr * td) * Jr * gyr -
-                //     dR_td * geometry::skewMatrix(vel) * dR_td.transpose() * Jr * gyr * td - dR_td.transpose() * vel;
-                Eigen::MatrixXd J_dTtdinv_dTtd   = Eigen::MatrixXd::Zero(6, 6);
-                J_dTtdinv_dTtd.block(0, 0, 3, 3) = -dT_td.rotation();
-                J_dTtdinv_dTtd.block(0, 3, 3, 3) = -dT_td_inv.rotation() * geometry::skewMatrix(dT_td.translation());
-                J_dTtdinv_dTtd.block(3, 3, 3, 3) = -dT_td_inv.rotation();
-                Eigen::MatrixXd J_dTtd_td        = Eigen::MatrixXd::Zero(6, 1);
-                J_dTtd_td.block(0, 0, 3, 1)      = Jr * gyr;
-                J_dTtd_td.block(3, 0, 3, 1)      = vel;
-                J_td                             = weight * J_e_alpha * J_alpha_dTtdinv * J_dTtdinv_dTtd * J_dTtd_td;
+                J_td = J_e_y * (-R_td.transpose() * (w.cross(x_f - v_f * td) + v_f));
             }
         }
 
@@ -353,6 +341,7 @@ class AngularErrCeres_pointxd_td : public ceres::SizedCostFunction<2, 6, 3, 1> {
     const Eigen::Affine3d _T_f_w;          //!< Transform of the world w.r.t. the frame
     const Eigen::Vector3d _t_w_lmk;        //!< Position of the landmark in the world frame
     const double _sigma;                   //!< Standard deviation for the residuals, used as a weight
+    const double _td_built;                //!< Time offset the frame was read with
 };
 
 // struct AngularErrCeres_pointxd_td {
@@ -663,7 +652,7 @@ class AngularErrCeres_pointxd_depth : public ceres::SizedCostFunction<2, 6, 6, 1
                 Eigen::Vector3d t_w_lmk      = _T_fa_w.inverse() * _T_s_f.inverse() * t_sa_lmk;
                 J_lmk_framea.block(0, 0, 3, 3) =
                     R_s_w * dTa.linear().transpose() * isae::geometry::skewMatrix(t_w_lmk - dTa.translation()) *
-                    dTa.linear() * geometry::so3_rightJacobian(isae::geometry::se3_RTtoVec6d(dT).block<3, 1>(0, 0));
+                    dTa.linear() * geometry::so3_rightJacobian(isae::geometry::se3_RTtoVec6d(dTa).block<3, 1>(0, 0));
                 J_lmk_framea.block(0, 3, 3, 3) = -R_s_w * dTa.linear().transpose();
 
                 Eigen::Map<Eigen::Matrix<double, 2, 6, Eigen::RowMajor>> J_framea(jacobians[1]);

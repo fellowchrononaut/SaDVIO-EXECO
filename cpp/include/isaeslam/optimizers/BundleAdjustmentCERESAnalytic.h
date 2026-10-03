@@ -125,31 +125,35 @@ class ReprojectionErrCeres_pointxd_dx_td_velo : public ceres::SizedCostFunction<
  */
 class ReprojectionErrCeres_pointxd_dx_td : public ceres::SizedCostFunction<2, 6, 3, 1> {
   public:
+    /*!
+     * @param td_built Time offset the frame was read with: the parameter is the absolute offset, the frame is
+     * shifted by (parameter - td_built)
+     */
     ReprojectionErrCeres_pointxd_dx_td(const Eigen::Vector2d &p2d,
                                        const std::shared_ptr<ImageSensor> &cam,
                                        const std::shared_ptr<IMU> &imu,
                                        const Eigen::Affine3d &T_w_lmk,
-                                       const double sigma = 1.0)
-        : p2d_(p2d), cam_(cam), _T_w_lmk(T_w_lmk), imu_(imu) {
+                                       const double sigma    = 1.0,
+                                       const double td_built = 0)
+        : p2d_(p2d), cam_(cam), _T_w_lmk(T_w_lmk), imu_(imu), _td_built(td_built) {
         info_sqrt_ = (1 / sigma) * Eigen::Matrix2d::Identity();
     }
     ~ReprojectionErrCeres_pointxd_dx_td() {}
 
     virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const {
-        // Update due to td
-        double td                = *parameters[2];
-        Eigen::Vector3d velocity = imu_->getVelocity();
-        Eigen::Vector3d gyr      = imu_->getGyr();
-        Eigen::Matrix3d dR_td    = geometry::exp_so3(gyr * td).transpose();
-        Eigen::Vector3d dt_td    = -dR_td * velocity * td;
-        Eigen::Affine3d dT_td    = Eigen::Affine3d::Identity();
-        dT_td.linear()           = dR_td;
-        dT_td.translation()      = dt_td;
-
-        // Get World to sensor transform
-        Eigen::Affine3d T_f_w_unfixed =
-            cam_->getFrame()->getWorld2FrameTransform() * geometry::se3_doubleVec6dtoRT(parameters[0]);
-        Eigen::Affine3d T_f_w = dT_td * T_f_w_unfixed;
+        // The image was taken at t + td: T_w_f(t + td) = T_w_f(t) [Exp(w td) | v_f td], with the bias-corrected
+        // angular rate w and the velocity v_f in the frame axes
+        double td                   = *parameters[2] - _td_built;
+        Eigen::Affine3d dT          = geometry::se3_doubleVec6dtoRT(parameters[0]);
+        Eigen::Affine3d T_f_w_base  = cam_->getFrame()->getWorld2FrameTransform();
+        Eigen::Affine3d T_f_w_t     = T_f_w_base * dT;
+        Eigen::Vector3d w           = imu_->getGyr() - imu_->getBg();
+        Eigen::Vector3d v_f         = T_f_w_base.rotation() * imu_->getVelocity();
+        Eigen::Matrix3d R_td        = geometry::exp_so3(w * td);
+        Eigen::Affine3d dT_td_inv   = Eigen::Affine3d::Identity();
+        dT_td_inv.linear()          = R_td.transpose();
+        dT_td_inv.translation()     = -R_td.transpose() * v_f * td;
+        Eigen::Affine3d T_f_w       = dT_td_inv * T_f_w_t;
 
         // Get Landmark P3D pose
         Eigen::Affine3d T_w_lmk = _T_w_lmk * geometry::se3_doubleVec3dtoRT(parameters[1]);
@@ -157,40 +161,46 @@ class ReprojectionErrCeres_pointxd_dx_td : public ceres::SizedCostFunction<2, 6,
         Eigen::Map<Eigen::Vector2d> res(residuals);
         res = Eigen::Vector2d::Zero();
 
+        // J_lmk = d projection / d landmark world position (the other Jacobians follow from it)
+        Eigen::Matrix<double, 2, 3, Eigen::RowMajor> J_lmk;
+        double j_frame_unused[12];
+        bool ok = cam_->project(T_w_lmk, T_f_w, info_sqrt_, projection, j_frame_unused, J_lmk.data());
+        if (ok)
+            res = info_sqrt_ * (projection - p2d_);
+
         if (jacobians != NULL) {
-            double j0[12];
-            if (cam_->project(T_w_lmk, T_f_w, info_sqrt_, projection, j0, jacobians[1])) {
-                res = info_sqrt_ * (projection - p2d_);
-            }
-            Eigen::Map<Eigen::Matrix<double, 2, 6, Eigen::RowMajor>> J_proj_f(j0);
+            // d projection / d point in the frame at t + td
+            Eigen::Matrix<double, 2, 3> J_y = J_lmk * T_f_w.rotation().transpose();
+            Eigen::Vector3d p_w             = T_w_lmk.translation();
 
             if (jacobians[0] != NULL) {
-                Eigen::Map<Eigen::Matrix<double, 2, 6, Eigen::RowMajor>> J_proj_dlf(jacobians[0]);
-                Eigen::MatrixXd J_f_dlf = Eigen::MatrixXd::Zero(6, 6);
-                J_f_dlf.block(0, 0, 3, 3) =
-                    geometry::so3_rightJacobian(geometry::log_so3(T_f_w.rotation())).inverse() *
-                    geometry::so3_rightJacobian(Eigen::Vector3d(parameters[0][0], parameters[0][1], parameters[0][2]));
-                J_f_dlf.block(3, 3, 3, 3) = dR_td * cam_->getFrame()->getWorld2FrameTransform().rotation();
-                J_proj_dlf                = J_proj_f * J_f_dlf;
+                Eigen::Map<Eigen::Matrix<double, 2, 6, Eigen::RowMajor>> J_frame(jacobians[0]);
+                J_frame.setZero();
+                if (ok) {
+                    Eigen::Matrix<double, 3, 6> J_xf_dT;
+                    J_xf_dT.block(0, 0, 3, 3) =
+                        -T_f_w_t.linear() * geometry::skewMatrix(p_w) *
+                        geometry::so3_rightJacobian(geometry::se3_RTtoVec6d(dT).block<3, 1>(0, 0));
+                    J_xf_dT.block(0, 3, 3, 3) = T_f_w_base.linear();
+                    J_frame                   = J_y * R_td.transpose() * J_xf_dT;
+                }
+            }
+
+            if (jacobians[1] != NULL) {
+                Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>> J_l(jacobians[1]);
+                J_l.setZero();
+                if (ok)
+                    J_l = J_lmk;
             }
 
             if (jacobians[2] != NULL) {
-                Eigen::Map<Eigen::Vector2d> J_proj_td(jacobians[2]);
-                Eigen::MatrixXd J_f_td = Eigen::MatrixXd::Zero(6, 1);
-                Eigen::Matrix3d Jr      = geometry::so3_rightJacobian(gyr * td);
-                J_f_td.block(0, 0, 3, 1) =
-                    -T_f_w_unfixed.rotation().transpose() * geometry::exp_so3(gyr * td) * Jr * gyr;
-                J_f_td.block(3, 0, 3, 1) = geometry::exp_so3(gyr * td).transpose() *
-                                               geometry::skewMatrix(T_f_w_unfixed.translation()) *
-                                               geometry::exp_so3(gyr * td) * Jr * gyr -
-                                           dR_td * geometry::skewMatrix(velocity) * dR_td.transpose() * Jr * gyr * td -
-                                           dR_td.transpose() * velocity;
-                J_proj_td = J_proj_f * J_f_td;
-            }
-
-        } else {
-            if (cam_->project(T_w_lmk, T_f_w, info_sqrt_, projection, NULL, NULL)) {
-                res = info_sqrt_ * (projection - p2d_);
+                // dy/dtd = -R_td^T (w x (x_f - v_f td) + v_f), x_f = point in the frame at t
+                Eigen::Map<Eigen::Vector2d> J_td(jacobians[2]);
+                J_td.setZero();
+                if (ok) {
+                    Eigen::Vector3d x_f = T_f_w_t * p_w;
+                    J_td                = J_y * (-R_td.transpose() * (w.cross(x_f - v_f * td) + v_f));
+                }
             }
         }
 
@@ -203,6 +213,7 @@ class ReprojectionErrCeres_pointxd_dx_td : public ceres::SizedCostFunction<2, 6,
     const std::shared_ptr<IMU> imu_;
     const Eigen::Affine3d _T_w_lmk; //!< Transform of the landmark in the world frame
     Eigen::Matrix2d info_sqrt_;     //!< Square root of the information matrix for the residuals
+    double _td_built; //!< Time offset the frame was read with
 };
 
 /*!

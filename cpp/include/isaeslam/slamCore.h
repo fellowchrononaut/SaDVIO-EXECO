@@ -1,6 +1,7 @@
 #ifndef SLAMCORE_H
 #define SLAMCORE_H
 
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -202,6 +203,47 @@ class SLAMCore {
      */
     void profiling();
 
+    /*!
+     * @brief Make kf's preintegration start at kf_prev (integrated again over the longer interval), before the
+     * KF in between is removed from the window; without kf_prev the IMU link is cut.
+     */
+    void bridgePreintegration(const std::shared_ptr<Frame> &kf, const std::shared_ptr<Frame> &kf_prev);
+
+    /*!
+     * @brief True if a low-parallax KF can be dropped: the bridged preintegration (kf_prev -> kf) must still be
+     * usable as a factor. Otherwise (e.g. a long standstill, where every new KF has low parallax) the bridged
+     * interval grew past the factor limit and the newest KFs lost their IMU link; the oldest KF is marginalized
+     * instead.
+     */
+    bool canBridge(const std::shared_ptr<Frame> &kf, const std::shared_ptr<Frame> &kf_prev) const;
+
+    /*!
+     * @brief True if the relative pose T_new (last KF -> frame) is a plausible update of T_ref: their difference
+     * (rotation [rad] and translation [m] stacked) is at most 10 times the motion of T_ref, with a floor of 0.1 on
+     * that motion (i.e. at least 1.0 is always allowed)
+     */
+    static bool plausibleUpdate(const Eigen::Affine3d &T_ref, const Eigen::Affine3d &T_new);
+
+    /*!
+     * @brief Release the IMU measurements older than a KF leaving the window: every IMU sample holds the previous one,
+     * so the whole history of the run stayed in memory. Nothing walks the chain past the oldest window KF.
+     */
+    static void releaseImuHistory(const std::shared_ptr<Frame> &kf) {
+        if (kf && kf->getIMU())
+            kf->getIMU()->setLastIMU(nullptr);
+    }
+
+    /*!
+     * @brief Check the result of the inertial initialization: usable solution (scale > 0), finite states and
+     * plausible biases (|ba| < 2 m/s^2, |bg| < 0.5 rad/s, generous bounds for MEMS IMUs).
+     */
+    bool inertialInitAccepted(double scale);
+
+    /*!
+     * @brief Append one row of visual-inertial diagnostics for a keyframe to log_slam/vio_diag.csv
+     */
+    void logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats);
+
   protected:
     std::shared_ptr<Frame> _frame; //!< Current frame
 
@@ -219,11 +261,47 @@ class SLAMCore {
     double _min_movement_parallax;                //!< Under this parallax, no motion is considered
     double _min_lmk_number;                       //!< Under this number of landmark in _frame a KF is voted
     double _parallax;                             //!< Parallax between the last KF and _frame
+    double _parallax_to_optim = 0;                //!< Parallax of _frame_to_optim (handed to the back end with it)
     Vector6d _6d_velocity;                        //!< Current Velocity as a Twist vector
 
     // To ensure safe communication between threads
     std::mutex _map_mutex;
     std::shared_ptr<Frame> _frame_to_optim; //!< For communication between front-end and back-end
+
+    // Multithreading: the front end holds _step_mutex during the processing of a frame and the back end during the
+    // processing of a KF, so they never modify the maps at the same time. The front end releases it while it waits
+    // for data or for the back end (see nextFrame() and waitBackEnd())
+    std::mutex _step_mutex;
+    std::condition_variable _step_cv;
+    std::unique_lock<std::mutex> *_frontend_lock = nullptr; //!< Lock of the front end thread, null in single thread
+
+    /*!
+     * @brief Next frame of the data provider; in multithreading the back end can run while the front end waits,
+     * and the frame is returned once the back end has taken the pending KF into the local map
+     */
+    std::shared_ptr<Frame> nextFrame();
+
+    /*!
+     * @brief Wait until the back end has processed _frame_to_optim (no-op in single thread, where it already did)
+     */
+    void waitBackEnd();
+
+    // VIO diagnostics
+    uint _n_rejected_imu   = 0;     //!< IMU samples rejected by processIMU() (e.g. out of order)
+    bool _vio_diag_started = false; //!< Header of log_slam/vio_diag.csv written
+    bool _kf_votes_started = false; //!< Header of log_slam/kf_votes.csv written
+
+    /*!
+     * @brief Append the KF vote of a tracked frame to log_slam/kf_votes.csv (diagnostics)
+     */
+    void logKfVote(const std::shared_ptr<Frame> &f, double n_matches, double n_matches_lmk, const char *reason);
+
+    /*!
+     * @brief If EXECO_KF_FEATURES_LOG is set, append the point features of a KF handed to the back end to
+     * log_slam/kf_features.csv (pixel position in camera 0 and landmark status, as in the ROS image_kps view)
+     */
+    void logKfFeatures(const std::shared_ptr<Frame> &kf);
+    bool _kf_features_started = false; //!< Header of log_slam/kf_features.csv written
 
     // Profiling variables
     uint _nframes;

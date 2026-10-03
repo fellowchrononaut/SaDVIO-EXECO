@@ -17,7 +17,7 @@ Eigen::Affine3d pose_from_line(std::string line) {
 
 bool SLAMNonOverlappingFov::init() {
     // get first frame and set keyframe
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     if (!_frame) {
         sleep(1);
         return false;
@@ -65,7 +65,7 @@ bool SLAMNonOverlappingFov::init() {
 
     // Track features until enough parallax
     while (!cam0_ready) {
-        _frame = _slam_param->getDataProvider()->next();
+        _frame = nextFrame();
         if (_frame->getSensors().size() == 0)
             continue;
 
@@ -176,7 +176,7 @@ bool SLAMNonOverlappingFov::frontEndStep() {
 
     // Get next frame
     isae::timer::tic();
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     if (_frame->getSensors().size() == 0)
         return true;
     _nframes++;
@@ -296,9 +296,7 @@ bool SLAMNonOverlappingFov::frontEndStep() {
         _avg_resur_lmk   = (_avg_lmk_resur_t * (_nkeyframes - 1) + resu) / _nkeyframes;
 
         // Wait the end of optim
-        while (_frame_to_optim != nullptr) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        waitBackEnd();
         _frame_to_optim = _frame;
 
     } else {

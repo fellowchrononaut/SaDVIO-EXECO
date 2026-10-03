@@ -172,6 +172,18 @@ struct Config {
 };
 
 /*!
+ * @brief Check that the options of a configuration can work together.
+ *
+ * @param cfg The configuration read from config.yaml
+ * @param ncam The number of cameras of the dataset
+ * @param has_imu Whether the dataset yaml has an imu block
+ * @param warnings Filled with options that have no effect in this combination
+ * @return The combinations that cannot work (empty if the configuration is valid)
+ */
+std::vector<std::string>
+validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std::string> &warnings);
+
+/*!
  * @brief A class that gathers most of the algorithmic blocks of the SLAM system that can be setup in the config file
  *
  * Some attributes are sets as unordered map because these depends on the feature type (e.g. matcher, detector...). Then

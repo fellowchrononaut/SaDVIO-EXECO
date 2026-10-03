@@ -1,6 +1,10 @@
 #include "isaeslam/dataproviders/adataprovider.h"
 #include "utilities/geometry.h"
 #include "utilities/timer.h"
+#include <climits>
+#include <cmath>
+#include <sstream>
+#include <thread>
 
 namespace isae {
 
@@ -73,16 +77,24 @@ void ADataProvider::loadIMUConfig(YAML::Node imu_node) {
     // Load ROS topic
     _imu_config->ros_topic = imu_node["topic"].as<std::string>();
 
-    // Load extrinsic
+    // Load extrinsic. Unlike the cameras (T_s_f = T_BS^-1), the IMU keeps T_BS (sensor -> body): its
+    // rotation brings the measurements into the body frame (see createImuSensor).
     std::vector<double> data_T_s_f(16);
     data_T_s_f         = imu_node["T_BS"]["data"].as<std::vector<double>>();
     _imu_config->T_s_f = Eigen::Map<Eigen::Affine3d::MatrixType>(&data_T_s_f[0], 4, 4).transpose();
+
+    const Eigen::Matrix3d R_b_s = _imu_config->T_s_f.linear();
+    if ((R_b_s * R_b_s.transpose() - Eigen::Matrix3d::Identity()).norm() > 1e-6 || R_b_s.determinant() < 0)
+        std::cerr << "WARNING: the IMU T_BS rotation is not a proper rotation matrix" << std::endl;
+    if (_imu_config->T_s_f.translation().norm() > 1e-9)
+        std::cerr << "WARNING: the IMU T_BS translation is ignored (no lever-arm model): the body frame must be "
+                  << "the IMU frame, with the camera T_BS expressed relative to the IMU" << std::endl;
 
     // Load intrinsics
     _imu_config->acc_noise  = imu_node["accelerometer_noise_density"].as<double>();
     _imu_config->gyr_noise  = imu_node["gyroscope_noise_density"].as<double>();
     _imu_config->bacc_noise = imu_node["accelerometer_random_walk"].as<double>();
-    _imu_config->bgyr_noise = imu_node["accelerometer_random_walk"].as<double>();
+    _imu_config->bgyr_noise = imu_node["gyroscope_random_walk"].as<double>();
     _imu_config->rate_hz    = imu_node["rate_hz"].as<double>();
     _imu_config->dt_imu_cam = imu_node["dt_imu_cam"].as<double>();
 }
@@ -187,7 +199,6 @@ std::vector<std::shared_ptr<ImageSensor>> ADataProvider::createImageSensors(cons
                                                                             const std::vector<cv::Mat> &masks) {
     std::vector<std::shared_ptr<ImageSensor>> sensor_vector;
 
-    isae::timer::tic();
     _nframes++;
 
     double downsampling = _slam_config.downsampling;
@@ -260,15 +271,20 @@ std::vector<std::shared_ptr<ImageSensor>> ADataProvider::createImageSensors(cons
 }
 
 std::shared_ptr<IMU> ADataProvider::createImuSensor(const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr) {
-    std::shared_ptr<IMU> imu = std::make_shared<IMU>(_imu_config, acc, gyr);
+    // The preintegration works in the body (SLAM) frame: rotate the sensor measurements with T_BS.
+    // Done here so that every reader (offline, ROS) applies it.
+    const Eigen::Matrix3d R_b_s = _imu_config->T_s_f.linear();
+    std::shared_ptr<IMU> imu    = std::make_shared<IMU>(_imu_config, R_b_s * acc, R_b_s * gyr);
     return imu;
 }
 
-void ADataProvider::addFrameToTheQueue(std::vector<std::shared_ptr<ASensor>> sensors, double time) {
+void ADataProvider::addFrameToTheQueue(std::vector<std::shared_ptr<ASensor>> sensors, unsigned long long time) {
     std::shared_ptr<Frame> f = std::make_shared<Frame>();
 
     // Init the Frame
     f->init(sensors, time);
+    if (_imu_config)
+        f->setTimeOffset(_imu_config->dt_imu_cam.load());
 
     // add to queue
     {
@@ -282,281 +298,183 @@ void ADataProvider::addFrameToTheQueue(std::shared_ptr<Frame> frame) {
     _frame_queue.push(frame);
 }
 
-void EUROCGrabber::load_filenames() {
-    // Load cam0
-    std::string csv_file = _folder_path + "/cam0/data.csv";
+bool ImuImageMerger::addImu(long long ts, const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr) {
+    long long last = !_pending.empty() ? _pending.back().ts : (_has_last ? _last.ts : LLONG_MIN);
+    if (ts <= last) {
+        _n_dropped++;
+        return false;
+    }
+    _pending.push_back({ts, acc, gyr});
+    return true;
+}
+
+bool ImuImageMerger::imuReached(long long t) const {
+    if (!_pending.empty())
+        return _pending.back().ts >= t;
+    return _has_last && _last.ts >= t;
+}
+
+bool ImuImageMerger::emitImageFrame(long long t_img, const std::vector<std::shared_ptr<ImageSensor>> &images) {
+
+    // IMU measurements strictly before the image, one IMU-only frame each
+    while (!_pending.empty() && _pending.front().ts < t_img) {
+        _last     = _pending.front();
+        _has_last = true;
+        _pending.pop_front();
+        std::vector<std::shared_ptr<ASensor>> sensors;
+        sensors.push_back(_prov->createImuSensor(_last.acc, _last.gyr));
+        _prov->addFrameToTheQueue(sensors, (unsigned long long)_last.ts);
+    }
+
+    // An image older than the IMU already emitted would break the time order
+    if (_has_last && t_img <= _last.ts)
+        return false;
+
+    std::vector<std::shared_ptr<ASensor>> sensors(images.begin(), images.end());
+    if (!_pending.empty()) {
+        if (_pending.front().ts == t_img) {
+            _last = _pending.front();
+            _pending.pop_front();
+            _has_last = true;
+            sensors.push_back(_prov->createImuSensor(_last.acc, _last.gyr));
+        } else if (_has_last) {
+            const ImuSample &next = _pending.front();
+            const double a        = double(t_img - _last.ts) / double(next.ts - _last.ts);
+            ImuSample s{t_img, (1 - a) * _last.acc + a * next.acc, (1 - a) * _last.gyr + a * next.gyr};
+            _last = s;
+            sensors.push_back(_prov->createImuSensor(s.acc, s.gyr));
+        }
+    }
+    _prov->addFrameToTheQueue(sensors, (unsigned long long)t_img);
+    return true;
+}
+
+// Read an EuRoC camera csv (timestamp, filename) into the queues
+static void read_cam_csv(const std::string &csv_file, std::queue<long long> &ts_queue, std::queue<std::string> &fn_queue) {
     std::ifstream infile(csv_file);
-
     std::string line;
-    int idx_filename  = 1;
-    int idx_timestamp = 0;
+    int idx_filename = 1, idx_timestamp = 0;
     while (std::getline(infile, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty())
+            continue;
 
         // Split line into tokens
         std::stringstream line_stream(line);
         std::vector<std::string> line_vector;
         std::string cell;
-
         while (std::getline(line_stream, cell, ',')) {
+            cell.erase(0, cell.find_first_not_of(" \t"));
             line_vector.push_back(cell);
         }
 
-        // Get the idx of the filename key for the first line
+        // Get the idx of the filename key in the header
         if (line[0] == '#') {
-
-            for (int i = 0; i < line_vector.size(); i++) {
-                std::string key = line_vector.at(i);
-
-                if (key == "filename")
+            for (size_t i = 0; i < line_vector.size(); i++) {
+                if (line_vector.at(i) == "filename")
                     idx_filename = i;
-
-                if (key == "#timestamp [ns]")
+                if (line_vector.at(i) == "#timestamp [ns]")
                     idx_timestamp = i;
             }
-
             continue;
         }
 
-        // Fill the queues
-        _cam0_filename_queue.push(line_vector[idx_filename]);
-        _cam0_timestamp_queue.push(std::stoll(line_vector[idx_timestamp]));
+        ts_queue.push(std::stoll(line_vector[idx_timestamp]));
+        fn_queue.push(line_vector[idx_filename]);
     }
+}
 
-    // Load cam1
-    csv_file = _folder_path + "/cam1/data.csv";
-    std::ifstream infile_cam1(csv_file);
+void EUROCGrabber::load_filenames() {
 
-    while (std::getline(infile_cam1, line)) {
+    read_cam_csv(_folder_path + "/cam0/data.csv", _cam0_timestamp_queue, _cam0_filename_queue);
+    if (_prov->getNCam() == 2)
+        read_cam_csv(_folder_path + "/cam1/data.csv", _cam1_timestamp_queue, _cam1_filename_queue);
 
-        // Split line into tokens
-        std::stringstream line_stream(line);
-        std::vector<std::string> line_vector;
-        std::string cell;
+    // IMU measurements are only used with an IMU configuration (VIO modes)
+    if (!_prov->getIMUConfig())
+        return;
 
-        while (std::getline(line_stream, cell, ',')) {
-            line_vector.push_back(cell);
-        }
-
-        // Get the idx of the filename key for the first line
-        if (line[0] == '#') {
-
-            for (int i = 0; i < line_vector.size(); i++) {
-                std::string key = line_vector.at(i);
-
-                if (key == "filename")
-                    idx_filename = i;
-
-                if (key == "#timestamp [ns]")
-                    idx_timestamp = i;
-            }
-
-            continue;
-        }
-
-        // Fill the queues
-        _cam1_filename_queue.push(line_vector[idx_filename]);
-        _cam1_timestamp_queue.push(std::stoll(line_vector[idx_timestamp]));
-    }
-
-    // Load imu
-    csv_file = _folder_path + "/imu0/data.csv";
-    std::ifstream infile_imu(csv_file);
-
+    std::ifstream infile_imu(_folder_path + "/imu0/data.csv");
+    std::string line;
     while (std::getline(infile_imu, line)) {
-
-        // Skip the first line
-        if (line[0] == '#')
+        if (line.empty() || line[0] == '#')
             continue;
 
-        // Split line into tokens
         std::stringstream line_stream(line);
         std::vector<std::string> line_vector;
         std::string cell;
-
-        while (std::getline(line_stream, cell, ',')) {
+        while (std::getline(line_stream, cell, ','))
             line_vector.push_back(cell);
-        }
 
-        // Fill the queues
-        _imu_timestamp_queue.push(std::stod(line_vector[0]) + 0.015 * 1e9);
-        Eigen::Vector3d gyr(std::stod(line_vector[1]), std::stod(line_vector[2]), std::stod(line_vector[3]));
-        Eigen::Vector3d acc(std::stod(line_vector[4]), std::stod(line_vector[5]), std::stod(line_vector[6]));
-        if (_prov->getIMUConfig())
-            _imu_queue.push(_prov->createImuSensor(acc, gyr));
+        _imu_raw.push_back({std::stoll(line_vector[0]),
+                            Eigen::Vector3d(std::stod(line_vector[4]), std::stod(line_vector[5]), std::stod(line_vector[6])),
+                            Eigen::Vector3d(std::stod(line_vector[1]), std::stod(line_vector[2]), std::stod(line_vector[3]))});
     }
 }
 
 bool EUROCGrabber::addNextFrame() {
+    const bool stereo = (_prov->getNCam() == 2);
 
-    // EXECO: monocular path (ncam == 1), added for the RGB spectral-control arm.
-    // The stereo body below requires both cam queues and unconditionally does
-    // img_sensors.at(1), which throws
-    //   std::out_of_range: vector::_M_range_check: __n (which is 1) >= this->size() (which is 1)
-    // when a single camera is configured. Structure mirrors the stereo cases.
-    if (_prov->getNCam() == 1) {
-        if ((_prov->getIMUConfig() && _imu_queue.empty()) || _cam0_filename_queue.empty() ||
-            _cam0_timestamp_queue.empty() || _imu_timestamp_queue.empty())
-            return false;
+    // Stay a bounded number of frames ahead of the SLAM
+    while (_prov->queueSize() > _max_queued_frames)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-        std::vector<std::shared_ptr<ASensor>> sensors;
-        double imu_ts     = _imu_timestamp_queue.front();
-        long long cam0_ts = _cam0_timestamp_queue.front();
-
-        // Case 1 : imu is in the future, discard the image
-        if (imu_ts > cam0_ts + _time_tolerance * 1e9) {
-            _cam0_timestamp_queue.pop();
-            _cam0_filename_queue.pop();
-            return true;
-        }
-
-        // Case 2 : imu is too far in the past, imu-only frame
-        else if (imu_ts < cam0_ts - _time_tolerance * 1e9) {
-            if (_prov->getIMUConfig()) {
-                sensors.push_back(_imu_queue.front());
-                _prov->addFrameToTheQueue(sensors, imu_ts);
-                _imu_queue.pop();
-            }
-            _imu_timestamp_queue.pop();
-            return true;
-        }
-
-        // Case 3 : imu and cam0 are synced
-        else {
-            std::string path_img0 =
-                _folder_path + "/cam0/data/" + std::to_string((uint64_t)cam0_ts) + ".png";
-            cv::Mat img_left = cv::imread(path_img0, cv::IMREAD_GRAYSCALE);
-            if (img_left.empty()) {
-                std::cerr << path_img0 << " not opened " << std::endl;
+    // Drop stereo images without a partner within the sync tolerance
+    if (stereo) {
+        const long long tol = (long long)_prov->getStereoSyncTolNs();
+        while (!_cam0_timestamp_queue.empty() && !_cam1_timestamp_queue.empty()) {
+            long long d = _cam0_timestamp_queue.front() - _cam1_timestamp_queue.front();
+            if (d < -tol) {
+                std::cout << "\n Throw img0 -- Sync error : " << d << "\n";
                 _cam0_timestamp_queue.pop();
                 _cam0_filename_queue.pop();
-                return false;
-            }
-            _cam0_filename_queue.pop();
-            _cam0_timestamp_queue.pop();
-
-            std::vector<cv::Mat> imgs;
-            imgs.push_back(img_left);
-            std::vector<std::shared_ptr<isae::ImageSensor>> img_sensors = _prov->createImageSensors(imgs);
-            sensors.push_back(img_sensors.at(0));
-
-            if (_prov->getIMUConfig()) {
-                sensors.push_back(_imu_queue.front());
-                _imu_queue.pop();
-            }
-            _imu_timestamp_queue.pop();
-
-            _prov->addFrameToTheQueue(sensors, imu_ts);
+            } else if (d > tol) {
+                std::cout << "\n Throw img1 -- Sync error : " << d << "\n";
+                _cam1_timestamp_queue.pop();
+                _cam1_filename_queue.pop();
+            } else
+                break;
         }
-        return true;
     }
 
-    if ((_prov->getIMUConfig() && _imu_queue.empty()) || _cam0_filename_queue.empty() || _cam1_filename_queue.empty() ||
-        _cam0_timestamp_queue.empty() || _cam1_timestamp_queue.empty() || _imu_timestamp_queue.empty())
+    // End of data when no image is left (IMU after the last image is useless)
+    if (_cam0_timestamp_queue.empty() || (stereo && _cam1_timestamp_queue.empty()))
         return false;
-    std::vector<std::shared_ptr<ASensor>> sensors;
+    const long long t_img = _cam0_timestamp_queue.front();
 
-    // first catch an IMU measurement
-    double imu_ts  = _imu_timestamp_queue.front();
-    long long cam0_ts = _cam0_timestamp_queue.front();
-    long long cam1_ts = _cam1_timestamp_queue.front();
-
-    // Case 1 : imu is in the future, discard image until it is not
-    if (imu_ts > cam0_ts + _time_tolerance * 1e9) {
-        _cam0_timestamp_queue.pop();
-        _cam0_filename_queue.pop();
+    // Image frame at the image timestamp
+    std::vector<cv::Mat> imgs;
+    imgs.push_back(cv::imread(_folder_path + "/cam0/data/" + _cam0_filename_queue.front(), cv::IMREAD_GRAYSCALE));
+    if (stereo)
+        imgs.push_back(cv::imread(_folder_path + "/cam1/data/" + _cam1_filename_queue.front(), cv::IMREAD_GRAYSCALE));
+    _cam0_timestamp_queue.pop();
+    _cam0_filename_queue.pop();
+    if (stereo) {
         _cam1_timestamp_queue.pop();
         _cam1_filename_queue.pop();
-        return true;
     }
-
-    // Case 2 : imu is in the past too far away from image, imu only frame
-    else if (imu_ts < cam0_ts - _time_tolerance * 1e9) {
-        if (_prov->getIMUConfig()) {
-            sensors.push_back(_imu_queue.front());
-            _prov->addFrameToTheQueue(sensors, imu_ts);
-            _imu_queue.pop();
-        }
-        _imu_timestamp_queue.pop();
-        return true;
-    }
-
-    // Case 3 : imu and cam0 are synced, lets goooo
-    else {
-        // sync tolerance
-        if (cam0_ts < cam1_ts - 20000000) {
-            _cam0_filename_queue.pop();
-            _cam0_timestamp_queue.pop();
-            cam0_ts = _cam0_timestamp_queue.front();
-
-            // Don't forget to add IMU
-            if (_prov->getIMUConfig()) {
-                sensors.push_back(_imu_queue.front());
-                _imu_queue.pop();
-            }
-            _imu_timestamp_queue.pop();
-            std::cout << "\n Throw img0 -- Sync error : " << (cam0_ts - cam1_ts) << "\n";
-        } else if (cam0_ts > cam1_ts + 20000000) {
-            _cam1_filename_queue.pop();
-            _cam1_timestamp_queue.pop();
-            cam1_ts = _cam1_timestamp_queue.front();
-
-            // Don't forget to add IMU
-            if (_prov->getIMUConfig()) {
-                sensors.push_back(_imu_queue.front());
-                _imu_queue.pop();
-            }
-            _imu_timestamp_queue.pop();
-            std::cout << "\n Throw img1 -- Sync error : " << (cam0_ts - cam1_ts) << "\n";
-        } else {
-
-            std::string path_img0 = _folder_path + "/cam0/data/" + // _cam0_filename_queue.front();
-                                    std::to_string((uint64_t)cam0_ts) + ".png";
-            std::string path_img1 = _folder_path + "/cam1/data/" + // _cam1_filename_queue.front();
-                                    std::to_string((uint64_t)cam1_ts) + ".png"; // _cam1_filename_queue.front();
-            cv::Mat img_left = cv::imread(path_img0, cv::IMREAD_GRAYSCALE);
-            if (img_left.empty()) {
-                std::cerr << path_img0 << " not opened " << std::endl;
-                _cam0_timestamp_queue.pop();
-                _cam0_filename_queue.pop();
-                _cam1_timestamp_queue.pop();
-                _cam1_filename_queue.pop();
-                return false;
-            }
-            cv::Mat img_right = cv::imread(path_img1, cv::IMREAD_GRAYSCALE);
-            if (img_right.empty()) {
-                std::cerr << path_img1 << " not opened " << std::endl;
-                _cam0_timestamp_queue.pop();
-                _cam0_filename_queue.pop();
-                _cam1_timestamp_queue.pop();
-                _cam1_filename_queue.pop();
-                return false;
-            }
-
-            _cam0_filename_queue.pop();
-            _cam1_filename_queue.pop();
-            _cam0_timestamp_queue.pop();
-            _cam1_timestamp_queue.pop();
-
-            std::vector<cv::Mat> imgs;
-            imgs.push_back(img_left);
-            imgs.push_back(img_right);
-
-            // Add image sensors
-            std::vector<std::shared_ptr<isae::ImageSensor>> img_sensors = _prov->createImageSensors(imgs);
-            sensors.push_back(img_sensors.at(0));
-            sensors.push_back(img_sensors.at(1));
-
-            // Don't forget to add IMU
-            if (_prov->getIMUConfig()) {
-                sensors.push_back(_imu_queue.front());
-                _imu_queue.pop();
-            }
-            _imu_timestamp_queue.pop();
-
-            _prov->addFrameToTheQueue(sensors, imu_ts);
+    for (const auto &img : imgs) {
+        if (img.empty()) {
+            std::cerr << "EUROCGrabber: image at " << t_img << " could not be read, skipped" << std::endl;
+            return true;
         }
     }
 
+    // IMU measurements up to (and one past) the image, in the camera clock with the current dt_imu_cam; the
+    // merger drops non-increasing stamps (e.g. after an online change of dt_imu_cam)
+    if (_prov->getIMUConfig()) {
+        const long long offset_ns = std::llround(_prov->getIMUConfig()->dt_imu_cam.load() * 1e9);
+        while (!_imu_raw.empty() && !_merger.imuReached(t_img)) {
+            if (!_merger.addImu(_imu_raw.front().ts - offset_ns, _imu_raw.front().acc, _imu_raw.front().gyr))
+                std::cout << "EUROCGrabber: IMU sample with non-increasing timestamp dropped" << std::endl;
+            _imu_raw.pop_front();
+        }
+    }
+
+    if (!_merger.emitImageFrame(t_img, _prov->createImageSensors(imgs)))
+        std::cerr << "EUROCGrabber: image at " << t_img << " is older than the IMU already emitted, skipped"
+                  << std::endl;
     return true;
 }
 

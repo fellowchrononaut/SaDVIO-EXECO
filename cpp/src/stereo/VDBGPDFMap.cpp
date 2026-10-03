@@ -142,4 +142,30 @@ DenseMesh VDBGPDFMap::mesh() const {
 
 } // namespace isae
 
+#else // !ISAESLAM_WITH_VDBGPDF
+
+#include <stdexcept>
+
+namespace isae {
+
+// Without VDB-GPDF the map cannot be built (MarginalDepthInjector refuses dense_mesh_method=vdbgpdf with a clear
+// error); these definitions only let the library link, since MarginalDepthInjector references the class.
+struct VDBGPDFMap::Impl {};
+
+VDBGPDFMap::VDBGPDFMap(const VDBGPDFMapConfig& cfg) : _cfg(cfg) {
+    throw std::runtime_error("VDBGPDFMap needs a build with -DISAESLAM_WITH_VDBGPDF=ON");
+}
+
+VDBGPDFMap::~VDBGPDFMap() = default;
+
+void VDBGPDFMap::integrate(const std::vector<Eigen::Vector3d>&, const Eigen::Vector3d&) {
+    throw std::runtime_error("VDBGPDFMap needs a build with -DISAESLAM_WITH_VDBGPDF=ON");
+}
+
+DenseMesh VDBGPDFMap::mesh() const {
+    throw std::runtime_error("VDBGPDFMap needs a build with -DISAESLAM_WITH_VDBGPDF=ON");
+}
+
+} // namespace isae
+
 #endif // ISAESLAM_WITH_VDBGPDF

@@ -1,6 +1,8 @@
 #ifndef FRAME_H
 #define FRAME_H
 
+#include <algorithm>
+
 #include "isaeslam/data/features/AFeature2D.h"
 #include "isaeslam/data/landmarks/ALandmark.h"
 #include "isaeslam/typedefs.h"
@@ -46,6 +48,11 @@ class Frame : public std::enable_shared_from_this<Frame> {
     void setIMU(std::shared_ptr<IMU> &imu, Eigen::Affine3d T_s_f);
 
     /*!
+     * @brief Detach the IMU (e.g. a measurement the preintegration rejected)
+     */
+    void clearIMU() { _imu = nullptr; }
+
+    /*!
      * @brief free all the pointers related to sensors
      */
     void cleanSensors() {
@@ -77,11 +84,16 @@ class Frame : public std::enable_shared_from_this<Frame> {
         return _T_f_w.inverse();
     }
 
-    void addLandmark(std::shared_ptr<ALandmark> ldmk) { _landmarks[ldmk->_label].push_back(ldmk); }
+    void addLandmark(std::shared_ptr<ALandmark> ldmk) {
+        // A landmark is linked once, even if several features of the frame observe it
+        std::vector<std::shared_ptr<ALandmark>> &v = _landmarks[ldmk->_label];
+        if (std::find(v.begin(), v.end(), ldmk) == v.end())
+            v.push_back(ldmk);
+    }
     void addLandmarks(isae::typed_vec_landmarks ldmks) {
         for (auto typed_ldmks : ldmks) {
             for (auto l : typed_ldmks.second)
-                _landmarks[typed_ldmks.first].push_back(l);
+                addLandmark(l);
         }
     }
     typed_vec_landmarks getLandmarks() const { return _landmarks; }
@@ -96,6 +108,12 @@ class Frame : public std::enable_shared_from_this<Frame> {
     void cleanLandmarks();
 
     unsigned long long getTimestamp() const { return _timestamp; }
+
+    /*!
+     * @brief Camera-IMU time offset (dt_imu_cam, s) the IMU data of this frame was read with
+     */
+    double getTimeOffset() const { return _time_offset; }
+    void setTimeOffset(double dt) { _time_offset = dt; }
 
     void setKeyFrame() { _is_kf = true; }
     void unsetKeyFrame() { _is_kf = false; }
@@ -125,6 +143,7 @@ class Frame : public std::enable_shared_from_this<Frame> {
     typed_vec_landmarks _landmarks;                       //!< Landmarks associated to the frame as a typed vector
 
     unsigned long long _timestamp;                      //!< Timestamp of the frame in nanoseconds
+    double _time_offset = 0;                            //!< dt_imu_cam used when the frame was read
     std::vector<std::shared_ptr<ImageSensor>> _sensors; //!< Image sensors associated to the frame
     std::shared_ptr<IMU> _imu;                          //!< IMU sensor associated to the frame
 

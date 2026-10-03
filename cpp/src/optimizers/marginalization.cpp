@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <unordered_set>
 #include "isaeslam/optimizers/marginalization.hpp"
 
 #include <mutex>
@@ -18,6 +20,26 @@ void MarginalizationBlockInfo::Evaluate() {
         _raw_jacobians[i] = _jacobians[i].data();
     }
     _cost_function->Evaluate(_parameter_blocks.data(), _residuals.data(), _raw_jacobians);
+
+    if (!_loss)
+        return;
+    const double sq_norm = _residuals.squaredNorm();
+    double rho[3];
+    _loss->Evaluate(sq_norm, rho);
+    const double sqrt_rho1 = std::sqrt(rho[1]);
+    double residual_scaling, alpha_sq_norm;
+    if (sq_norm == 0.0 || rho[2] <= 0.0) {
+        residual_scaling = sqrt_rho1;
+        alpha_sq_norm    = 0.0;
+    } else {
+        const double D     = 1.0 + 2.0 * sq_norm * rho[2] / rho[1];
+        const double alpha = 1.0 - std::sqrt(D);
+        residual_scaling   = sqrt_rho1 / (1 - alpha);
+        alpha_sq_norm      = alpha / sq_norm;
+    }
+    for (size_t i = 0; i < block_sizes.size(); i++)
+        _jacobians[i] = sqrt_rho1 * (_jacobians[i] - alpha_sq_norm * _residuals * (_residuals.transpose() * _jacobians[i]));
+    _residuals *= residual_scaling;
 }
 
 void Marginalization::preMarginalize(std::shared_ptr<Frame> &frame0,
@@ -47,11 +69,12 @@ void Marginalization::preMarginalize(std::shared_ptr<Frame> &frame0,
     }
 
     // Distinguish lmk to marginalize and lmk to keep in landmarks linked to the frame to marginalize
+    std::unordered_set<std::shared_ptr<ALandmark>> seen;
     for (auto tlmks : _frame_to_marg->getLandmarks()) {
         // For all type of landmark
         for (auto lmk : tlmks.second) {
 
-            if (lmk->isOutlier() || !lmk->isInMap() || !lmk->isInitialized())
+            if (lmk->isOutlier() || !lmk->isInMap() || !lmk->isInitialized() || !seen.insert(lmk).second)
                 continue;
 
             bool is_lonely = true;
@@ -68,9 +91,24 @@ void Marginalization::preMarginalize(std::shared_ptr<Frame> &frame0,
                 }
             }
 
-            // If the landmark has no prior and doesn't have full 3D information, it is ignored
-            if (num_cam != 2 && !lmk->hasPrior()) {
+            // If the landmark has no prior and doesn't have full 3D information from the frame, it is ignored.
+            // A monocular frame never has it: its single-view landmarks are kept when other frames see them
+            // (the Schur complement and the prior handle the rank-deficient information)
+            const int full_3d_views = (_frame_to_marg->getSensors().size() >= 2) ? 2 : 1;
+            if (num_cam < full_3d_views && !lmk->hasPrior()) {
                 lmk->setMarg();
+                continue;
+            }
+
+            // A landmark to keep that is not well conditioned now is not linearized into the prior: its frame-0
+            // observations are dropped, and if it carries prior information it is marginalized out of the prior
+            // here (the Schur complement removes it consistently; it stays a free variable of the window).
+            // Lonely landmarks are eliminated right away and never become prior variables.
+            if (!is_lonely && !wellConditioned(lmk)) {
+                if (lmk->hasPrior()) {
+                    _lmk_to_marg[tlmks.first].push_back(lmk);
+                    (tlmks.first == "pointxd" ? _m += 3 : _m += 6);
+                }
                 continue;
             }
 
@@ -346,22 +384,38 @@ double Marginalization::computeKLD(Eigen::MatrixXd A_p, Eigen::MatrixXd A_q) {
     return 0.5 * (delta.trace() - std::log(delta_det) - U.cols());
 }
 
+Eigen::Matrix<double, 3, 9> Marginalization::poseToLandmarkJacobian(const Eigen::Affine3d &T_f_w,
+                                                                     const Eigen::Vector3d &p) {
+    Eigen::Matrix<double, 3, 9> J;
+    J.block(0, 0, 3, 3) = -T_f_w.rotation() * geometry::skewMatrix(p);
+    J.block(0, 3, 3, 3) = T_f_w.rotation();
+    J.block(0, 6, 3, 3) = T_f_w.rotation();
+    return J;
+}
+
+Eigen::Matrix<double, 15, 15> Marginalization::absolutePriorJacobian(const Eigen::Affine3d &T_f_w) {
+    const Eigen::Matrix3d R          = T_f_w.rotation();
+    Eigen::Matrix<double, 15, 15> J = Eigen::Matrix<double, 15, 15>::Identity();
+    J.block(0, 0, 3, 3)             = R;
+    J.block(3, 0, 3, 3)             = R * geometry::skewMatrix(R.transpose() * T_f_w.translation());
+    J.block(3, 3, 3, 3)             = R;
+    return J;
+}
+
 bool Marginalization::sparsifyVIO() {
 
     if (_n == 0)
         return false;
 
-    // For pose to landmark factors
-    Eigen::Affine3d T_f_w  = _frame_to_keep->getWorld2FrameTransform();
-    Eigen::Matrix3d R_f_w  = T_f_w.rotation();
-    Eigen::Matrix3d t_skew = geometry::skewMatrix(T_f_w.translation());
+    // For pose to landmark factors (Jacobians of the factors actually used, at the current state)
+    Eigen::Affine3d T_f_w = _frame_to_keep->getWorld2FrameTransform();
     for (auto tlmk : _lmk_to_keep) {
         for (auto lmk : tlmk.second) {
-            Eigen::MatrixXd J                                       = Eigen::MatrixXd::Zero(3, _n);
-            J.block(0, _map_lmk_idx.at(lmk), 3, 3)                  = R_f_w;
-            J.block(0, _map_frame_idx.at(_frame_to_keep), 3, 3)     = -R_f_w * t_skew;
-            J.block(0, _map_frame_idx.at(_frame_to_keep) + 3, 3, 3) = R_f_w;
-            Eigen::MatrixXd J_tilde                                 = J * _U;
+            Eigen::Matrix<double, 3, 9> J_lmk = poseToLandmarkJacobian(T_f_w, lmk->getPose().translation());
+            Eigen::MatrixXd J                 = Eigen::MatrixXd::Zero(3, _n);
+            J.block(0, _map_lmk_idx.at(lmk), 3, 3)              = J_lmk.block(0, 6, 3, 3);
+            J.block(0, _map_frame_idx.at(_frame_to_keep), 3, 6) = J_lmk.block(0, 0, 3, 6);
+            Eigen::MatrixXd J_tilde                             = J * _U;
 
             Eigen::Matrix3d inf = (J_tilde * _Sigma.asDiagonal() * J_tilde.transpose()).inverse();
             Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(inf);
@@ -377,12 +431,9 @@ bool Marginalization::sparsifyVIO() {
     }
 
     // For absolute frame factor
-    Eigen::MatrixXd J                                       = Eigen::MatrixXd::Zero(15, _n);
-    J.block(0, _map_frame_idx.at(_frame_to_keep), 15, 15)   = Eigen::MatrixXd::Identity(15, 15);
-    J.block(0, _map_frame_idx.at(_frame_to_keep), 3, 3)     = T_f_w.rotation();
-    J.block(0, _map_frame_idx.at(_frame_to_keep) + 3, 3, 3) = T_f_w.rotation();
-    J.block(3, _map_frame_idx.at(_frame_to_keep) + 3, 3, 3) = T_f_w.rotation();
-    Eigen::MatrixXd J_tilde                                 = J * _U;
+    Eigen::MatrixXd J                                     = Eigen::MatrixXd::Zero(15, _n);
+    J.block(0, _map_frame_idx.at(_frame_to_keep), 15, 15) = absolutePriorJacobian(T_f_w);
+    Eigen::MatrixXd J_tilde                               = J * _U;
 
     Eigen::MatrixXd inf = (J_tilde * _Sigma.asDiagonal() * J_tilde.transpose()).inverse();
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(inf);
@@ -505,15 +556,60 @@ bool Marginalization::computeJacobiansAndResiduals() {
     Eigen::VectorXd Lambda_sqrt = _Lambda.cwiseSqrt();
     Eigen::VectorXd Sigma_sqrt  = _Sigma.cwiseSqrt();
 
-    // I = U Lambda U^T = J^T J
-    // Gauss Newton: I dx = - J^T r = g
-    // => J = Lambda^{1/2} U^T
-    // => - U Lambda^{1/2} r = g <=> r = -Lambda{-1/2} U^T g
+    // The marginalized factors contribute 1/2 dx^T Ak dx + bk^T dx, with Ak = U Lambda U^T and bk = (Schur
+    // complement of) J^T r, as assembled in computeInformationAndGradient (b += J^T r). The prior
+    // 1/2 |r_p + J_p dx|^2 reproduces it when J_p^T J_p = Ak and J_p^T r_p = bk:
+    // => J_p = Lambda^{1/2} U^T and r_p = Lambda^{-1/2} U^T bk
+    // (the sign was negative: the prior then pushed the kept states away from what the marginalized measurements
+    // say, by their full disagreement, whenever it was built away from the optimum)
 
     _marginalization_jacobian = Lambda_sqrt.asDiagonal() * _U.transpose();
-    _marginalization_residual = (-1) * Sigma_sqrt.asDiagonal() * _U.transpose() * _bk;
+    _marginalization_residual = Sigma_sqrt.asDiagonal() * _U.transpose() * _bk;
+
+    // The prior has just been linearized at the current states
+    storeLinearizationPoint();
 
     return true;
+}
+
+bool Marginalization::wellConditioned(const std::shared_ptr<ALandmark> &lmk,
+                                      double max_bearing_err,
+                                      double min_ray_angle) {
+    const Eigen::Vector3d p = lmk->getPose().translation();
+    if (!p.allFinite())
+        return false;
+    std::vector<Eigen::Vector3d> rays;
+    for (auto &wf : lmk->getFeatures()) {
+        std::shared_ptr<AFeature> f = wf.lock();
+        if (!f || !f->getSensor())
+            continue;
+        std::shared_ptr<ImageSensor> cam = f->getSensor();
+        const Eigen::Vector3d p_s        = cam->getWorld2SensorTransform() * p;
+        const Eigen::Vector3d b          = f->getBearingVectors().at(0).normalized();
+        if (std::acos(std::clamp(p_s.normalized().dot(b), -1.0, 1.0)) > max_bearing_err)
+            return false;
+        rays.push_back((p - cam->getSensor2WorldTransform().translation()).normalized());
+    }
+    double max_angle = 0;
+    for (size_t i = 0; i < rays.size(); i++)
+        for (size_t j = i + 1; j < rays.size(); j++)
+            max_angle = std::max(max_angle, std::acos(std::clamp(rays[i].dot(rays[j]), -1.0, 1.0)));
+    return max_angle >= min_ray_angle;
+}
+
+void Marginalization::storeLinearizationPoint() {
+    _map_lmk_lin.clear();
+    if (_frame_to_keep) {
+        _T_f_w_lin = _frame_to_keep->getWorld2FrameTransform();
+        if (_frame_to_keep->getIMU()) {
+            _v_lin  = _frame_to_keep->getIMU()->getVelocity();
+            _ba_lin = _frame_to_keep->getIMU()->getBa();
+            _bg_lin = _frame_to_keep->getIMU()->getBg();
+        }
+    }
+    for (auto &tlmk : _lmk_to_keep)
+        for (auto &lmk : tlmk.second)
+            _map_lmk_lin[lmk] = lmk->getPose();
 }
 
 void Marginalization::preMarginalizeRelative(std::shared_ptr<Frame> &frame0, std::shared_ptr<Frame> &frame1) {

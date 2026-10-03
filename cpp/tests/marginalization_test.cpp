@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "isaeslam/optimizers/AngularAdjustmentCERESAnalytic.h"
+#include "isaeslam/optimizers/BundleAdjustmentCERESAnalytic.h"
+
 #include <opencv2/core.hpp>
 
 #include "isaeslam/data/features/Point2D.h"
@@ -24,6 +27,7 @@ class MarginalizationTest : public testing::Test {
     * */
   public:
     void SetUp() override {
+        std::srand(12345u); // same random state for every test, whatever the run order
 
         // Set Frames
         _frame0 = std::shared_ptr<Frame>(new Frame());
@@ -332,6 +336,275 @@ TEST_F(MarginalizationTest, margFailTest) {
     _marg.preMarginalize(frame2, frame2, marg_last);
 
     ASSERT_EQ(_marg.computeSchurComplement(), false);
+}
+
+// Monocular frames: single-view landmarks seen by other frames are kept (Issue 16)
+TEST(MarginalizationMonoTest, preMargKeepsSingleViewLandmarks) {
+    Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
+    K(0, 0) = K(1, 1) = 100;
+    K(0, 2) = K(1, 2) = 400;
+    std::shared_ptr<Frame> f0 = std::make_shared<Frame>(), f1 = std::make_shared<Frame>();
+    std::shared_ptr<Camera> c0 = std::make_shared<Camera>(cv::Mat::zeros(800, 800, CV_16F), K);
+    std::shared_ptr<Camera> c1 = std::make_shared<Camera>(cv::Mat::zeros(800, 800, CV_16F), K);
+    f0->init(std::vector<std::shared_ptr<ImageSensor>>{c0}, 0);
+    f1->init(std::vector<std::shared_ptr<ImageSensor>>{c1}, 1);
+    c0->setFrame2SensorTransform(Eigen::Affine3d::Identity());
+    c1->setFrame2SensorTransform(Eigen::Affine3d::Identity());
+    f0->setWorld2FrameTransform(Eigen::Affine3d::Identity());
+    Eigen::Affine3d T_w_f1 = Eigen::Affine3d::Identity();
+    T_w_f1.translation()   = Eigen::Vector3d(0.2, 0, 0);
+    f1->setWorld2FrameTransform(T_w_f1.inverse());
+
+    // lmk 0 seen by f0 only, lmks 1 and 2 by both
+    std::vector<std::shared_ptr<Point3D>> lmks;
+    for (int i = 0; i < 3; i++) {
+        Eigen::Affine3d T_w_l    = Eigen::Affine3d::Identity();
+        T_w_l.translation()      = Eigen::Vector3d(-0.5 + 0.5 * i, 0.1, 2);
+        std::shared_ptr<Point3D> l = std::make_shared<Point3D>(T_w_l, std::vector<std::shared_ptr<AFeature>>());
+        l->setInMap();
+        l->setInlier();
+        for (auto [f, c] : {std::make_pair(f0, c0), std::make_pair(f1, c1)}) {
+            if (i == 0 && f == f1)
+                continue;
+            std::vector<Eigen::Vector2d> p;
+            c->project(l->getPose(), l->getModel(), p);
+            std::shared_ptr<Point2D> feat = std::make_shared<Point2D>(p);
+            l->addFeature(feat);
+            c->addFeature("pointxd", feat);
+            f->addLandmark(l);
+        }
+        lmks.push_back(l);
+    }
+
+    Marginalization marg;
+    std::shared_ptr<Marginalization> marg_last = std::make_shared<Marginalization>();
+    marg.preMarginalize(f0, f1, marg_last);
+    EXPECT_EQ(marg._lmk_to_keep["pointxd"].size(), 2u);
+    ASSERT_EQ(marg._lmk_to_marg["pointxd"].size(), 1u);
+    EXPECT_EQ(marg._lmk_to_marg["pointxd"].at(0), lmks[0]);
+    EXPECT_EQ(marg._n, 6);
+}
+
+// Issue 14: the information recovered by sparsification must use the Jacobians of the factors it builds
+TEST(MarginalizationJacobianTest, recoveryJacobiansMatchTheFactors) {
+    Eigen::Affine3d T_f_w = Eigen::Affine3d::Identity();
+    T_f_w.linear()        = geometry::exp_so3(Eigen::Vector3d(0.2, 0.1, -0.3));
+    T_f_w.translation()   = Eigen::Vector3d(0.5, -0.4, 0.2);
+    const Eigen::Vector3d p(2, 1, 4);
+
+    // Pose to landmark
+    PoseToLandmarkFactor f_pl(T_f_w * p, T_f_w, p, Eigen::Matrix3d::Identity());
+    double pose[6] = {0, 0, 0, 0, 0, 0}, dl[3] = {0, 0, 0};
+    std::vector<double *> params_pl = {pose, dl};
+    Eigen::Matrix<double, 3, 6, Eigen::RowMajor> J_pose;
+    Eigen::Matrix<double, 3, 3, Eigen::RowMajor> J_lmk;
+    double *J_pl[2] = {J_pose.data(), J_lmk.data()};
+    Eigen::Vector3d r3;
+    f_pl.Evaluate(params_pl.data(), r3.data(), J_pl);
+    Eigen::Matrix<double, 3, 9> J_rec = Marginalization::poseToLandmarkJacobian(T_f_w, p);
+    EXPECT_NEAR((J_rec.block(0, 0, 3, 6) - J_pose).cwiseAbs().maxCoeff(), 0, 1e-12);
+    EXPECT_NEAR((J_rec.block(0, 6, 3, 3) - J_lmk).cwiseAbs().maxCoeff(), 0, 1e-12);
+
+    // Absolute inertial prior
+    const Eigen::Vector3d v(0.1, 0.2, 0.3), ba(0.01, 0, 0), bg(0, 0.001, 0);
+    IMUPriordx f_abs(T_f_w, T_f_w, v, v, ba, ba, bg, bg, Eigen::MatrixXd::Identity(15, 15));
+    double dv[3] = {0, 0, 0}, dba[3] = {0, 0, 0}, dbg[3] = {0, 0, 0};
+    std::vector<double *> params_abs = {pose, dv, dba, dbg};
+    Eigen::Matrix<double, 15, 6, Eigen::RowMajor> J_p;
+    Eigen::Matrix<double, 15, 3, Eigen::RowMajor> J_v, J_ba, J_bg;
+    double *J_abs[4] = {J_p.data(), J_v.data(), J_ba.data(), J_bg.data()};
+    Eigen::Matrix<double, 15, 1> r15;
+    f_abs.Evaluate(params_abs.data(), r15.data(), J_abs);
+    Eigen::Matrix<double, 15, 15> J_full;
+    J_full << J_p, J_v, J_ba, J_bg;
+    EXPECT_NEAR((Marginalization::absolutePriorJacobian(T_f_w) - J_full).cwiseAbs().maxCoeff(), 0, 1e-12);
+}
+
+// Issue 14: the sparse VIO prior (absolute inertial factor + pose-to-landmark factors) against the dense prior.
+// With these factors the stacked Jacobian J is square and invertible, so the KLD-optimal information of each
+// factor has the closed form (J_i Sigma J_i^T)^-1 (Mazuran et al.) used by sparsifyVIO():
+// - a dense prior that has exactly this structure is recovered (KLD ~ 0);
+// - for any dense prior, scaling the information of one factor away from it increases the KLD.
+namespace {
+
+struct SparseVIOSetup {
+    Marginalization marg;
+    std::vector<std::shared_ptr<ALandmark>> lmks;
+    Eigen::MatrixXd J; // stacked Jacobian of the sparse factors (abs prior rows first)
+
+    explicit SparseVIOSetup(int n_lmk) {
+        Eigen::Affine3d T_f_w = Eigen::Affine3d::Identity();
+        T_f_w.linear()        = geometry::exp_so3(Eigen::Vector3d(0.3, -0.2, 0.5));
+        T_f_w.translation()   = Eigen::Vector3d(0.4, 0.3, -0.6);
+        std::shared_ptr<Frame> f = std::make_shared<Frame>();
+        f->setWorld2FrameTransform(T_f_w);
+
+        marg._frame_to_keep = f;
+        marg._map_frame_idx.emplace(f, 0);
+        marg._n = 15 + 3 * n_lmk;
+        J       = Eigen::MatrixXd::Zero(marg._n, marg._n);
+        J.block(0, 0, 15, 15) = Marginalization::absolutePriorJacobian(T_f_w);
+        for (int k = 0; k < n_lmk; k++) {
+            Eigen::Affine3d T_w_l = Eigen::Affine3d::Identity();
+            T_w_l.translation()   = Eigen::Vector3d(1.0 + k, -0.5 * k, 3.0 + 0.7 * k);
+            std::shared_ptr<ALandmark> l = std::make_shared<Point3D>(T_w_l, std::vector<std::shared_ptr<AFeature>>());
+            lmks.push_back(l);
+            marg._lmk_to_keep["pointxd"].push_back(l);
+            marg._map_lmk_idx.emplace(l, 15 + 3 * k);
+            Eigen::Matrix<double, 3, 9> J_pl = Marginalization::poseToLandmarkJacobian(T_f_w, T_w_l.translation());
+            J.block(15 + 3 * k, 0, 3, 6)          = J_pl.block(0, 0, 3, 6);
+            J.block(15 + 3 * k, 15 + 3 * k, 3, 3) = J_pl.block(0, 6, 3, 3);
+        }
+    }
+
+    void setDensePrior(const Eigen::MatrixXd &A) {
+        marg.rankReveallingDecomposition(A, marg._U, marg._Lambda);
+        marg._Sigma   = marg._Lambda.array().inverse();
+        marg._n_full  = marg._U.cols();
+        marg._Sigma_k = marg._U * marg._Sigma.asDiagonal() * marg._U.transpose();
+    }
+
+    // Information of the sparse prior, with the information of factor `scaled` (-1: none, 0: abs prior,
+    // k > 0: landmark k-1) multiplied by `s`
+    Eigen::MatrixXd sparseInformation(int scaled = -1, double s = 1) const {
+        Eigen::MatrixXd D = Eigen::MatrixXd::Zero(marg._n, marg._n);
+        Eigen::MatrixXd S = marg._map_frame_inf.at(marg._frame_to_keep);
+        D.block(0, 0, 15, 15) = S * S * (scaled == 0 ? s : 1);
+        for (size_t k = 0; k < lmks.size(); k++) {
+            Eigen::Matrix3d Sl = marg._map_lmk_inf.at(lmks[k]);
+            D.block(15 + 3 * k, 15 + 3 * k, 3, 3) = Sl * Sl * (scaled == int(k) + 1 ? s : 1);
+        }
+        return J.transpose() * D * J;
+    }
+};
+
+} // namespace
+
+TEST(MarginalizationSparseKLDTest, recoversADensePriorWithTheSparseStructure) {
+    std::srand(12345u);
+    SparseVIOSetup setup(4);
+
+    // Dense prior generated by the sparse topology: J^T D J with SPD blocks
+    Eigen::MatrixXd D = Eigen::MatrixXd::Zero(setup.marg._n, setup.marg._n);
+    Eigen::MatrixXd B = Eigen::MatrixXd::Random(15, 15);
+    D.block(0, 0, 15, 15) = B * B.transpose() + 0.5 * Eigen::MatrixXd::Identity(15, 15);
+    for (int k = 0; k < 4; k++) {
+        Eigen::Matrix3d Bl = Eigen::Matrix3d::Random();
+        D.block(15 + 3 * k, 15 + 3 * k, 3, 3) = 10 * (Bl * Bl.transpose() + 0.5 * Eigen::Matrix3d::Identity());
+    }
+    Eigen::MatrixXd A_dense = setup.J.transpose() * D * setup.J;
+    setup.setDensePrior(A_dense);
+    ASSERT_TRUE(setup.marg.sparsifyVIO());
+
+    Eigen::MatrixXd A_sparse = setup.sparseInformation();
+    EXPECT_LT((A_sparse - A_dense).norm() / A_dense.norm(), 1e-8);
+    EXPECT_NEAR(setup.marg.computeKLD(A_dense, A_sparse), 0, 1e-6);
+}
+
+TEST(MarginalizationSparseKLDTest, sparsePriorIsTheKLDMinimum) {
+    std::srand(12345u);
+    SparseVIOSetup setup(4);
+
+    // Generic dense prior (correlations the sparse topology cannot represent)
+    Eigen::MatrixXd B       = Eigen::MatrixXd::Random(setup.marg._n, setup.marg._n);
+    Eigen::MatrixXd A_dense = B * B.transpose() + 0.1 * Eigen::MatrixXd::Identity(setup.marg._n, setup.marg._n);
+    setup.setDensePrior(A_dense);
+    ASSERT_TRUE(setup.marg.sparsifyVIO());
+
+    const double kld = setup.marg.computeKLD(A_dense, setup.sparseInformation());
+    ASSERT_TRUE(std::isfinite(kld));
+    EXPECT_GT(kld, 1e-3); // not representable exactly
+    for (int factor = 0; factor <= 4; factor++) {
+        for (double s : {0.95, 1.05}) {
+            EXPECT_GT(setup.marg.computeKLD(A_dense, setup.sparseInformation(factor, s)), kld)
+                << "factor " << factor << " scaled by " << s;
+        }
+    }
+}
+
+// Robust marginalization: a block with a loss gives the robust gradient rho' J^T r (and is unchanged where the
+// loss is quadratic), so the information of an outlier is down-weighted before it enters the prior
+namespace {
+struct LinearResidual : public ceres::SizedCostFunction<2, 2> {
+    Eigen::Vector2d target;
+    explicit LinearResidual(const Eigen::Vector2d &t) : target(t) {}
+    bool Evaluate(double const *const *x, double *r, double **J) const override {
+        const Eigen::Matrix2d W = Eigen::Vector2d(2, 0.5).asDiagonal();
+        Eigen::Map<Eigen::Vector2d> res(r);
+        Eigen::Map<const Eigen::Vector2d> xv(x[0]);
+        res = W * (xv - target);
+        if (J && J[0]) {
+            Eigen::Map<Eigen::Matrix<double, 2, 2, Eigen::RowMajor>> jac(J[0]);
+            jac = W;
+        }
+        return true;
+    }
+};
+} // namespace
+
+TEST(MarginalizationRobustTest, robustBlockGivesTheRobustGradient) {
+    for (double far : {0.1, 5.0}) { // inside / outside the quadratic zone of the Huber loss
+        double x[2] = {0, 0};
+        std::vector<double *> blocks = {x};
+        std::shared_ptr<ceres::LossFunction> loss(new ceres::HuberLoss(1.0));
+        MarginalizationBlockInfo plain(new LinearResidual(Eigen::Vector2d(far, -0.3 * far)), {0}, blocks);
+        MarginalizationBlockInfo robust(new LinearResidual(Eigen::Vector2d(far, -0.3 * far)), {0}, blocks, loss);
+        plain.Evaluate();
+        robust.Evaluate();
+        double rho[3];
+        loss->Evaluate(plain._residuals.squaredNorm(), rho);
+        const Eigen::Vector2d g_plain  = plain._jacobians[0].transpose() * plain._residuals;
+        const Eigen::Vector2d g_robust = robust._jacobians[0].transpose() * robust._residuals;
+        EXPECT_LT((g_robust - rho[1] * g_plain).norm(), 1e-9 * (1 + g_plain.norm())) << "far " << far;
+        if (far < 1)
+            EXPECT_LT((robust._jacobians[0] - plain._jacobians[0]).norm(), 1e-12);
+        else
+            EXPECT_LT(rho[1], 0.5); // the outlier is down-weighted
+        delete plain._cost_function;
+        delete robust._cost_function;
+        delete[] plain._raw_jacobians;
+        delete[] robust._raw_jacobians;
+    }
+}
+
+// Only well-conditioned landmarks are linearized into the prior
+TEST_F(MarginalizationTest, wellConditionedLandmarks) {
+    // Fixture: landmarks ~2 m in front of two stereo frames 1 m apart: well conditioned
+    EXPECT_TRUE(Marginalization::wellConditioned(_lmk_1));
+
+    // Moved behind the cameras: the predicted bearings disagree with the measured ones
+    Eigen::Affine3d T = _lmk_1->getPose();
+    _lmk_1->setPose(Eigen::Translation3d(0, 0, -4) * T);
+    EXPECT_FALSE(Marginalization::wellConditioned(_lmk_1));
+    _lmk_1->setPose(T);
+
+    // Same bearings but only a 0.2 m stereo baseline at 40 m: rays span ~0.3 deg, too little
+    std::shared_ptr<Point3D> far = std::make_shared<Point3D>(
+        Eigen::Affine3d(Eigen::Translation3d(0.5, 0, 40)), std::vector<std::shared_ptr<AFeature>>());
+    for (auto &cam : {_sensor0l, _sensor0r}) {
+        std::vector<Eigen::Vector2d> p2d;
+        cam->project(far->getPose(), far->getModel(), p2d);
+        std::shared_ptr<AFeature> f = std::make_shared<Point2D>(p2d);
+        cam->addFeature("pointxd", f);
+        far->addFeature(f);
+    }
+    EXPECT_FALSE(Marginalization::wellConditioned(far));
+    EXPECT_TRUE(Marginalization::wellConditioned(far, 2.0 * M_PI / 180, 0.1 * M_PI / 180));
+}
+
+// Issue 15: a point-only map gets its sparse prior (the gating used to count landmark types)
+struct SparsePriorProbe : public BundleAdjustmentCERESAnalytic {
+    using AOptimizer::addSparsePriorResiduals;
+};
+
+TEST_F(MarginalizationTest, sparsePriorForPointOnlyMap) {
+    SparsePriorProbe ba;
+    ASSERT_TRUE(ba.marginalize(_frame0, _frame1, true));
+    ceres::Problem problem;
+    ceres::ParameterBlockOrdering *ordering = new ceres::ParameterBlockOrdering;
+    ba.addSparsePriorResiduals(problem, nullptr, ordering);
+    EXPECT_GT(problem.NumResidualBlocks(), 0);
+    delete ordering;
 }
 
 } // namespace isae

@@ -1,10 +1,13 @@
 #include <ceres/ceres.h>
+#include <array>
 #include <unordered_map>
 
 #include "isaeslam/data/frame.h"
 #include "isaeslam/data/landmarks/ALandmark.h"
 #include "isaeslam/data/maps/localmap.h"
+#include "isaeslam/data/sensors/IMU.h"
 #include "isaeslam/typedefs.h"
+#include "utilities/geometry.h"
 
 namespace isae {
 
@@ -15,12 +18,19 @@ struct MarginalizationBlockInfo {
 
     MarginalizationBlockInfo(ceres::CostFunction *cost_function,
                              std::vector<int> parameter_idx,
-                             std::vector<double *> parameter_blocks)
-        : _cost_function(cost_function), _parameter_idx(parameter_idx), _parameter_blocks(parameter_blocks) {}
+                             std::vector<double *> parameter_blocks,
+                             std::shared_ptr<ceres::LossFunction> loss = nullptr)
+        : _cost_function(cost_function), _parameter_idx(parameter_idx), _parameter_blocks(parameter_blocks),
+          _loss(loss) {}
 
+    /*!
+     * @brief Evaluate the factor; with a robust loss, the residual and Jacobians are corrected (Triggs et al.,
+     * as Ceres and VINS-Mono do) so that the marginalized information is the robust one
+     */
     void Evaluate();
 
     ceres::CostFunction *_cost_function;
+    std::shared_ptr<ceres::LossFunction> _loss; //!< Robust loss of the factor (none if null)
     std::vector<int> _parameter_idx;
     std::vector<double *> _parameter_blocks;
 
@@ -59,6 +69,18 @@ class Marginalization {
      * @brief Sparsify the dense prior factor in the VIO case
      */
     bool sparsifyVIO();
+
+    /*!
+     * @brief Jacobian of the PoseToLandmarkFactor residual T_f_w p - prior at the current state, w.r.t. the
+     * pose increment (rotation, translation) and the landmark increment: [-R [p]x, R | R]
+     */
+    static Eigen::Matrix<double, 3, 9> poseToLandmarkJacobian(const Eigen::Affine3d &T_f_w, const Eigen::Vector3d &p);
+
+    /*!
+     * @brief Jacobian of the IMUPriordx residual at the prior, w.r.t. (rotation, translation, velocity, biases)
+     * increments: pose block [R, 0; R [R^T t]x, R], identity for velocity and biases
+     */
+    static Eigen::Matrix<double, 15, 15> absolutePriorJacobian(const Eigen::Affine3d &T_f_w);
 
     /*!
      * @brief Sparsify the dense prior factor in the VO case
@@ -149,6 +171,30 @@ class Marginalization {
     Eigen::VectorXd _Sigma;                    //!< Inverse of _Lambda
     Eigen::MatrixXd _marginalization_jacobian; //!< Jacobian of the dense prior factor
     Eigen::VectorXd _marginalization_residual; //!< Residual of the dense prior factor
+
+    // Linearization point of the kept variables. The prior is a linearization at these states: a later use
+    // (next marginalization, next window) measures the kept variables from them, not from the current state
+    Eigen::Affine3d _T_f_w_lin = Eigen::Affine3d::Identity(); //!< Pose of the frame to keep
+    Eigen::Vector3d _v_lin     = Eigen::Vector3d::Zero();      //!< Velocity of the frame to keep
+    Eigen::Vector3d _ba_lin    = Eigen::Vector3d::Zero();      //!< Accelerometer bias of the frame to keep
+    Eigen::Vector3d _bg_lin    = Eigen::Vector3d::Zero();      //!< Gyroscope bias of the frame to keep
+    std::unordered_map<std::shared_ptr<ALandmark>, Eigen::Affine3d> _map_lmk_lin; //!< Poses of the landmarks to keep
+
+    /*!
+     * @brief Record the current states of the kept variables as the linearization point of the prior
+     */
+    void storeLinearizationPoint();
+
+    /*!
+     * @brief True if the landmark's position is well conditioned now: every observation's predicted bearing agrees
+     * with the measured one (not behind a camera, not badly triangulated) and the observing rays span at least
+     * min_ray_angle. Only such landmarks are linearized into the prior: a far or badly triangulated point slides
+     * along its rays, where a linear prior breaks down (TUM-VI magistrale2: offsets of tens of metres, half of the
+     * points behind the camera at linearization, prior cost exploding).
+     */
+    static bool wellConditioned(const std::shared_ptr<ALandmark> &lmk,
+                                double max_bearing_err = 2.0 * M_PI / 180,
+                                double min_ray_angle   = 1.0 * M_PI / 180);
 };
 
 /*!
@@ -177,6 +223,33 @@ class MarginalizationFactor : public ceres::CostFunction {
 
         // Set the number of residuals
         this->set_num_residuals(_marginalization_info->_n_full);
+
+        // The parameter blocks are increments on the states at the time the problem is built; the prior is
+        // linearized at _marginalization_info's linearization point. Offsets between the two (right
+        // perturbations, same conventions as the parameter blocks):
+        if (_marginalization_info->_frame_to_keep) {
+            std::shared_ptr<Frame> f = _marginalization_info->_frame_to_keep;
+            const Eigen::Affine3d T_lin = _marginalization_info->_T_f_w_lin, T_now = f->getWorld2FrameTransform();
+            _A_rot = T_lin.rotation().transpose() * T_now.rotation();
+            _dt0   = T_lin.rotation().transpose() * (T_now.translation() - T_lin.translation());
+            if (f->getIMU()) {
+                _dv0  = f->getIMU()->getVelocity() - _marginalization_info->_v_lin;
+                _dba0 = f->getIMU()->getBa() - _marginalization_info->_ba_lin;
+                _dbg0 = f->getIMU()->getBg() - _marginalization_info->_bg_lin;
+            }
+        }
+        for (auto tlmk : _marginalization_info->_lmk_to_keep) {
+            for (auto lmk : tlmk.second) {
+                auto it = _marginalization_info->_map_lmk_lin.find(lmk);
+                const Eigen::Affine3d T_lin = (it != _marginalization_info->_map_lmk_lin.end()) ? it->second
+                                                                                                : lmk->getPose();
+                const Eigen::Affine3d T_now = lmk->getPose();
+                _lmk_offsets.emplace(lmk,
+                                     std::make_pair(Eigen::Matrix3d(T_lin.rotation().transpose() * T_now.rotation()),
+                                                    Eigen::Vector3d(T_lin.rotation().transpose() *
+                                                                    (T_now.translation() - T_lin.translation()))));
+            }
+        }
     }
 
     virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const {
@@ -186,18 +259,20 @@ class MarginalizationFactor : public ceres::CostFunction {
 
         // Add frame dx
         int block_id = 0;
+        Eigen::Matrix3d Jr_inv = Eigen::Matrix3d::Identity(); // d(rotation dx) / d(rotation increment)
         if (_marginalization_info->_frame_to_keep) {
-            dx.segment<6>(_marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep)) =
-                Eigen::Map<const Eigen::Matrix<double, 6, 1>>(parameters[block_id]);
+            const int i0 = _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep);
+            Eigen::Map<const Eigen::Matrix<double, 6, 1>> xp(parameters[block_id]);
+            const Eigen::Vector3d drot = geometry::log_so3(_A_rot * geometry::exp_so3(xp.head<3>()));
+            Jr_inv                     = geometry::so3_rightJacobian(drot).inverse();
+            dx.segment<3>(i0)          = drot;
+            dx.segment<3>(i0 + 3)      = _dt0 + _A_rot * xp.tail<3>();
             block_id++;
-            dx.segment<3>(_marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep) + 6) =
-                Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
+            dx.segment<3>(i0 + 6) = _dv0 + Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
             block_id++;
-            dx.segment<3>(_marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep) + 9) =
-                Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
+            dx.segment<3>(i0 + 9) = _dba0 + Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
             block_id++;
-            dx.segment<3>(_marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep) + 12) =
-                Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
+            dx.segment<3>(i0 + 12) = _dbg0 + Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
             block_id++;
         }
 
@@ -207,8 +282,9 @@ class MarginalizationFactor : public ceres::CostFunction {
                 if (_marginalization_info->_map_lmk_idx.at(lmk) == -1)
                     continue;
 
+                const auto &off = _lmk_offsets.at(lmk);
                 dx.segment<3>(_marginalization_info->_map_lmk_idx.at(lmk)) =
-                    Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
+                    off.second + off.first * Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
                 block_id++;
             }
         }
@@ -229,8 +305,11 @@ class MarginalizationFactor : public ceres::CostFunction {
                     Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> jacobian(
                         jacobians[block_id], n, 6);
                     jacobian.setZero();
-                    jacobian.leftCols(6) = _marginalization_info->_marginalization_jacobian.middleCols(
-                        _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep), 6);
+                    const int i0 = _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep);
+                    jacobian.leftCols(3) =
+                        _marginalization_info->_marginalization_jacobian.middleCols(i0, 3) * Jr_inv;
+                    jacobian.middleCols(3, 3) =
+                        _marginalization_info->_marginalization_jacobian.middleCols(i0 + 3, 3) * _A_rot;
                 }
                 block_id++;
                 if (jacobians[block_id]) {
@@ -274,7 +353,8 @@ class MarginalizationFactor : public ceres::CostFunction {
                             jacobians[block_id], n, 3);
                         jacobian.setZero();
                         jacobian.leftCols(3) = _marginalization_info->_marginalization_jacobian.middleCols(
-                            _marginalization_info->_map_lmk_idx.at(lmk), 3);
+                                                   _marginalization_info->_map_lmk_idx.at(lmk), 3) *
+                                               _lmk_offsets.at(lmk).first;
                     }
                     block_id++;
                 }
@@ -284,6 +364,24 @@ class MarginalizationFactor : public ceres::CostFunction {
     }
 
     std::shared_ptr<Marginalization> _marginalization_info;
+
+    /*!
+     * @brief Diagnostics: distance of the current states from the linearization point of the prior
+     * (largest landmark offset; frame rotation [rad], translation, velocity, accelerometer and gyroscope bias)
+     */
+    std::array<double, 6> linearizationOffsets() const {
+        double lmk = 0;
+        for (const auto &o : _lmk_offsets)
+            lmk = std::max(lmk, o.second.second.norm());
+        return {lmk, geometry::log_so3(_A_rot).norm(), _dt0.norm(), _dv0.norm(), _dba0.norm(), _dbg0.norm()};
+    }
+
+    // Offsets from the linearization point to the states the parameter blocks start from
+    Eigen::Matrix3d _A_rot = Eigen::Matrix3d::Identity(); //!< R_lin^T R_now of the frame to keep
+    Eigen::Vector3d _dt0   = Eigen::Vector3d::Zero();     //!< R_lin^T (t_now - t_lin) of the frame to keep
+    Eigen::Vector3d _dv0 = Eigen::Vector3d::Zero(), _dba0 = Eigen::Vector3d::Zero(), _dbg0 = Eigen::Vector3d::Zero();
+    std::unordered_map<std::shared_ptr<ALandmark>, std::pair<Eigen::Matrix3d, Eigen::Vector3d>>
+        _lmk_offsets; //!< Per kept landmark: R_lin^T R_now and R_lin^T (p_now - p_lin)
 };
 
 } // namespace isae

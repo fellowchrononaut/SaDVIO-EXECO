@@ -1,5 +1,8 @@
 #include "isaeslam/slamParameters.h"
 
+#include <algorithm>
+#include <stdexcept>
+
 #include "isaeslam/data/landmarks/BBox3d.h"
 #include "isaeslam/data/landmarks/Line3D.h"
 #include "isaeslam/data/landmarks/Point3D.h"
@@ -32,10 +35,60 @@
 #include "isaeslam/optimizers/BundleAdjustmentCERESNumeric.h"
 #include "isaeslam/dataproviders/adataprovider.h"
 
+std::vector<std::string>
+isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std::string> &warnings) {
+    std::vector<std::string> errors;
+    const std::vector<std::string> modes      = {"bimono", "mono", "nofov", "bimonovio", "monovio"};
+    const std::vector<std::string> optimizers = {"Analytic", "Numeric", "AngularAnalytic"};
+    auto known = [](const std::vector<std::string> &list, const std::string &v) {
+        return std::find(list.begin(), list.end(), v) != list.end();
+    };
+
+    if (!known(modes, cfg.slam_mode))
+        errors.push_back("unknown slam_mode '" + cfg.slam_mode + "' (bimono, mono, nofov, bimonovio, monovio)");
+    if (!known(optimizers, cfg.optimizer))
+        errors.push_back("unknown optimizer '" + cfg.optimizer + "' (Analytic, Numeric, AngularAnalytic)");
+
+    const bool vio    = (cfg.slam_mode == "bimonovio" || cfg.slam_mode == "monovio");
+    const bool stereo = (cfg.slam_mode == "bimono" || cfg.slam_mode == "bimonovio" || cfg.slam_mode == "nofov");
+    if (vio && !has_imu)
+        errors.push_back("slam_mode '" + cfg.slam_mode + "' needs an imu block in the dataset yaml");
+    if (stereo && ncam < 2)
+        errors.push_back("slam_mode '" + cfg.slam_mode + "' needs 2 cameras, the dataset has " + std::to_string(ncam));
+    if (!stereo && ncam < 1)
+        errors.push_back("slam_mode '" + cfg.slam_mode + "' needs a camera");
+
+    // The Numeric optimizer does not implement these (the base class versions do nothing)
+    if (cfg.optimizer == "Numeric" && cfg.marginalization == 1)
+        errors.push_back("marginalization is not implemented for the Numeric optimizer");
+    if (cfg.optimizer == "Numeric" && vio && cfg.estimate_td)
+        errors.push_back("estimate_td is not implemented for the Numeric optimizer");
+
+    if (cfg.sparsification && cfg.marginalization != 1)
+        warnings.push_back("sparsification has no effect without marginalization");
+    if (cfg.estimate_td && !vio)
+        warnings.push_back("estimate_td has no effect in slam_mode '" + cfg.slam_mode + "'");
+
+    return errors;
+}
+
 isae::SLAMParameters::SLAMParameters(const std::string config_folder_path) {
     std::cout << "------------------------------------" << std::endl;
     readConfigFile(config_folder_path);
     createProvider();
+
+    // Refuse option combinations that cannot work, instead of silently doing nothing
+    std::vector<std::string> warnings;
+    std::vector<std::string> errors = validateConfig(
+        _config, _data_provider->getNCam(), YAML::LoadFile(_config.dataset_path)["imu"].IsDefined(), warnings);
+    for (const auto &w : warnings)
+        std::cerr << "CONFIG WARNING: " << w << std::endl;
+    if (!errors.empty()) {
+        for (const auto &e : errors)
+            std::cerr << "CONFIG ERROR: " << e << std::endl;
+        throw std::runtime_error("invalid configuration (see CONFIG ERROR above)");
+    }
+
     createDetectors();
     createMatchers();
     createTrackers();
@@ -419,5 +472,11 @@ void isae::SLAMParameters::createOptimizer() {
         isae::AngularAdjustmentCERESAnalytic ceres_ba;
         _optimizer_frontend = std::make_shared<isae::AngularAdjustmentCERESAnalytic>(ceres_ba);
         _optimizer_backend  = std::make_shared<isae::AngularAdjustmentCERESAnalytic>(ceres_ba);
+    }
+
+    // With marginalization, VO also uses the robust visual loss (VIO always does)
+    if (_optimizer_frontend && _optimizer_backend) {
+        _optimizer_frontend->setRobustVisualVO(_config.marginalization == 1);
+        _optimizer_backend->setRobustVisualVO(_config.marginalization == 1);
     }
 }

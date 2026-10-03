@@ -3,6 +3,10 @@
 
 #include "isaeslam/data/sensors/ASensor.h"
 
+#include <algorithm>
+#include <atomic>
+#include <Eigen/Cholesky>
+
 namespace isae {
 
 static Eigen::Vector3d g(0, 0, -9.81);
@@ -16,7 +20,9 @@ struct imu_config : sensor_config {
     double acc_noise;
     double bacc_noise;
     double rate_hz;
-    double dt_imu_cam;
+    //! IMU clock minus camera clock [s]: IMU stamps are moved by -dt_imu_cam to the camera clock. Atomic: the back
+    //! end updates it (estimate_td) while the data thread reads it
+    std::atomic<double> dt_imu_cam{0};
 };
 
 /*!
@@ -52,8 +58,8 @@ class IMU : public ASensor {
     }
     ~IMU() {}
 
-    Eigen::Vector3d getAcc() { return _acc; }
-    Eigen::Vector3d getGyr() { return _gyr; }
+    Eigen::Vector3d getAcc() const { return _acc; }
+    Eigen::Vector3d getGyr() const { return _gyr; }
 
     void setBa(Eigen::Vector3d ba) {
         std::lock_guard<std::mutex> lock(_imu_mtx);
@@ -107,6 +113,21 @@ class IMU : public ASensor {
         std::lock_guard<std::mutex> lock(_imu_mtx);
         return _Sigma;
     }
+    double getIntegratedDt() const { return _integrated_dt; }
+    int getGapSteps() const { return _n_gap_steps; }
+
+    /*!
+     * @brief True if the preintegration covariance is finite and positive definite (a factor can use it)
+     */
+    bool hasValidCovariance() const {
+        std::lock_guard<std::mutex> lock(_imu_mtx);
+        return _Sigma.rows() == 9 && _Sigma.allFinite() && Eigen::LLT<Eigen::MatrixXd>(_Sigma).info() == Eigen::Success;
+    }
+
+    /*!
+     * @brief Longest integration step considered as continuous IMU data (10 nominal periods, >= 50 ms)
+     */
+    double maxStepDt() const { return std::max(0.05, 10.0 / _rate_hz); }
     double getGyrNoise() const { return _gyr_noise; }
     double getAccNoise() const { return _acc_noise; }
     double getbGyrNoise() const { return _bgyr_noise; }
@@ -147,14 +168,27 @@ class IMU : public ASensor {
     void estimateTransformIMU(Eigen::Affine3d &dT);
 
     /*!
-     * @brief  Update deltas with biases variations
+     * @brief Integrate again from the last KF with new linearization biases.
+     *
+     * The raw measurements are those of the IMU chain (_last_IMU links) back to the IMU of the last KF.
+     * Used when the KF biases moved too far for the first-order bias correction.
+     *
+     * @return false if the chain does not reach the last KF (nothing changed)
      */
-    void biasDeltaCorrection(Eigen::Vector3d d_ba, Eigen::Vector3d d_bg);
+    bool repropagate(const Eigen::Vector3d &ba_lin, const Eigen::Vector3d &bg_lin);
 
     /*!
-     * @brief Update biases w.r.t the previous KF (e.g. after optimization)
+     * @brief Biases the preintegration was computed with (those of the last KF when it started). Factors
+     * correct the deltas to first order with (bias of the last KF) - (linearization bias).
      */
-    void updateBiases();
+    Eigen::Vector3d getBaLin() const {
+        std::lock_guard<std::mutex> lock(_imu_mtx);
+        return _ba_lin;
+    }
+    Eigen::Vector3d getBgLin() const {
+        std::lock_guard<std::mutex> lock(_imu_mtx);
+        return _bg_lin;
+    }
 
     Eigen::Matrix3d _J_dR_bg; //!< Jacobian of the delta rotation w.r.t the gyro bias
     Eigen::Matrix3d _J_dv_ba; //!< Jacobian of the delta velocity w.r.t the accel bias
@@ -166,6 +200,39 @@ class IMU : public ASensor {
     Eigen::Affine3d _T_w_f_imu;        //!< Transform from the world to the frame to avoid dependency on the frame
 
   private:
+    /*!
+     * @brief Preintegrated quantities from the last KF, with their covariance and bias Jacobians
+     */
+    struct Preint {
+        Eigen::Matrix3d dR               = Eigen::Matrix3d::Identity();
+        Eigen::Vector3d dv               = Eigen::Vector3d::Zero();
+        Eigen::Vector3d dp               = Eigen::Vector3d::Zero();
+        Eigen::Matrix<double, 9, 9> Sigma = Eigen::Matrix<double, 9, 9>::Zero();
+        Eigen::Matrix3d J_dR_bg          = Eigen::Matrix3d::Zero();
+        Eigen::Matrix3d J_dv_ba          = Eigen::Matrix3d::Zero();
+        Eigen::Matrix3d J_dv_bg          = Eigen::Matrix3d::Zero();
+        Eigen::Matrix3d J_dp_ba          = Eigen::Matrix3d::Zero();
+        Eigen::Matrix3d J_dp_bg          = Eigen::Matrix3d::Zero();
+        double integrated_dt             = 0;
+        int gap_steps                    = 0;
+    };
+
+    /*!
+     * @brief One preintegration step (Forster et al.): the measurements acc, gyr are held over dt and
+     * corrected with the linearization biases. Starting from Preint() is starting at the KF.
+     */
+    static void preintegrate(Preint &s,
+                             const Eigen::Vector3d &acc,
+                             const Eigen::Vector3d &gyr,
+                             double dt,
+                             const Eigen::Vector3d &ba_lin,
+                             const Eigen::Vector3d &bg_lin,
+                             const Vector6d &eta,
+                             double max_step_dt);
+
+    Preint getPreint() const;
+    void setPreint(const Preint &s);
+
     // Measurements
     Eigen::Vector3d _acc; //!< Acceleration measurement
     Eigen::Vector3d _gyr; //!< Gyroscope measurement
@@ -175,13 +242,15 @@ class IMU : public ASensor {
     double _bgyr_noise; //!< Gyroscope bias random walk noise
     double _acc_noise;  //!< Accelerometer noise
     double _bacc_noise; //! Accelerometer bias random walk noise
-    double _rate_hz;    //!< IMU rate in Hz
+    double _rate_hz = 200; //!< IMU rate in Hz
     Vector6d _eta;      //!< Noise vector for the IMU measurements
 
     // States computed by processIMU()
     Eigen::Vector3d _delta_p; //!< Pre integration delta in position
     Eigen::Vector3d _delta_v; //!< Pre integration delta in velocity
     Eigen::Matrix3d _delta_R; //!< Pre integration delta in orientation (SO(3))
+    Eigen::Vector3d _ba_lin = Eigen::Vector3d::Zero(); //!< Accelerometer bias of the preintegration
+    Eigen::Vector3d _bg_lin = Eigen::Vector3d::Zero(); //!< Gyroscope bias of the preintegration
     Eigen::Vector3d _ba;      //!< Accelerometer bias
     Eigen::Vector3d _bg;      //! Gyroscope bias
     Eigen::Vector3d _v;       //!< Velocity of the IMU in the world frame
@@ -189,12 +258,33 @@ class IMU : public ASensor {
     // Covariance computation
     Eigen::MatrixXd _Sigma; //!< Covariance of the pre integration deltas
 
+    // Diagnostics
+    double _integrated_dt = 0; //!< Time integrated since the last KF (sum of the integration steps)
+    int _n_gap_steps      = 0; //!< Steps since the last KF longer than maxStepDt() (missing IMU data)
+
     std::shared_ptr<IMU> _last_IMU; //!< Last IMU measurement used for pre integration
     std::weak_ptr<Frame> _last_kf;  //!< Last keyframe used for pre integration
 
     // Mutex
     mutable std::mutex _imu_mtx;
 };
+
+/*!
+ * @brief Gravity alignment and bias guess from the first IMU measurements.
+ *
+ * R_w_f aligns the mean specific force with the world up axis (any yaw). The window is considered static
+ * when the mean angular rate stays below 0.1 rad/s, no gyroscope sample departs from the mean by more than
+ * 0.05 rad/s and the accelerometer spread stays below 0.2 m/s^2 (rms); only then are the biases guessed
+ * (gyroscope bias = mean angular rate, accelerometer bias = magnitude error along gravity), otherwise
+ * they are left at zero for the inertial initialization to estimate.
+ *
+ * @return true if the window is static
+ */
+bool staticImuInitialization(const std::vector<Eigen::Vector3d> &accs,
+                             const std::vector<Eigen::Vector3d> &gyrs,
+                             Eigen::Matrix3d &R_w_f,
+                             Eigen::Vector3d &ba,
+                             Eigen::Vector3d &bg);
 
 } // namespace isae
 

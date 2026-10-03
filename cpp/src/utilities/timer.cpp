@@ -7,7 +7,9 @@
 
 namespace isae { namespace timer {
 
-static std::stack<std::chrono::high_resolution_clock::time_point> timers;
+// One stack per thread: a shared stack is a data race (several threads time their work) and would pair
+// one thread's tic with another thread's toc
+static thread_local std::stack<std::chrono::high_resolution_clock::time_point> timers;
 
 void tic(){
     timers.push(std::chrono::high_resolution_clock::now());

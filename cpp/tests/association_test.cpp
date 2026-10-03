@@ -16,9 +16,10 @@ namespace isae {
 class AssociationTest : public testing::Test {
   public:
     void SetUp() override {
+        std::srand(12345u); // same random state for every test, whatever the run order
 
         std::random_device rd;                          // Only used once to initialise (seed) engine
-        std::mt19937 rng(rd());                         // Random-number engine used (Mersenne-Twister in this case)
+        std::mt19937 rng(12345u);                       // Random-number engine used (Mersenne-Twister in this case)
         std::uniform_int_distribution<int> uni(0, 256); // Guaranteed unbiased
 
         // Intrinsic
@@ -50,7 +51,7 @@ class AssociationTest : public testing::Test {
         _frame1->init(sensors_frame1, 1);
         _frame1->setWorld2FrameTransform(T_f_fp);
 
-        srand((unsigned int)time(0));
+        srand(12345u); // fixed seed: reproducible tests (was time-seeded)
 
         // Generates random 3D points in a 10m * 10m box
         for (uint i = 0; i < 2000; i++) {

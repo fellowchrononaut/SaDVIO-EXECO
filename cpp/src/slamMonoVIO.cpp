@@ -5,42 +5,37 @@ namespace isae {
 bool SLAMMonoVIO::init() {
 
     // get first frame that must contain IMU
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     if (!_frame || !_frame->getIMU()) {
         return false;
     }
 
     // Align the global frame with the gravity direction (if IMU available)
     Eigen::Affine3d T_i_f = Eigen::Affine3d::Identity();
-    Eigen::Vector3d acc_mean(0.0, 0.0, 0.0);
-    Eigen::Vector3d gyr_mean(0.0, 0.0, 0.0);
+    std::vector<Eigen::Vector3d> accs, gyrs;
     _last_IMU = _frame->getIMU();
     int count = 0;
 
-    // Average IMU measurement to reduce noise influence
+    // Collect the first IMU measurements
     while (count < 10 || _frame->getSensors().size() == 0) {
         if (!_frame->getIMU()) {
-            _frame = _slam_param->getDataProvider()->next();
+            _frame = nextFrame();
             continue;
         }
         _last_IMU = _frame->getIMU();
-        acc_mean += _last_IMU->getAcc();
-        gyr_mean += _last_IMU->getGyr();
-        _frame = _slam_param->getDataProvider()->next();
+        accs.push_back(_frame->getIMU()->getAcc());
+        gyrs.push_back(_frame->getIMU()->getGyr());
+        _frame = nextFrame();
         count++;
     }
-    acc_mean /= count;
-    gyr_mean /= count;
 
-    // Compute normalized direction vectors
-    Eigen::Vector3d acc_mean_norm = acc_mean.normalized();
-    Eigen::Vector3d g_norm        = (-g).normalized();
-
-    // We use the rodriguez formula to compute the rotation matrix (TODO implement it in geometry)
-    Eigen::Vector3d k = acc_mean_norm.cross(g_norm);
-    Eigen::Matrix3d K = geometry::skewMatrix(k.normalized());
-    T_i_f.affine().block(0, 0, 3, 3) =
-        (Eigen::Matrix3d::Identity() + k.norm() * K + (1 - acc_mean_norm.dot(g_norm)) * K * K);
+    // Gravity alignment, and bias guess if the IMU was static
+    Eigen::Vector3d ba, bg;
+    Eigen::Matrix3d R_i_f;
+    bool is_static   = staticImuInitialization(accs, gyrs, R_i_f, ba, bg);
+    T_i_f.linear()   = R_i_f;
+    if (!is_static)
+        std::cout << "IMU not static at start: biases left to the inertial initialization" << std::endl;
 
     // Set Keyframe and initialize preintegration
     _frame->setWorld2FrameTransform(T_i_f.inverse());
@@ -48,16 +43,13 @@ bool SLAMMonoVIO::init() {
     _local_map->addFrame(_frame);
     std::shared_ptr<IMU> imu_kf =
         std::make_shared<IMU>(_slam_param->getDataProvider()->getIMUConfig(), _last_IMU->getAcc(), _last_IMU->getGyr());
-    _last_IMU = imu_kf;
     imu_kf->setLastIMU(_last_IMU);
     imu_kf->setLastKF(_frame);
     imu_kf->processIMU();
     _frame->setIMU(imu_kf, _last_IMU->getFrame2SensorTransform());
     _last_IMU = imu_kf;
 
-    // Init bias (assuming that we are not moving)
-    Eigen::Vector3d ba = acc_mean + T_i_f.rotation().transpose() * g;
-    Eigen::Vector3d bg = gyr_mean;
+    // Initial biases
     _frame->getIMU()->setBa(ba);
     _frame->getIMU()->setBg(bg);
     std::cout << "Bias accel " << ba.transpose() << std::endl;
@@ -74,7 +66,7 @@ bool SLAMMonoVIO::init() {
     while (!ready_to_init) {
 
         // Get next frames with images
-        _frame = _slam_param->getDataProvider()->next();
+        _frame = nextFrame();
 
         // Process IMU data
         if (_frame->getIMU()) {
@@ -84,6 +76,9 @@ bool SLAMMonoVIO::init() {
             // Ignore measurement if it failed
             if (_frame->getIMU()->processIMU()) {
                 _last_IMU = _frame->getIMU();
+            } else {
+                _n_rejected_imu++;
+                _frame->clearIMU(); // never keep an unprocessed IMU measurement
             }
         }
 
@@ -187,8 +182,18 @@ bool SLAMMonoVIO::init() {
 
     // Launch optimization of the inertial variables
     Eigen::Matrix3d dRi;
-    _slam_param->getOptimizerFront()->VIInit(_local_map, dRi, true);
+    double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi, true);
+    if (!inertialInitAccepted(scale)) {
+        _is_init = false;
+        _local_map->reset();
+        return false;
+    }
+
+    // The motion model is a relative twist: the gravity rotation cancels out, but its translation
+    // is in the old (arbitrary) scale
+    _6d_velocity.tail<3>() *= scale;
     _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
+    logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
 
     std::cout << "Timestamp : " << getLastKF()->getTimestamp() << std::endl;
     std::cout << "Orientation update : " << dRi << std::endl;
@@ -197,10 +202,9 @@ bool SLAMMonoVIO::init() {
 
     _frame->getIMU()->setVelocity(_last_IMU->getVelocity());
 
-    // Set pb init
-    _nkeyframes++;
+    // The init KF is already in the local map and optimized: it is not sent to the back end again (it would be
+    // inserted twice in the window)
     _is_init          = true;
-    _frame_to_optim   = _frame;
     _successive_fails = 0;
 
     return true;
@@ -208,7 +212,7 @@ bool SLAMMonoVIO::init() {
 
 bool SLAMMonoVIO::step_init() {
     // Get next frame
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
 
     // Process IMU data
     if (_frame->getIMU()) {
@@ -218,6 +222,9 @@ bool SLAMMonoVIO::step_init() {
         // Ignore measurement if it failed
         if (_frame->getIMU()->processIMU()) {
             _last_IMU = _frame->getIMU();
+        } else {
+            _n_rejected_imu++;
+            _frame->clearIMU(); // never keep an unprocessed IMU measurement
         }
     }
 
@@ -299,7 +306,7 @@ bool SLAMMonoVIO::step_init() {
 
     } else {
         // If the prediction is wrong, we must restart the initialization
-
+        std::cout << "Reinitializing SLAM after a failed prediction" << std::endl;
         _is_init = false;
         _local_map->reset();
 
@@ -386,7 +393,7 @@ bool SLAMMonoVIO::step_init() {
 bool SLAMMonoVIO::frontEndStep() {
 
     // Get next frame
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
 
     // Process IMU data
     if (_frame->getIMU()) {
@@ -396,6 +403,9 @@ bool SLAMMonoVIO::frontEndStep() {
         // Ignore measurement if it failed
         if (_frame->getIMU()->processIMU()) {
             _last_IMU = _frame->getIMU();
+        } else {
+            _n_rejected_imu++;
+            _frame->clearIMU(); // never keep an unprocessed IMU measurement
         }
     }
 
@@ -482,7 +492,12 @@ bool SLAMMonoVIO::frontEndStep() {
         Eigen::Affine3d T_last_curr, T_w_f;
         T_last_curr = getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform();
         ESKFEstimator eskf;
+        const Eigen::Affine3d T_pnp = T_last_curr;
         eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
+        if (!plausibleUpdate(T_pnp, T_last_curr)) {
+            std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
+            T_last_curr = T_pnp;
+        }
         T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
         _frame->setdTCov(cov);
         _frame->setWorld2FrameTransform(T_w_f.inverse());
@@ -561,10 +576,10 @@ bool SLAMMonoVIO::frontEndStep() {
         _avg_resur_lmk   = (_avg_lmk_resur_t * (_nkeyframes - 1) + resu) / _nkeyframes;
 
         // Wait the end of optim
-        while (_frame_to_optim != nullptr) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        waitBackEnd();
         _frame_to_optim = _frame;
+        logKfFeatures(_frame);
+        _parallax_to_optim = _parallax;
         _last_IMU       = _frame_to_optim->getIMU();
 
     } else {
@@ -575,7 +590,9 @@ bool SLAMMonoVIO::frontEndStep() {
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
     if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
         (_successive_fails > 10)) {
-
+        std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
+                  << std::endl;
+        waitBackEnd(); // the back end must not add a pending KF to the reset map
         _is_init = false;
         _local_map->reset();
 
@@ -599,12 +616,22 @@ bool SLAMMonoVIO::backEndStep() {
         if (_local_map->getMarginalizationFlag()) {
             isae::timer::tic();
 
-            if (_parallax < 0.5) {
-                _frame_to_optim->getIMU()->setLastKF(nullptr);
-                _local_map->removeFrame(_local_map->getFrames().at(_local_map->getFrames().size() - 2));
+            std::deque<std::shared_ptr<Frame>> &frames = _local_map->getFrames();
+            std::shared_ptr<Frame> kf_prev = frames.size() >= 3 ? frames.at(frames.size() - 3) : nullptr;
+            if (_parallax_to_optim < 0.5 && canBridge(_frame_to_optim, kf_prev)) {
+                // Not enough parallax: drop the previous KF but keep its IMU information, by integrating the
+                // new KF's preintegration from the KF before it
+                std::shared_ptr<Frame> kf_drop = frames.at(frames.size() - 2);
+                bridgePreintegration(_frame_to_optim, kf_prev);
+                _local_map->removeFrame(kf_drop);
                 _nkeyframes--;
             } else {
+                if (_slam_param->_config.marginalization == 1)
+                    _slam_param->getOptimizerBack()->marginalize(_local_map->getFrames().at(0),
+                                                                 _local_map->getFrames().at(1),
+                                                                 _slam_param->_config.sparsification == 1);
                 _global_map->addFrame(_local_map->getFrames().at(0));
+                releaseImuHistory(_local_map->getFrames().at(0));
                 _map_mutex.lock();
                 _local_map->discardLastFrame();
                 _map_mutex.unlock();
@@ -614,18 +641,22 @@ bool SLAMMonoVIO::backEndStep() {
         // Optimize Local Map
         isae::timer::tic();
         if (_slam_param->_config.estimate_td && (geometry::log_so3(_frame_to_optim->getIMU()->getDeltaR()).norm() > 0.05)) {
-            double td = 0;
+            // The window estimates the absolute offset (each frame knows the offset it was read with); it replaces
+            // dt_imu_cam instead of being added to it, which re-applied the same correction in every window
+            std::atomic<double> &dt_imu_cam = _slam_param->getDataProvider()->getIMUConfig()->dt_imu_cam;
+            const double td_prev            = dt_imu_cam.load();
+            double td                       = td_prev;
             _slam_param->getOptimizerBack()->localMapVIOptimizationTd(_local_map, td, _local_map->getFixedFrameNumber());
-            _slam_param->getDataProvider()->getIMUConfig()->dt_imu_cam += td;
-            std::cout << "Global time offset : " << _slam_param->getDataProvider()->getIMUConfig()->dt_imu_cam
-                      << std::endl;
+            if (std::isfinite(td) && std::abs(td - td_prev) < 0.05)
+                dt_imu_cam = td;
+            else
+                std::cout << "Time offset update rejected: " << td << std::endl;
+            std::cout << "Global time offset : " << dt_imu_cam.load() << std::endl;
         } else {
             _slam_param->getOptimizerBack()->localMapVIOptimization(_local_map, _local_map->getFixedFrameNumber());
         }
+        logVIODiag(_frame_to_optim, _slam_param->getOptimizerBack()->getLastVIStats());
         _avg_wdw_opt_t = (_avg_wdw_opt_t * (_nkeyframes - 1) + isae::timer::silentToc()) / _nkeyframes;
-
-        // Update current IMU biases after optimization
-        _frame_to_optim->getIMU()->updateBiases();
 
         // profiling
         profiling();

@@ -2,11 +2,131 @@
 
 namespace isae {
 
+void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
+                                         ceres::LossFunction *loss_function,
+                                         ceres::ParameterBlockOrdering *ordering) {
+
+    // Explicit checks on the retained variables (the previous gating counted landmark *types*, or required a
+    // frame to keep even in VO)
+    std::vector<std::shared_ptr<ALandmark>> kept;
+    if (_marginalization->_lmk_to_keep.count("pointxd"))
+        kept = _marginalization->_lmk_to_keep.at("pointxd");
+    if (kept.empty())
+        return;
+
+    // Landmarks of the prior are supposed to be in the problem, add them otherwise
+    auto lmk_block = [&](const std::shared_ptr<ALandmark> &lmk) {
+        if (_map_lmk_ptpar.find(lmk) == _map_lmk_ptpar.end()) {
+            _map_lmk_ptpar.emplace(lmk, PointXYZParametersBlock(Eigen::Vector3d::Zero()));
+            problem.AddParameterBlock(_map_lmk_ptpar.at(lmk).values(), 3);
+            ordering->AddElementToGroup(_map_lmk_ptpar.at(lmk).values(), 0);
+        }
+        return _map_lmk_ptpar.at(lmk).values();
+    };
+
+    std::shared_ptr<Frame> frame_to_keep = _marginalization->_frame_to_keep;
+
+    /// CASE 1 VIO ///
+    if (frame_to_keep && frame_to_keep->getIMU()) {
+
+        // Ignore if the frame to keep is not in the problem
+        if (_map_frame_posepar.find(frame_to_keep) == _map_frame_posepar.end() ||
+            _map_frame_velpar.find(frame_to_keep) == _map_frame_velpar.end() ||
+            _marginalization->_map_frame_inf.find(frame_to_keep) == _marginalization->_map_frame_inf.end())
+            return;
+
+        Eigen::Affine3d T_f_w = frame_to_keep->getWorld2FrameTransform();
+        Eigen::Vector3d v     = frame_to_keep->getIMU()->getVelocity();
+        Eigen::Vector3d ba    = frame_to_keep->getIMU()->getBa();
+        Eigen::Vector3d bg    = frame_to_keep->getIMU()->getBg();
+        // The prior is centred on its linearization point (not on the current state, which made it pull towards
+        // wherever the window had drifted to)
+        ceres::CostFunction *cost_fct0 = new IMUPriordx(T_f_w,
+                                                        _marginalization->_T_f_w_lin,
+                                                        v,
+                                                        _marginalization->_v_lin,
+                                                        ba,
+                                                        _marginalization->_ba_lin,
+                                                        bg,
+                                                        _marginalization->_bg_lin,
+                                                        _marginalization->_map_frame_inf.at(frame_to_keep));
+        problem.AddResidualBlock(cost_fct0,
+                                 loss_function,
+                                 _map_frame_posepar.at(frame_to_keep).values(),
+                                 _map_frame_velpar.at(frame_to_keep).values(),
+                                 _map_frame_dbapar.at(frame_to_keep).values(),
+                                 _map_frame_dbgpar.at(frame_to_keep).values());
+
+        // Relative factors for the landmarks
+        for (auto &lmk : kept) {
+            if (_marginalization->_map_lmk_inf.find(lmk) == _marginalization->_map_lmk_inf.end())
+                continue;
+            ceres::CostFunction *cost_fct = new PoseToLandmarkFactor(_marginalization->_map_lmk_prior.at(lmk),
+                                                                     T_f_w,
+                                                                     lmk->getPose().translation(),
+                                                                     _marginalization->_map_lmk_inf.at(lmk));
+            problem.AddResidualBlock(
+                cost_fct, loss_function, _map_frame_posepar.at(frame_to_keep).values(), lmk_block(lmk));
+        }
+        return;
+    }
+
+    /// CASE 2 VO ///
+    if (!_marginalization->_lmk_with_prior)
+        return;
+
+    // Unary factor for the landmark with a prior
+    double *prior_block = lmk_block(_marginalization->_lmk_with_prior);
+    ceres::CostFunction *cost_fct_0 = new Landmark3DPrior(
+        _marginalization->_prior_lmk, _marginalization->_lmk_with_prior->getPose().translation(), _marginalization->_info_lmk);
+    problem.AddResidualBlock(cost_fct_0, loss_function, prior_block);
+    ordering->Remove(prior_block);
+    ordering->AddElementToGroup(prior_block, 2);
+
+    // Relative factors along the landmark chain
+    for (size_t k = 0; k + 1 < kept.size(); k++) {
+        std::shared_ptr<ALandmark> lmk_k = kept.at(k), lmk_kp1 = kept.at(k + 1);
+        if (lmk_k == lmk_kp1 || _marginalization->_map_lmk_inf.find(lmk_kp1) == _marginalization->_map_lmk_inf.end())
+            continue;
+        double *block_k = lmk_block(lmk_k), *block_kp1 = lmk_block(lmk_kp1);
+        ordering->Remove(block_kp1);
+        ordering->AddElementToGroup(block_kp1, 2);
+        ceres::CostFunction *cost_fct = new LandmarkToLandmarkFactor(_marginalization->_map_lmk_prior.at(lmk_kp1),
+                                                                     lmk_k->getPose().translation(),
+                                                                     lmk_kp1->getPose().translation(),
+                                                                     _marginalization->_map_lmk_inf.at(lmk_kp1));
+        problem.AddResidualBlock(cost_fct, loss_function, block_k, block_kp1);
+    }
+}
+
+bool AOptimizer::imuFactorUsable(const std::shared_ptr<Frame> &fi, const std::shared_ptr<Frame> &fj) {
+    if (!fi || !fj || fi == fj || !fi->getIMU() || !fj->getIMU() || fj->getIMU()->getLastKF() != fi)
+        return false;
+    if ((fj->getTimestamp() - fi->getTimestamp()) * 1e-9 > kMaxImuFactorDt)
+        return false;
+    return fj->getIMU()->getGapSteps() == 0 && fj->getIMU()->hasValidCovariance();
+}
+
+void AOptimizer::repropagateIfNeeded(std::vector<std::shared_ptr<Frame>> &frame_vector) {
+    for (auto &frame : frame_vector) {
+        if (!frame->getIMU())
+            continue;
+        std::shared_ptr<Frame> frame_i = frame->getIMU()->getLastKF();
+        if (!frame_i || !frame_i->getIMU())
+            continue;
+        Eigen::Vector3d ba = frame_i->getIMU()->getBa(), bg = frame_i->getIMU()->getBg();
+        if ((ba - frame->getIMU()->getBaLin()).norm() > 0.1 || (bg - frame->getIMU()->getBgLin()).norm() > 0.01)
+            frame->getIMU()->repropagate(ba, bg);
+    }
+}
+
 uint AOptimizer::addIMUResiduals(ceres::Problem &problem,
                                  ceres::LossFunction *loss_function,
                                  ceres::ParameterBlockOrdering *ordering,
                                  std::vector<std::shared_ptr<Frame>> &frame_vector,
                                  size_t fixed_frame_number) {
+
+    uint n_imu_factors = 0;
 
     // Add parameter blocks specific to IMU (we suppose that the parameter blocks for pose were already added)
     for (size_t i = 0; i < frame_vector.size(); i++) {
@@ -41,21 +161,25 @@ uint AOptimizer::addIMUResiduals(ceres::Problem &problem,
             continue;
 
         // If dt > 1 ignore IMU measurement (TO DO: marginalize IMU measurement only to get a proper relative factor?)
-        if ((framej->getTimestamp() - framei->getTimestamp()) * 1e-9 > 1)
+        if ((framej->getTimestamp() - framei->getTimestamp()) * 1e-9 > kMaxImuFactorDt)
             continue;
 
         if (_map_frame_velpar.find(framei) != _map_frame_velpar.end() && framei != framej) {
 
-            // add IMU factor
-            ceres::CostFunction *cost_fct = new IMUFactor(framei->getIMU(), framej->getIMU());
-            problem.AddResidualBlock(cost_fct,
-                                     nullptr,
-                                     _map_frame_posepar.at(framei).values(),
-                                     _map_frame_posepar.at(framej).values(),
-                                     _map_frame_velpar.at(framei).values(),
-                                     _map_frame_velpar.at(framej).values(),
-                                     _map_frame_dbapar.at(framei).values(),
-                                     _map_frame_dbgpar.at(framei).values());
+            // add IMU factor, unless IMU data is missing in the interval or its covariance is unusable
+            // (the bias random walk still holds)
+            if (imuFactorUsable(framei, framej)) {
+                ceres::CostFunction *cost_fct = new IMUFactor(framei->getIMU(), framej->getIMU());
+                problem.AddResidualBlock(cost_fct,
+                                         nullptr,
+                                         _map_frame_posepar.at(framei).values(),
+                                         _map_frame_posepar.at(framej).values(),
+                                         _map_frame_velpar.at(framei).values(),
+                                         _map_frame_velpar.at(framej).values(),
+                                         _map_frame_dbapar.at(framei).values(),
+                                         _map_frame_dbgpar.at(framei).values());
+                n_imu_factors++;
+            }
 
             // add Bias random walk factor
             ceres::CostFunction *cost_fct_bias = new IMUBiasFactor(framei->getIMU(), framej->getIMU());
@@ -67,7 +191,39 @@ uint AOptimizer::addIMUResiduals(ceres::Problem &problem,
                                      _map_frame_dbgpar.at(framej).values());
         }
     }
+    return n_imu_factors;
+}
+
+size_t AOptimizer::fixedFramesGivenPrior(const std::vector<std::shared_ptr<Frame>> &frame_vector,
+                                         size_t requested) const {
+    const std::shared_ptr<Frame> &kept = _marginalization->_frame_to_keep;
+    if (!kept || !kept->getIMU() || _marginalization->_lmk_to_keep.empty())
+        return requested;
+    if (std::find(frame_vector.begin(), frame_vector.end(), kept) == frame_vector.end())
+        return requested;
     return 0;
+}
+
+void AOptimizer::restoreGauge(const std::shared_ptr<Frame> &anchor, const Eigen::Affine3d &T_w_anchor_before) {
+    const Eigen::Affine3d T_w_anchor_after = anchor->getFrame2WorldTransform();
+
+    // Rotation about z closest to R_before R_after^T, then the translation that puts the anchor back
+    const Eigen::Matrix3d M = T_w_anchor_before.rotation() * T_w_anchor_after.rotation().transpose();
+    const double yaw        = std::atan2(M(1, 0) - M(0, 1), M(0, 0) + M(1, 1));
+    Eigen::Affine3d G       = Eigen::Affine3d::Identity();
+    G.linear()              = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    G.translation()         = T_w_anchor_before.translation() - G.linear() * T_w_anchor_after.translation();
+
+    for (auto &frame_posepar : _map_frame_posepar) {
+        std::shared_ptr<Frame> f = frame_posepar.first;
+        f->setWorld2FrameTransform((G * f->getFrame2WorldTransform()).inverse());
+        if (f->getIMU() && _map_frame_velpar.count(f))
+            f->getIMU()->setVelocity(G.linear() * f->getIMU()->getVelocity());
+    }
+    for (auto &lmk_ptpar : _map_lmk_ptpar)
+        lmk_ptpar.first->setPose(G * lmk_ptpar.first->getPose());
+    for (auto &lmk_posepar : _map_lmk_posepar)
+        lmk_posepar.first->setPose(G * lmk_posepar.first->getPose());
 }
 
 bool AOptimizer::landmarkOptimization(std::shared_ptr<Frame> &frame) {
@@ -79,6 +235,22 @@ bool AOptimizer::landmarkOptimization(std::shared_ptr<Frame> &frame) {
     // Get point cloud to be optimized
     typed_vec_landmarks cloud_to_optimize = frame->getLandmarks();
     addLandmarkResiduals(problem, loss_function, cloud_to_optimize);
+
+    // Landmarks tied to a marginalization prior are estimated by the window, together with that prior. Moving them
+    // here (poses fixed, prior ignored) would leave them in conflict with the prior, which measures them from its
+    // linearization point: they are kept constant
+    for (auto &ldmk_list : cloud_to_optimize) {
+        for (auto &ldmk : ldmk_list.second) {
+            if (!ldmk->hasPrior())
+                continue;
+            auto it_pt = _map_lmk_ptpar.find(ldmk);
+            if (it_pt != _map_lmk_ptpar.end())
+                problem.SetParameterBlockConstant(it_pt->second.values());
+            auto it_pose = _map_lmk_posepar.find(ldmk);
+            if (it_pose != _map_lmk_posepar.end())
+                problem.SetParameterBlockConstant(it_pose->second.values());
+        }
+    }
 
     // Solve the problem we just built
     ceres::Solver::Options options;
@@ -250,7 +422,7 @@ bool AOptimizer::localMapBA(std::shared_ptr<isae::LocalMap> &local_map, const si
 
     // Build the Bundle Adjustement Problem
     ceres::Problem problem;
-    ceres::LossFunction *loss_function = nullptr;
+    ceres::LossFunction *loss_function = _robust_visual_vo ? newVisualLoss() : nullptr;
 
     // Get all moving frames
     std::vector<std::shared_ptr<isae::Frame>> frame_vector;
@@ -259,7 +431,7 @@ bool AOptimizer::localMapBA(std::shared_ptr<isae::LocalMap> &local_map, const si
     // Add residuals
     auto ordering = new ceres::ParameterBlockOrdering;
     addResidualsLocalMap(problem, loss_function, ordering, frame_vector, fixed_sized_number, local_map);
-    addMarginalizationResiduals(problem, loss_function, ordering);
+    addMarginalizationResiduals(problem, nullptr, ordering); // the prior is never robustified
 
     // Solve the problem we just built
     ceres::Solver::Options options;
@@ -310,16 +482,24 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
 
     // Build the Bundle Adjustement Problem
     ceres::Problem problem;
-    ceres::LossFunction *loss_function = nullptr;
+    ceres::LossFunction *loss_function = newVisualLoss(); // visual factors only
     // Get all moving frames
     std::vector<std::shared_ptr<isae::Frame>> frame_vector;
     local_map->getLastNFramesIn(local_map->getMapSize(), frame_vector);
+    const size_t n_fixed = fixedFramesGivenPrior(frame_vector, fixed_sized_number);
+    // Without a fixed frame (prior-anchored window), the oldest frame keeps its yaw and position (gauge)
+    std::shared_ptr<Frame> gauge_anchor =
+        (n_fixed == 0 && fixed_sized_number > 0 && !frame_vector.empty()) ? frame_vector.back() : nullptr;
+    const Eigen::Affine3d T_w_anchor_before =
+        gauge_anchor ? gauge_anchor->getFrame2WorldTransform() : Eigen::Affine3d::Identity();
 
     // Add residuals
     auto ordering = new ceres::ParameterBlockOrdering;
-    addResidualsLocalMap(problem, loss_function, ordering, frame_vector, fixed_sized_number, local_map);
-    addIMUResiduals(problem, nullptr, ordering, frame_vector, fixed_sized_number);
+    addResidualsLocalMap(problem, loss_function, ordering, frame_vector, n_fixed, local_map);
+    uint n_imu_factors   = addIMUResiduals(problem, nullptr, ordering, frame_vector, n_fixed);
+    const int n_blocks   = problem.NumResidualBlocks();
     addMarginalizationResiduals(problem, nullptr, ordering);
+    uint n_prior_factors = problem.NumResidualBlocks() - n_blocks;
 
     // Solve the problem we just built
     ceres::Solver::Options options;
@@ -335,6 +515,8 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
 
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
+    recordVIStats(summary, n_imu_factors, n_prior_factors, problem.NumResidualBlocks());
+    recordCostsPerType(problem);
 
     // Update state
     for (auto &frame_posepar : _map_frame_posepar) {
@@ -366,21 +548,11 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
                                             frame_dbgpar.second.getPose().translation());
     }
 
-    // Update deltas with IMU biases
-    for (auto &frame : frame_vector) {
-        if (!frame->getIMU())
-            continue;
+    if (gauge_anchor)
+        restoreGauge(gauge_anchor, T_w_anchor_before);
 
-        if (!frame->getIMU()->getLastKF())
-            continue;
-
-        std::shared_ptr<Frame> previous_frame = frame->getIMU()->getLastKF();
-
-        if (_map_frame_dbapar.find(previous_frame) != _map_frame_dbapar.end()) {
-            frame->getIMU()->biasDeltaCorrection(_map_frame_dbapar.at(previous_frame).getPose().translation(),
-                                                 _map_frame_dbgpar.at(previous_frame).getPose().translation());
-        }
-    }
+    // Re-integrate the preintegrations whose linearization bias is now too far
+    repropagateIfNeeded(frame_vector);
 
     // Set maps for bookeeping;
     _map_lmk_ptpar.clear();
@@ -432,7 +604,8 @@ double AOptimizer::VIInit(std::shared_ptr<isae::LocalMap> &local_map, Eigen::Mat
 
         std::shared_ptr<Frame> framei = framej->getIMU()->getLastKF();
 
-        if (_map_frame_velpar.find(framei) != _map_frame_velpar.end() && framei != framej) {
+        // Skip intervals with missing IMU data
+        if (_map_frame_velpar.find(framei) != _map_frame_velpar.end() && imuFactorUsable(framei, framej)) {
 
             // add IMU factor
             ceres::CostFunction *cost_fct = new IMUFactorInit(framei->getIMU(), framej->getIMU());
@@ -447,15 +620,16 @@ double AOptimizer::VIInit(std::shared_ptr<isae::LocalMap> &local_map, Eigen::Mat
         }
     }
 
-    // add Bias prior
-    double dt        = frame_vector.at(0)->getTimestamp() - frame_vector.at(frame_vector.size() - 1)->getTimestamp();
-    double sigma_dba = std::sqrt(dt) * frame_vector.at(0)->getIMU()->getbAccNoise();
-    Eigen::Matrix3d sqrt_inf_ba = Eigen::Matrix3d::Identity() * (1 / sigma_dba) * 1000;
+    // Priors on the bias changes w.r.t. the static initial estimate (as in ORB-SLAM3's inertial-only
+    // initialization): the gyroscope bias is well observed through the rotations, so its prior is weak;
+    // the accelerometer bias is barely observable over a short window, so its change is kept small.
+    const double sigma_dba      = 0.01; // m/s^2
+    const double sigma_dbg      = 0.1;  // rad/s
+    Eigen::Matrix3d sqrt_inf_ba = Eigen::Matrix3d::Identity() / sigma_dba;
     ceres::CostFunction *cost_fct_ba =
         new Landmark3DPrior(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), sqrt_inf_ba);
     problem.AddResidualBlock(cost_fct_ba, loss_function, dba_par.values());
-    double sigma_dbg            = std::sqrt(dt) * frame_vector.at(0)->getIMU()->getbGyrNoise();
-    Eigen::Matrix3d sqrt_inf_bg = Eigen::Matrix3d::Identity() * (1 / sigma_dbg) * 1000;
+    Eigen::Matrix3d sqrt_inf_bg = Eigen::Matrix3d::Identity() / sigma_dbg;
     ceres::CostFunction *cost_fct_bg =
         new Landmark3DPrior(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), sqrt_inf_bg);
     problem.AddResidualBlock(cost_fct_bg, loss_function, dbg_par.values());
@@ -474,13 +648,25 @@ double AOptimizer::VIInit(std::shared_ptr<isae::LocalMap> &local_map, Eigen::Mat
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
 
-    // Update IMU velocity and biases
-    for (auto &frame_velpar : _map_frame_velpar) {
-        frame_velpar.first->getIMU()->setVelocity(
-            (frame_velpar.first->getIMU()->getVelocity() + frame_velpar.second.getPose().translation()));
-        frame_velpar.first->getIMU()->setBa(frame_velpar.first->getIMU()->getBa() + dba_par.getPose().translation());
-        frame_velpar.first->getIMU()->setBa(frame_velpar.first->getIMU()->getBa() + dba_par.getPose().translation());
+    // Do not apply an unusable solution: the caller restarts the initialization
+    if (!summary.IsSolutionUsable()) {
+        std::cout << "Inertial initialization failed: " << summary.message << std::endl;
+        _map_frame_velpar.clear();
+        return -1;
     }
+
+    // Update IMU velocity and biases (the bias change is shared by the whole window)
+    const Eigen::Vector3d dba = dba_par.getPose().translation();
+    const Eigen::Vector3d dbg = dbg_par.getPose().translation();
+    for (auto &frame_velpar : _map_frame_velpar) {
+        std::shared_ptr<IMU> imu = frame_velpar.first->getIMU();
+        imu->setVelocity(imu->getVelocity() + frame_velpar.second.getPose().translation());
+        imu->setBa(imu->getBa() + dba);
+        imu->setBg(imu->getBg() + dbg);
+    }
+
+    // The factors correct the deltas for the new biases; re-integrate where the change is too large
+    repropagateIfNeeded(frame_vector);
 
     // Update gravity direction with only 2DoF
     R_w_i = geometry::exp_so3(Eigen::Vector3d(r_wi_par[0], r_wi_par[1], 0));

@@ -33,8 +33,9 @@ class NoFOVTest : public testing::Test {
 
   public:
     void SetUp() override {
+        std::srand(12345u); // same random state for every test, whatever the run order
 
-        srand((unsigned int)time(0));
+        srand(12345u); // fixed seed: reproducible tests (was time-seeded)
 
         // Intrinsic
         _K       = Eigen::Matrix3d::Identity();

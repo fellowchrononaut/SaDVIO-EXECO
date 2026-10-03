@@ -15,12 +15,18 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
 
     // Build the Bundle Adjustement Problem
     ceres::Problem problem;
-    ceres::LossFunction *loss_function = nullptr;
+    ceres::LossFunction *loss_function = newVisualLoss(); // visual factors only
     auto ordering                      = new ceres::ParameterBlockOrdering;
 
     // Get all moving frames
     std::vector<std::shared_ptr<isae::Frame>> frame_vector;
     local_map->getLastNFramesIn(local_map->getMapSize(), frame_vector);
+    const size_t n_fixed = fixedFramesGivenPrior(frame_vector, fixed_frame_number);
+    // Without a fixed frame (prior-anchored window), the oldest frame keeps its yaw and position (gauge)
+    std::shared_ptr<Frame> gauge_anchor =
+        (n_fixed == 0 && fixed_frame_number > 0 && !frame_vector.empty()) ? frame_vector.back() : nullptr;
+    const Eigen::Affine3d T_w_anchor_before =
+        gauge_anchor ? gauge_anchor->getFrame2WorldTransform() : Eigen::Affine3d::Identity();
     double t_delay[1] = {td};
     problem.AddParameterBlock(t_delay, 1);
     ordering->AddElementToGroup(t_delay, 1);
@@ -35,7 +41,7 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
         ordering->AddElementToGroup(_map_frame_posepar.at(frame).values(), 1);
 
         // Set parameter block constant for fixed frames
-        if ((int)i > (int)(frame_vector.size() - fixed_frame_number - 1)) {
+        if ((int)i > (int)(frame_vector.size() - n_fixed - 1)) {
             problem.SetParameterBlockConstant(_map_frame_posepar.at(frame).values());
         }
 
@@ -90,7 +96,8 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
                                                            cam->getFrame2SensorTransform(),
                                                            frame->getWorld2FrameTransform(),
                                                            landmark->getPose().translation(),
-                                                           (1.0 / cam->getFocal()));
+                                                           (kAngularSigmaPx / cam->getFocal()),
+                                                           frame->getTimeOffset());
 
                         problem.AddResidualBlock(cost_fct,
                                                  loss_function,
@@ -104,7 +111,7 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
                                                            cam->getFrame2SensorTransform(),
                                                            frame->getWorld2FrameTransform(),
                                                            landmark->getPose().translation(),
-                                                           1.0 / cam->getFocal());
+                                                           kAngularSigmaPx / cam->getFocal());
 
                         problem.AddResidualBlock(cost_fct,
                                                  loss_function,
@@ -115,8 +122,10 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
             }
         }
     }
-    addIMUResiduals(problem, loss_function, ordering, frame_vector, fixed_frame_number);
-    addMarginalizationResiduals(problem, loss_function, ordering);
+    uint n_imu_factors   = addIMUResiduals(problem, nullptr, ordering, frame_vector, n_fixed);
+    const int n_blocks   = problem.NumResidualBlocks();
+    addMarginalizationResiduals(problem, nullptr, ordering);
+    uint n_prior_factors = problem.NumResidualBlocks() - n_blocks;
 
     // Solve the problem we just built
     ceres::Solver::Options options;
@@ -132,6 +141,8 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
 
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
+    recordVIStats(summary, n_imu_factors, n_prior_factors, problem.NumResidualBlocks());
+    recordCostsPerType(problem);
 
     // Update state
     for (auto &frame_posepar : _map_frame_posepar) {
@@ -163,21 +174,11 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
                                             frame_dbgpar.second.getPose().translation());
     }
 
-    // Update deltas with IMU biases
-    for (auto &frame : frame_vector) {
-        if (!frame->getIMU())
-            continue;
+    if (gauge_anchor)
+        restoreGauge(gauge_anchor, T_w_anchor_before);
 
-        if (!frame->getIMU()->getLastKF())
-            continue;
-
-        std::shared_ptr<Frame> previous_frame = frame->getIMU()->getLastKF();
-
-        if (_map_frame_dbapar.find(previous_frame) != _map_frame_dbapar.end()) {
-            frame->getIMU()->biasDeltaCorrection(_map_frame_dbapar.at(previous_frame).getPose().translation(),
-                                                 _map_frame_dbgpar.at(previous_frame).getPose().translation());
-        }
-    }
+    // Re-integrate the preintegrations whose linearization bias is now too far
+    repropagateIfNeeded(frame_vector);
 
     // Set maps for bookeeping;
     _map_lmk_ptpar.clear();
@@ -337,7 +338,7 @@ uint AngularAdjustmentCERESAnalytic::addLandmarkResiduals(ceres::Problem &proble
                                                                                    cam->getFrame2SensorTransform(),
                                                                                    frame->getWorld2FrameTransform(),
                                                                                    landmark->getPose().translation(),
-                                                                                   (1.5 / cam->getFocal()));
+                                                                                   (kAngularSigmaPx / cam->getFocal()));
 
                     problem.AddResidualBlock(cost_fct,
                                              loss_function,
@@ -464,7 +465,7 @@ uint AngularAdjustmentCERESAnalytic::addResidualsLocalMap(ceres::Problem &proble
                                                                                    cam->getFrame2SensorTransform(),
                                                                                    frame->getWorld2FrameTransform(),
                                                                                    landmark->getPose().translation(),
-                                                                                   (1.5 / cam->getFocal()));
+                                                                                   (kAngularSigmaPx / cam->getFocal()));
 
                     problem.AddResidualBlock(cost_fct,
                                              loss_function,
@@ -569,113 +570,14 @@ uint AngularAdjustmentCERESAnalytic::addMarginalizationResiduals(ceres::Problem 
             ordering->AddElementToGroup(_map_lmk_ptpar.at(lmk).values(), 2);
         }
 
-        ceres::CostFunction *cost_fct = new MarginalizationFactor(_marginalization);
+        MarginalizationFactor *cost_fct = new MarginalizationFactor(_marginalization);
+        recordPriorDiag(cost_fct, prior_parameter_blocks);
         problem.AddResidualBlock(cost_fct, loss_function, prior_parameter_blocks);
     }
 
     // Add marginalization factor, sparse case
-    if (!_marginalization->_lmk_to_keep.empty() && _enable_sparsif) {
-
-        // Ignore if the frame to keep is not in the pb
-        if (_map_frame_posepar.find(_marginalization->_frame_to_keep) == _map_frame_posepar.end()) {
-            return 0;
-        }
-
-        /// CASE 1 VIO ///
-        if (_marginalization->_frame_to_keep) {
-            std::shared_ptr<Frame> frame_to_keep = _marginalization->_frame_to_keep;
-            Eigen::Affine3d T_f_w                = frame_to_keep->getWorld2FrameTransform();
-            Eigen::Vector3d v                    = frame_to_keep->getIMU()->getVelocity();
-            Eigen::Vector3d ba                   = frame_to_keep->getIMU()->getBa();
-            Eigen::Vector3d bg                   = frame_to_keep->getIMU()->getBg();
-            ceres::CostFunction *cost_fct0 =
-                new IMUPriordx(T_f_w, T_f_w, v, v, ba, ba, bg, bg, _marginalization->_map_frame_inf.at(frame_to_keep));
-            problem.AddResidualBlock(cost_fct0,
-                                     loss_function,
-                                     _map_frame_posepar.at(frame_to_keep).values(),
-                                     _map_frame_velpar.at(frame_to_keep).values(),
-                                     _map_frame_dbapar.at(frame_to_keep).values(),
-                                     _map_frame_dbgpar.at(frame_to_keep).values());
-
-            // Relative factors for other lmk
-            for (auto lmk : _marginalization->_lmk_to_keep["pointxd"]) {
-
-                ceres::CostFunction *cost_fct = new PoseToLandmarkFactor(_marginalization->_map_lmk_prior.at(lmk),
-                                                                         T_f_w,
-                                                                         lmk->getPose().translation(),
-                                                                         _marginalization->_map_lmk_inf.at(lmk));
-
-                // TODO: fix this, it is supposed to be in the map
-                if (_map_lmk_ptpar.find(lmk) == _map_lmk_ptpar.end()) {
-                    _map_lmk_ptpar.emplace(lmk, PointXYZParametersBlock(Eigen::Vector3d::Zero()));
-                    problem.AddParameterBlock(_map_lmk_ptpar.at(lmk).values(), 3);
-                    ordering->AddElementToGroup(_map_lmk_ptpar.at(lmk).values(), 0);
-                }
-
-                problem.AddResidualBlock(cost_fct,
-                                         loss_function,
-                                         _map_frame_posepar.at(frame_to_keep).values(),
-                                         _map_lmk_ptpar.at(lmk).values());
-            }
-        }
-
-        /// CASE 2 VO ///
-        else {
-            // Unary factor for lmk with prior
-            ceres::CostFunction *cost_fct_0 =
-                new Landmark3DPrior(_marginalization->_prior_lmk,
-                                    _marginalization->_lmk_with_prior->getPose().translation(),
-                                    _marginalization->_info_lmk);
-            problem.AddResidualBlock(
-                cost_fct_0, loss_function, _map_lmk_ptpar.at(_marginalization->_lmk_with_prior).values());
-            ordering->Remove(_map_lmk_ptpar.at(_marginalization->_lmk_with_prior).values());
-            ordering->AddElementToGroup(_map_lmk_ptpar.at(_marginalization->_lmk_with_prior).values(), 2);
-
-            // TODO: fix this, it is supposed to be in the map
-            if (_map_lmk_ptpar.find(_marginalization->_lmk_with_prior) == _map_lmk_ptpar.end()) {
-                _map_lmk_ptpar.emplace(_marginalization->_lmk_with_prior,
-                                       PointXYZParametersBlock(Eigen::Vector3d::Zero()));
-                problem.AddParameterBlock(_map_lmk_ptpar.at(_marginalization->_lmk_with_prior).values(), 3);
-                ordering->AddElementToGroup(_map_lmk_ptpar.at(_marginalization->_lmk_with_prior).values(), 0);
-            }
-
-            // Relative factors for other lmk
-            for (uint k = 0; k < _marginalization->_lmk_to_keep["pointxd"].size() - 1; k++) {
-
-                std::shared_ptr<ALandmark> lmk_k   = _marginalization->_lmk_to_keep["pointxd"].at(k);
-                std::shared_ptr<ALandmark> lmk_kp1 = _marginalization->_lmk_to_keep["pointxd"].at(k + 1);
-
-                // TODO: fix this, it is supposed to be in the map
-                if (_map_lmk_ptpar.find(lmk_k) == _map_lmk_ptpar.end()) {
-                    _map_lmk_ptpar.emplace(lmk_k, PointXYZParametersBlock(Eigen::Vector3d::Zero()));
-                    problem.AddParameterBlock(_map_lmk_ptpar.at(lmk_k).values(), 3);
-                    ordering->AddElementToGroup(_map_lmk_ptpar.at(lmk_k).values(), 0);
-                }
-
-                // TODO: fix this, it is supposed to be in the map
-                if (_map_lmk_ptpar.find(lmk_kp1) == _map_lmk_ptpar.end()) {
-                    _map_lmk_ptpar.emplace(lmk_k, PointXYZParametersBlock(Eigen::Vector3d::Zero()));
-                    problem.AddParameterBlock(_map_lmk_ptpar.at(lmk_kp1).values(), 3);
-                    ordering->AddElementToGroup(_map_lmk_ptpar.at(lmk_kp1).values(), 0);
-                }
-
-                // The landmark must be distinct
-                if (lmk_k == lmk_kp1)
-                    continue;
-
-                ordering->Remove(_map_lmk_ptpar.at(lmk_kp1).values());
-                ordering->AddElementToGroup(_map_lmk_ptpar.at(lmk_kp1).values(), 2);
-
-                ceres::CostFunction *cost_fct =
-                    new LandmarkToLandmarkFactor(_marginalization->_map_lmk_prior.at(lmk_kp1),
-                                                 lmk_k->getPose().translation(),
-                                                 lmk_kp1->getPose().translation(),
-                                                 _marginalization->_map_lmk_inf.at(lmk_kp1));
-                problem.AddResidualBlock(
-                    cost_fct, loss_function, _map_lmk_ptpar.at(lmk_k).values(), _map_lmk_ptpar.at(lmk_kp1).values());
-            }
-        }
-    }
+    if (_enable_sparsif)
+        addSparsePriorResiduals(problem, loss_function, ordering);
 
     return 0;
 }
@@ -683,6 +585,8 @@ uint AngularAdjustmentCERESAnalytic::addMarginalizationResiduals(ceres::Problem 
 bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
                                                  std::shared_ptr<Frame> &frame1,
                                                  bool enable_sparsif) {
+    if (frame0 == frame1)
+        return false;
     _enable_sparsif = enable_sparsif;
 
     // Setup the maps for memory gestion
@@ -694,6 +598,11 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
 
     // Select the nodes to marginalize / keep
     _marginalization->preMarginalize(frame0, frame1, _marginalization_last);
+
+    // Visual factors are marginalized with the loss of the window they come from (robust in VIO, and in VO
+    // when marginalization is enabled)
+    std::shared_ptr<ceres::LossFunction> visual_loss((frame0->getIMU() || _robust_visual_vo) ? newVisualLoss()
+                                                                                           : nullptr);
 
     // Create pose parameters for the frames
     _map_frame_posepar.emplace(frame0, PoseParametersBlock(Eigen::Affine3d::Identity()));
@@ -732,10 +641,13 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
         parameter_idx.push_back(_marginalization->_map_frame_idx.at(frame0) + 12);
         parameter_blocks.push_back(_map_frame_dbgpar.at(frame0).values());
 
-        // Add the pre integration factor in the marginalization scheme
-        ceres::CostFunction *cost_fct = new IMUFactor(frame0->getIMU(), frame1->getIMU());
-        _marginalization->_marginalization_blocks.push_back(
-            std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
+        // Add the pre integration factor in the marginalization scheme, only if frame1's
+        // preintegration starts at frame0 and is usable (the bias random walk always holds)
+        if (imuFactorUsable(frame0, frame1)) {
+            ceres::CostFunction *cost_fct = new IMUFactor(frame0->getIMU(), frame1->getIMU());
+            _marginalization->_marginalization_blocks.push_back(
+                std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
+        }
 
         // Parameters of marginalization blocks
         std::vector<double *> parameter_blocks_b;
@@ -783,9 +695,9 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
                                                        feature.lock()->getSensor()->getFrame2SensorTransform(),
                                                        frame0->getWorld2FrameTransform(),
                                                        lmk->getPose().translation(),
-                                                       (1 / feature.lock()->getSensor()->getFocal()));
-                    _marginalization->_marginalization_blocks.push_back(
-                        std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
+                                                       (kAngularSigmaPx / feature.lock()->getSensor()->getFocal()));
+                    _marginalization->_marginalization_blocks.push_back(std::make_shared<MarginalizationBlockInfo>(
+                        cost_fct, parameter_idx, parameter_blocks, visual_loss));
                 }
             }
         }
@@ -817,9 +729,9 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
                                                        feature.lock()->getSensor()->getFrame2SensorTransform(),
                                                        frame0->getWorld2FrameTransform(),
                                                        lmk->getPose().translation(),
-                                                       (1 / feature.lock()->getSensor()->getFocal()));
-                    _marginalization->_marginalization_blocks.push_back(
-                        std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
+                                                       (kAngularSigmaPx / feature.lock()->getSensor()->getFocal()));
+                    _marginalization->_marginalization_blocks.push_back(std::make_shared<MarginalizationBlockInfo>(
+                        cost_fct, parameter_idx, parameter_blocks, visual_loss));
                 }
             }
         }
@@ -874,18 +786,8 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
             std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
     }
 
-    if (frame1->hasPrior()) {
-        // Compute index and block vectors for pose prior factor
-        std::vector<double *> parameter_blocks;
-        std::vector<int> parameter_idx;
-        parameter_blocks.push_back(_map_frame_posepar.at(frame1).values());
-        parameter_idx.push_back(_marginalization->_map_frame_idx.at(frame1));
-
-        ceres::CostFunction *cost_fct =
-            new PosePriordx(frame1->getWorld2FrameTransform(), frame1->getPrior(), frame1->getInfPrior().asDiagonal());
-        _marginalization->_marginalization_blocks.push_back(
-            std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
-    }
+    // The prior of frame1 is not marginalized: frame1 stays in the window, whose optimization already applies it
+    // (and in VO frame1 is not a variable of the marginalization)
 
     // Reset the marginalization scheme if it failed
     if (!_marginalization->computeSchurComplement()) {
@@ -929,6 +831,11 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
     _marginalization_last->_U                        = _marginalization->_U;
     _marginalization_last->_Lambda                   = _marginalization->_Lambda;
     _marginalization_last->_Sigma                    = _marginalization->_Sigma;
+    _marginalization_last->_T_f_w_lin                = _marginalization->_T_f_w_lin;
+    _marginalization_last->_v_lin                    = _marginalization->_v_lin;
+    _marginalization_last->_ba_lin                   = _marginalization->_ba_lin;
+    _marginalization_last->_bg_lin                   = _marginalization->_bg_lin;
+    _marginalization_last->_map_lmk_lin              = _marginalization->_map_lmk_lin;
 
     return true;
 }
@@ -1155,10 +1062,13 @@ Eigen::MatrixXd AngularAdjustmentCERESAnalytic::marginalizeRelative(std::shared_
         parameter_idx.push_back(_marginalization->_map_frame_idx.at(frame0) + 12);
         parameter_blocks.push_back(_map_frame_dbgpar.at(frame0).values());
 
-        // Add the pre integration factor in the marginalization scheme
-        ceres::CostFunction *cost_fct = new IMUFactor(frame0->getIMU(), frame1->getIMU());
-        _marginalization->_marginalization_blocks.push_back(
-            std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
+        // Add the pre integration factor in the marginalization scheme, only if frame1's
+        // preintegration starts at frame0 and is usable (the bias random walk always holds)
+        if (imuFactorUsable(frame0, frame1)) {
+            ceres::CostFunction *cost_fct = new IMUFactor(frame0->getIMU(), frame1->getIMU());
+            _marginalization->_marginalization_blocks.push_back(
+                std::make_shared<MarginalizationBlockInfo>(cost_fct, parameter_idx, parameter_blocks));
+        }
 
         // Parameters of marginalization blocks
         std::vector<double *> parameter_blocks_b;

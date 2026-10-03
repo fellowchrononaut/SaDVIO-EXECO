@@ -19,6 +19,7 @@ namespace isae {
 class LineFeatureTest : public testing::Test {
     public:
         void SetUp() override {
+            std::srand(12345u); // same random state for every test, whatever the run order
 
             // Set Camera Config and features detection
             Eigen::Matrix3d K0, K1;
@@ -242,7 +243,7 @@ TEST_F(LineFeatureTest, LineFeatureDetection) {
         cv::line(I, cv::Point(pt2d.x(), pt2d.y()), cv::Point(pt2d2.x(), pt2d2.y()), color, 2);
     }
 
-    cv::imshow("Detections", I);
+    // cv::imshow("Detections", I); // no display in the headless test environment
     //cv::waitKey(0);
 
     // Only lines > 100 pixels (hardcoded in the detector... to be changed !)

@@ -38,9 +38,9 @@ static void execo_log_perframe(const std::shared_ptr<Frame> &f, uint nframes) {
 bool SLAMMono::init() {
 
     // get first frame with images and set keyframe
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     while (_frame->getSensors().empty()) {
-        _frame = _slam_param->getDataProvider()->next();
+        _frame = nextFrame();
     }
     _frame->setKeyFrame();
     std::shared_ptr<Frame> kf_init = _frame;
@@ -65,7 +65,7 @@ bool SLAMMono::init() {
     while (!ready_to_init) {
 
         // Get next frames with images
-        _frame = _slam_param->getDataProvider()->next();
+        _frame = nextFrame();
         if (_frame->getSensors().empty())
             continue;
         _nframes++;
@@ -148,7 +148,7 @@ bool SLAMMono::init() {
 bool SLAMMono::frontEndStep() {
 
     // Get next frame with images
-    _frame = _slam_param->getDataProvider()->next();
+    _frame = nextFrame();
     if (_frame->getSensors().empty())
         return true;
     _nframes++;
@@ -221,7 +221,12 @@ bool SLAMMono::frontEndStep() {
         Eigen::Affine3d T_last_curr, T_w_f;
         T_last_curr = getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform();
         ESKFEstimator eskf;
+        const Eigen::Affine3d T_pnp = T_last_curr;
         eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
+        if (!plausibleUpdate(T_pnp, T_last_curr)) {
+            std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
+            T_last_curr = T_pnp;
+        }
         T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
         _frame->setdTCov(cov);
         _frame->setWorld2FrameTransform(T_w_f.inverse());
@@ -274,10 +279,9 @@ bool SLAMMono::frontEndStep() {
         _avg_resur_lmk   = (_avg_lmk_resur_t * (_nkeyframes - 1) + resu) / _nkeyframes;
 
         // Wait the end of optim
-        while (_frame_to_optim != nullptr) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        waitBackEnd();
         _frame_to_optim = _frame;
+        logKfFeatures(_frame);
 
     } else {
 
@@ -288,7 +292,8 @@ bool SLAMMono::frontEndStep() {
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
     if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
         (_successive_fails > 5)) {
-
+        std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
+                  << std::endl;
         _is_init = false;
 
         return true;

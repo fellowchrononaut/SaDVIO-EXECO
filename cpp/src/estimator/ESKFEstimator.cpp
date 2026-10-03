@@ -64,6 +64,61 @@ std::tuple<Eigen::Vector2d, Eigen::MatrixXd, Eigen::MatrixXd> jac_projection(con
     return {proj_2d, J_T, J_p};
 }
 
+Eigen::Matrix<double, 6, 6> ESKFEstimator::adjointOfInverse(const Eigen::Affine3d &M) {
+    // E(xi) M = M E(Ad_{M^-1} xi), with E(theta, rho) = [Exp(theta), rho] (perturbation order: rotation, translation)
+    const Eigen::Matrix3d Rt         = M.rotation().transpose();
+    Eigen::Matrix<double, 6, 6> Ad   = Eigen::Matrix<double, 6, 6>::Zero();
+    Ad.block<3, 3>(0, 0)             = Rt;
+    Ad.block<3, 3>(3, 0)             = -Rt * geometry::skewMatrix(M.translation());
+    Ad.block<3, 3>(3, 3)             = Rt;
+    return Ad;
+}
+
+Eigen::Matrix<double, 6, 6> ESKFEstimator::imuToCameraErrorJacobian(const Eigen::Affine3d &dT,
+                                                                    const Eigen::Affine3d &T_cam1_f1) {
+    // IMU step error of dT = T_f1_f2: R <- R Exp(dtheta), t <- t + dt. The visual step perturbs
+    // T_cam2_cam1 = T_cam2_f2 dT^-1 T_cam1_f1^-1 on the right (the left factor T_cam2_f2 does not change it)
+    const Eigen::Affine3d B         = T_cam1_f1.inverse();
+    Eigen::Matrix<double, 6, 6> J   = Eigen::Matrix<double, 6, 6>::Zero();
+    J.leftCols<3>()                 = -adjointOfInverse(dT.inverse() * B).leftCols<3>();
+    J.rightCols<3>()                = -adjointOfInverse(B).rightCols<3>();
+    return J;
+}
+
+Eigen::Matrix<double, 6, 6> ESKFEstimator::cameraToFrameErrorJacobian(const Eigen::Affine3d &T_cam2_cam1,
+                                                                      const Eigen::Affine3d &T_cam2_f2) {
+    // dT = T_cam1_f1^-1 T_cam2_cam1^-1 T_cam2_f2; a right perturbation of T_cam2_cam1 gives the right perturbation
+    // dT E(xi_dT) of dT
+    return -adjointOfInverse(T_cam2_cam1.inverse() * T_cam2_f2);
+}
+
+Eigen::Matrix3d ESKFEstimator::updateRotation(const Eigen::Matrix3d &R_pred,
+                                              const Eigen::Matrix3d &dR,
+                                              Eigen::Matrix3d &P,
+                                              const Eigen::Matrix3d &cov_dR) {
+    // One Gauss-Newton step of the MAP cost |r(d)|^2_cov + |d|^2_P with R = R_pred Exp(d) and
+    // r(d) = Log((R_pred Exp(d))^T dR) ~ e - Jl^-1(e) d
+    Eigen::Vector3d e  = geometry::log_so3(R_pred.transpose() * dR);
+    Eigen::Matrix3d H  = geometry::so3_leftJacobian(e).inverse();
+    Eigen::Matrix3d K  = P * H.transpose() * (H * P * H.transpose() + cov_dR).inverse();
+    Eigen::Matrix3d Ru = R_pred * geometry::exp_so3(K * e);
+    P                  = (Eigen::Matrix3d::Identity() - K * H) * P;
+    return Ru;
+}
+
+Eigen::Vector3d ESKFEstimator::updateVelocity(const Eigen::Matrix3d &R_w_f1,
+                                              const Eigen::Vector3d &v_pred,
+                                              const Eigen::Vector3d &v1,
+                                              const Eigen::Vector3d &dV,
+                                              const Eigen::Matrix3d &cov_dv,
+                                              double dt) {
+    // The innovation lives in frame 1's axes and the state in world axes: H = R_w_f1^T, P = I
+    Eigen::Matrix3d H    = R_w_f1.transpose();
+    Eigen::Vector3d errv = dV - H * (v_pred - v1 - g * dt);
+    Eigen::Matrix3d K    = H.transpose() * (H * H.transpose() + cov_dv).inverse();
+    return v_pred + K * errv;
+}
+
 bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> &frame1,
                                                    const std::shared_ptr<Frame> &frame2,
                                                    vec_match &matches,
@@ -118,15 +173,15 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
             Eigen::Matrix3d R1 = frame1->getFrame2WorldTransform().rotation();
 
             // Update velocity
-            Eigen::Matrix3d Jv = R1;
             Eigen::Vector3d v_cst =
                 (frame2->getFrame2WorldTransform().translation() - frame1->getFrame2WorldTransform().translation()) /
                 dt;
-            Eigen::Vector3d errv =
-                frame2->getIMU()->getDeltaV() - R1.transpose() * (v_cst - frame1->getIMU()->getVelocity() - g * dt);
-            Eigen::Matrix3d Kv =
-                Jv.transpose() * (Jv * Jv.transpose() + frame2->getIMU()->getCov().block(3, 3, 3, 3)).inverse();
-            Eigen::Vector3d vu = v_cst + Kv * errv;
+            Eigen::Vector3d vu = updateVelocity(R1,
+                                                v_cst,
+                                                frame1->getIMU()->getVelocity(),
+                                                frame2->getIMU()->getDeltaV(),
+                                                frame2->getIMU()->getCov().block(3, 3, 3, 3),
+                                                dt);
             frame2->getIMU()->setVelocity(vu);
 
             // Update translation
@@ -139,21 +194,21 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
             P.block(3, 3, 3, 3) = (Eigen::Matrix3d::Identity() - Kt) * P.block(3, 3, 3, 3);
 
             // Update rotation (convention e = DeltaR ominus R)
-            Eigen::Vector3d errr   = geometry::log_so3(dT.linear().transpose() * frame2->getIMU()->getDeltaR());
-            Eigen::Matrix3d Jdelta = geometry::so3_rightJacobian(errr).inverse();
-            Eigen::Matrix3d Jrot   = -geometry::so3_leftJacobian(errr).inverse();
-            Eigen::Matrix3d Zr     = Jdelta * 1000 * frame2->getIMU()->getCov().block(0, 0, 3, 3) * Jdelta.transpose() +
-                                 Jrot * P.block(0, 0, 3, 3) * Jrot.transpose();
-            Eigen::Matrix3d Kr            = P.block(0, 0, 3, 3) * Zr.inverse();
-            dT.affine().block(0, 0, 3, 3) = dT.affine().block(0, 0, 3, 3) * geometry::exp_so3(Kr * errr);
-            P.block(0, 0, 3, 3)           = (Eigen::Matrix3d::Identity() - Kr) * P.block(0, 0, 3, 3);
+            Eigen::Matrix3d P_rot         = P.block(0, 0, 3, 3);
+            dT.affine().block(0, 0, 3, 3) = updateRotation(
+                dT.linear(), frame2->getIMU()->getDeltaR(), P_rot, 1000 * frame2->getIMU()->getCov().block(0, 0, 3, 3));
+            P.block(0, 0, 3, 3) = P_rot;
         }
     }
 
     // Init the transformation
     Eigen::Affine3d T_cam1_f1   = matches.at(0).first->getSensor()->getFrame2SensorTransform();
     Eigen::Affine3d T_cam2_f2   = matches.at(0).second->getSensor()->getFrame2SensorTransform();
-    Eigen::Affine3d T_cam2_cam1 = T_cam1_f1 * dT.inverse() * T_cam2_f2.inverse();
+    Eigen::Affine3d T_cam2_cam1 = T_cam2_f2 * dT.inverse() * T_cam1_f1.inverse();
+
+    // The IMU step's covariance is expressed on the error of dT: move it to the error of T_cam2_cam1
+    const Eigen::Matrix<double, 6, 6> J_imu_cam = imuToCameraErrorJacobian(dT, T_cam1_f1);
+    P                                           = J_imu_cam * P * J_imu_cam.transpose();
 
     // We estimate T_cam2_cam1 using the ESKF
     for (uint i = 0; i < p3d_vector.size(); ++i) {
@@ -177,8 +232,10 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
         T_cam2_cam1                     = T_cam2_cam1 * dtau;
     }
 
-    covdT = P;
-    dT    = T_cam1_f1.inverse() * T_cam2_cam1.inverse() * T_cam2_f2;
+    // Covariance of the right perturbation dT E(xi) of the estimate (order: rotation, translation)
+    const Eigen::Matrix<double, 6, 6> J_cam_dT = cameraToFrameErrorJacobian(T_cam2_cam1, T_cam2_f2);
+    covdT                                      = J_cam_dT * P * J_cam_dT.transpose();
+    dT                                         = T_cam1_f1.inverse() * T_cam2_cam1.inverse() * T_cam2_f2;
 
     return true;
 }
@@ -193,67 +250,57 @@ bool ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> &frame
 
 bool ESKFEstimator::refineTriangulation(std::shared_ptr<Frame> &frame) {
 
-    // Get the landmarks
+    // Iterated Kalman update (Gauss-Newton on the prior + all observations) of each initialized landmark of the frame,
+    // with a 1.5 px measurement noise on the normalized image plane. The single update with a 0.1 (normalized,
+    // ~40 px) noise it replaced barely moved the landmark.
     typed_vec_landmarks landmarks = frame->getLandmarks();
-
-    // For all landmarks
     for (auto &landmark_list : landmarks) {
         for (auto &landmark : landmark_list.second) {
             if (!landmark->isInitialized() || landmark->isOutlier())
                 continue;
 
-            Eigen::Matrix3d intrinsic = Eigen::Matrix3d::Identity();
-            Eigen::Matrix2d R         = 0.01 * Eigen::Matrix2d::Identity();
-            Eigen::Matrix3d P         = Eigen::Matrix3d::Identity();
-            Eigen::Vector3d t_w_lmk   = landmark->getPose().translation();
+            const Eigen::Matrix3d intrinsic = Eigen::Matrix3d::Identity();
+            const Eigen::Matrix3d P0        = Eigen::Matrix3d::Identity();
+            const Eigen::Vector3d t_prior   = landmark->getPose().translation();
+            Eigen::Vector3d t_w_lmk         = t_prior;
 
-            // For all features
-            std::vector<std::weak_ptr<AFeature>> featuresAssociatedLandmarks = landmark->getFeatures();
-
-            std::vector<Eigen::Vector2d> err_vec;
-            std::vector<Eigen::MatrixXd> J_p_vec;
-
-            for (std::weak_ptr<AFeature> &wfeature : featuresAssociatedLandmarks) {
-
-                std::shared_ptr<AFeature> feature = wfeature.lock();
-                if (!feature)
-                    continue;
-
-                // Get the camera
-                Eigen::Affine3d T_s_w = feature->getSensor()->getWorld2SensorTransform();
-
-                // Get the bearing vector
-                Eigen::Vector3d ray_cam = feature->getBearingVectors().at(0);
-                Eigen::Vector2d ray_cam_h(ray_cam.x() / ray_cam.z(), ray_cam.y() / ray_cam.z());
-
-                // Projection
-                Eigen::Vector2d proj;
-                Eigen::MatrixXd J_T, J_p;
-                std::tie(proj, J_T, J_p) =
-                    jac_projection(intrinsic, t_w_lmk, T_s_w.linear(), T_s_w.translation(), Eigen::Vector3d::Zero());
-                Eigen::Vector2d err = ray_cam_h - proj;
-
-                err_vec.push_back(err);
-                J_p_vec.push_back(J_p);
+            // Observations still attached to a sensor
+            std::vector<std::shared_ptr<AFeature>> feats;
+            for (std::weak_ptr<AFeature> &wfeature : landmark->getFeatures()) {
+                std::shared_ptr<AFeature> f = wfeature.lock();
+                if (f && f->getSensor())
+                    feats.push_back(f);
             }
+            if (feats.empty())
+                continue;
 
-            int n_feat          = err_vec.size();
-            Eigen::VectorXd err = Eigen::VectorXd::Zero(2 * n_feat);
-            Eigen::MatrixXd J_p = Eigen::MatrixXd::Zero(2 * n_feat, 3);
-            Eigen::MatrixXd K   = Eigen::MatrixXd::Zero(3, 2 * n_feat);
-
-            for (int k = 0; k < n_feat; ++k) {
-                err.segment<2>(2 * k)     = err_vec[k];
-                J_p.block<2, 3>(2 * k, 0) = J_p_vec[k];
+            for (int it = 0; it < 5; it++) {
+                Eigen::VectorXd err = Eigen::VectorXd::Zero(2 * feats.size());
+                Eigen::MatrixXd J_p = Eigen::MatrixXd::Zero(2 * feats.size(), 3);
+                Eigen::VectorXd r_var(2 * feats.size());
+                for (size_t k = 0; k < feats.size(); ++k) {
+                    std::shared_ptr<ImageSensor> cam = feats[k]->getSensor();
+                    Eigen::Affine3d T_s_w            = cam->getWorld2SensorTransform();
+                    Eigen::Vector3d ray_cam          = feats[k]->getBearingVectors().at(0);
+                    Eigen::Vector2d ray_cam_h(ray_cam.x() / ray_cam.z(), ray_cam.y() / ray_cam.z());
+                    Eigen::Vector2d proj;
+                    Eigen::MatrixXd J_T, J_lmk;
+                    std::tie(proj, J_T, J_lmk) = jac_projection(
+                        intrinsic, t_w_lmk, T_s_w.linear(), T_s_w.translation(), Eigen::Vector3d::Zero());
+                    err.segment<2>(2 * k)     = ray_cam_h - proj;
+                    J_p.block<2, 3>(2 * k, 0) = J_lmk;
+                    const double sigma        = 1.5 / cam->getFocal();
+                    r_var.segment<2>(2 * k)   = Eigen::Vector2d::Constant(sigma * sigma);
+                }
+                // MAP step around the current estimate: prior N(t_prior, P0), observations linearized here
+                const Eigen::MatrixXd W = r_var.cwiseInverse().asDiagonal();
+                const Eigen::Matrix3d H = J_p.transpose() * W * J_p + P0.inverse();
+                const Eigen::Vector3d g = J_p.transpose() * W * err - P0.inverse() * (t_w_lmk - t_prior);
+                const Eigen::Vector3d dx = H.ldlt().solve(g);
+                t_w_lmk += dx;
+                if (dx.norm() < 1e-9)
+                    break;
             }
-
-            // Kalman Equations
-            K                  = P * J_p.transpose() * (J_p * P * J_p.transpose() + R).inverse();
-            Eigen::Vector3d dx = K * err;
-            P                  = (Eigen::Matrix3d::Identity() - K * J_p) * P;
-
-            // Update
-            t_w_lmk = t_w_lmk + dx;
 
             // Update the landmark and check if it is valid
             landmark->setPosition(t_w_lmk);
@@ -263,5 +310,4 @@ bool ESKFEstimator::refineTriangulation(std::shared_ptr<Frame> &frame) {
 
     return true;
 }
-
 } // namespace isae

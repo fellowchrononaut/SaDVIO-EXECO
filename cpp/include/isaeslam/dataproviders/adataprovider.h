@@ -4,6 +4,7 @@
 #include <mutex>  // EXECO_QUEUE_MUTEX
 #include <fstream>
 #include <iostream>
+#include <deque>
 #include <queue>
 
 #include <Eigen/Core>
@@ -50,9 +51,17 @@ class ADataProvider {
     std::shared_ptr<IMU> createImuSensor(const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr);
 
     /*!
-     * @brief Create a frame from sensors and timestamp and add it to the queue.
+     * @brief Create a frame from sensors and timestamp (ns) and add it to the queue.
      */
-    void addFrameToTheQueue(std::vector<std::shared_ptr<ASensor>> sensors, double time);
+    void addFrameToTheQueue(std::vector<std::shared_ptr<ASensor>> sensors, unsigned long long time);
+
+    /*!
+     * @brief Number of frames waiting in the queue (non-blocking, unlike next()).
+     */
+    size_t queueSize() {
+        std::lock_guard<std::mutex> lock(_frame_queue_mutex);
+        return _frame_queue.size();
+    }
 
     void addFrameToTheQueue(std::shared_ptr<Frame> frame);
     std::mutex _frame_queue_mutex; // EXECO_QUEUE_MUTEX
@@ -72,6 +81,51 @@ class ADataProvider {
 };
 
 /*!
+ * @brief Merges IMU measurements and images in timestamp order (shared by the offline and ROS readers).
+ *
+ * IMU measurements are given with stamps already in the camera clock (t_cam = t_imu - dt_imu_cam) and
+ * in the body frame. When an image is emitted, all IMU measurements strictly before it are emitted
+ * first as IMU-only frames; the image frame keeps the image stamp and carries an IMU measurement at
+ * that time (the measurement itself if one coincides, else a linear interpolation between the
+ * surrounding ones), so the preintegration ends exactly at the image. An image outside the IMU stream
+ * carries no IMU.
+ */
+class ImuImageMerger {
+  public:
+    explicit ImuImageMerger(std::shared_ptr<ADataProvider> prov) : _prov(prov) {}
+
+    /*!
+     * @brief Queue an IMU measurement. Returns false (and drops it) if its stamp is not increasing.
+     */
+    bool addImu(long long ts, const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr);
+
+    /*!
+     * @brief True when an IMU measurement at or after t has been received.
+     */
+    bool imuReached(long long t) const;
+
+    /*!
+     * @brief Emit the IMU measurements before t_img, then the image frame. Returns false (nothing
+     * emitted for the image) if t_img is not after the last emitted IMU measurement.
+     */
+    bool emitImageFrame(long long t_img, const std::vector<std::shared_ptr<ImageSensor>> &images);
+
+    int droppedImu() const { return _n_dropped; }
+
+  private:
+    struct ImuSample {
+        long long ts;
+        Eigen::Vector3d acc, gyr;
+    };
+
+    std::shared_ptr<ADataProvider> _prov;
+    std::deque<ImuSample> _pending; //!< IMU measurements not yet emitted
+    ImuSample _last;                //!< Last IMU measurement emitted (for interpolation)
+    bool _has_last  = false;
+    int _n_dropped  = 0;
+};
+
+/*!
  * @brief EUROCGrabber class for loading and processing frames from raw data in the EUROC format
  *
  * This class is responsible for loading filenames, timestamps, and IMU data from raw data files in the EUROC format,
@@ -80,7 +134,7 @@ class ADataProvider {
 class EUROCGrabber {
   public:
     EUROCGrabber(std::string folder_path, std::shared_ptr<ADataProvider> prov)
-        : _folder_path(folder_path), _prov(prov) {}
+        : _folder_path(folder_path), _prov(prov), _merger(prov) {}
 
     /*!
      * @brief Load filenames and timestamps from .csv files.
@@ -88,7 +142,13 @@ class EUROCGrabber {
     void load_filenames();
 
     /*!
-     * @brief Add the frame that comes next in the queue of the data provider.
+     * @brief Add the frame that comes next in time to the queue of the data provider.
+     *
+     * Emits the next image (pair) preceded by the IMU measurements before it (see ImuImageMerger). IMU
+     * stamps are moved to the camera clock with the current dt_imu_cam (t_cam = t_imu - dt_imu_cam, as in
+     * the ROS reader), so an online estimate applies to the data read afterwards; the reader stays at most
+     * _max_queued_frames frames ahead of the SLAM. Without an IMU configuration (VO modes) the IMU file is
+     * ignored. Returns false when no image is left.
      */
     bool addNextFrame();
 
@@ -103,14 +163,23 @@ class EUROCGrabber {
     }
 
   private:
-    double _time_tolerance = 0.0025; //!< Time tolerance in seconds to consider measurements as synchronized
-    std::string _folder_path;        //!< Path to the folder containing the dataset
+    std::string _folder_path; //!< Path to the folder containing the dataset
     std::queue<std::string> _cam0_filename_queue, _cam1_filename_queue; //!< Queues for camera filenames
-    std::queue<long long> _cam0_timestamp_queue, _cam1_timestamp_queue,
-        _imu_timestamp_queue;                    //!< Queues for camera and IMU timestamps
-    std::queue<std::shared_ptr<IMU>> _imu_queue; //!< Queue for IMU sensors
+    std::queue<long long> _cam0_timestamp_queue, _cam1_timestamp_queue; //!< Queues for camera timestamps
 
     std::shared_ptr<ADataProvider> _prov; //!< Pointer to the data provider
+    ImuImageMerger _merger;               //!< Orders IMU measurements and images
+
+    /*!
+     * @brief Raw IMU measurement (IMU clock), moved to the merger only when needed so that the current
+     * dt_imu_cam applies (it can be estimated online)
+     */
+    struct RawImu {
+        long long ts;
+        Eigen::Vector3d acc, gyr;
+    };
+    std::deque<RawImu> _imu_raw;
+    size_t _max_queued_frames = 1000; //!< The reader waits while the SLAM has this many frames to process
 };
 
 } // namespace isae

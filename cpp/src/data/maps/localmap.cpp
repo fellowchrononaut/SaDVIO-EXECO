@@ -1,4 +1,5 @@
 #include "isaeslam/data/maps/localmap.h"
+#include <algorithm>
 #include <iostream>
 
 namespace isae {
@@ -11,6 +12,10 @@ void LocalMap::addFrame(std::shared_ptr<isae::Frame> &frame) {
     // A KF has been voted, the frame is added to the local map
     // The frames are ordered from the oldest to the newest
     _localmap_mtx.lock();
+    if (std::find(_frames.begin(), _frames.end(), frame) != _frames.end()) {
+        _localmap_mtx.unlock();
+        return;
+    }
     _frames.push_back(frame);
     _localmap_mtx.unlock();
 

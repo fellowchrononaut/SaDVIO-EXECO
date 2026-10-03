@@ -1,11 +1,20 @@
 #include <fstream>
 #include <gtest/gtest.h>
+
+#include "jacobian_check.h"
 #include <random>
 
 #include "isaeslam/data/frame.h"
 #include "isaeslam/data/maps/localmap.h"
 #include "isaeslam/data/sensors/IMU.h"
+#include "isaeslam/dataproviders/adataprovider.h"
 #include "isaeslam/optimizers/AngularAdjustmentCERESAnalytic.h"
+#include "isaeslam/optimizers/BundleAdjustmentCERESAnalytic.h"
+#include "isaeslam/optimizers/BundleAdjustmentCERESNumeric.h"
+#include "isaeslam/data/features/Point2D.h"
+#include "isaeslam/data/landmarks/Point3D.h"
+#include "isaeslam/data/sensors/Camera.h"
+#include <functional>
 
 namespace isae {
 
@@ -57,6 +66,7 @@ void write_imu_data(double ts, Eigen::Vector3d acc) {
 class ImuTest : public testing::Test {
   public:
     void SetUp() override {
+        std::srand(12345u); // same random state for every test, whatever the run order
         // Set Imu Config
         _imu_cfg             = std::shared_ptr<imu_config>(new imu_config());
         _imu_cfg->gyr_noise  = (0.5 * M_PI) / (180 * 60);
@@ -418,7 +428,6 @@ TEST_F(ImuTest, predictionPositionVelocity) {
     double lambda[1] = {0.0};
 
     std::vector<double *> parameters_blocks;
-    std::vector<const ceres::Manifold *> *manifs = nullptr;
     parameters_blocks.push_back(dX_i.values());
     parameters_blocks.push_back(dX_j.values());
     parameters_blocks.push_back(dvi.values());
@@ -446,20 +455,9 @@ TEST_F(ImuTest, predictionPositionVelocity) {
     cost_fct->Evaluate(parameters_blocks.data(), residuals.data(), raw_jacobians);
     ASSERT_NEAR(residuals.norm(), 0, 1e-3);
 
-    // Check the jacss
-    ceres::NumericDiffOptions numeric_diff_options;
-    ceres::GradientChecker gradient_checker(cost_fct, manifs, numeric_diff_options);
-    ceres::GradientChecker::ProbeResults results;
-    if (!gradient_checker.Probe(parameters_blocks.data(), 1e-5, &results)) {
-        LOG(ERROR) << "An error has occurred:\n" << results.error_log;
-    }
-
-    ASSERT_NEAR((results.local_jacobians.at(0) - results.jacobians.at(0)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(1) - results.jacobians.at(1)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(2) - results.jacobians.at(2)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(3) - results.jacobians.at(3)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(4) - results.jacobians.at(4)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(5) - results.jacobians.at(5)).sum(), 0, 1e-5);
+    // Check the Jacobians against finite differences, at zero and away from zero
+    EXPECT_TRUE(isae_test::JacobiansMatch(*cost_fct, parameters_blocks));
+    EXPECT_TRUE(isae_test::JacobiansMatchAtRandomPoint(*cost_fct, parameters_blocks, 0.05));
 
     // Test Inertial optimization
     std::shared_ptr<LocalMap> local_map = std::make_shared<LocalMap>(0, 10, 0);
@@ -501,7 +499,6 @@ TEST_F(ImuTest, predictionPositionVelocity) {
 
     double r_w_i[2] = {0.0, 0.0};
     std::vector<double *> parameters_blocks1;
-    std::vector<const ceres::Manifold *> *manifs1 = nullptr;
     parameters_blocks1.push_back(r_w_i);
     parameters_blocks1.push_back(dvi.values());
     parameters_blocks1.push_back(dvj.values());
@@ -509,19 +506,9 @@ TEST_F(ImuTest, predictionPositionVelocity) {
     parameters_blocks1.push_back(dbg.values());
     parameters_blocks1.push_back(lambda);
 
-    // Check the jacss
-    ceres::GradientChecker gradient_checker1(cost_fct1, manifs1, numeric_diff_options);
-    ceres::GradientChecker::ProbeResults results1;
-    if (!gradient_checker1.Probe(parameters_blocks1.data(), 1e-5, &results1)) {
-        LOG(ERROR) << "An error has occurred:\n" << results1.error_log;
-    }
-
-    ASSERT_NEAR((results.local_jacobians.at(0) - results.jacobians.at(0)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(1) - results.jacobians.at(1)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(2) - results.jacobians.at(2)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(3) - results.jacobians.at(3)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(4) - results.jacobians.at(4)).sum(), 0, 1e-5);
-    ASSERT_NEAR((results.local_jacobians.at(5) - results.jacobians.at(5)).sum(), 0, 1e-5);
+    // Check the Jacobians against finite differences, at zero and away from zero
+    EXPECT_TRUE(isae_test::JacobiansMatch(*cost_fct1, parameters_blocks1));
+    EXPECT_TRUE(isae_test::JacobiansMatchAtRandomPoint(*cost_fct1, parameters_blocks1, 0.05));
 
     // Solve
     ceres::Problem problem;
@@ -992,6 +979,716 @@ TEST_F(ImuTest, TestPreInteg) {
     ASSERT_NEAR((_imu2->getDeltaR() - geometry::exp_so3(expectedDeltaR2)).sum(), 0, 0.000001);
     ASSERT_EQ((_imu2->getDeltaP() - expectedDeltaP2).norm(), 0);
     ASSERT_EQ((_imu2->getDeltaV() - expectedDeltaV2).norm(), 0);
+}
+
+/*!
+ * @brief A preintegration chain from a keyframe over a rotating, accelerating motion.
+ *
+ * The frames are kept alive here because IMUs only hold weak pointers to them.
+ */
+struct ImuChain {
+    std::vector<std::shared_ptr<Frame>> frames;
+    std::shared_ptr<IMU> imu_i, imu_j;
+};
+
+static ImuChain integrateChain(const std::shared_ptr<imu_config> &cfg,
+                               const Eigen::Vector3d &ba,
+                               const Eigen::Vector3d &bg,
+                               int n_samples  = 40,
+                               int gap_after  = -1,
+                               double gap_s   = 0) {
+    const double dt = 1.0 / cfg->rate_hz;
+    auto acc_at     = [](int k) { return Eigen::Vector3d(0.4 * std::sin(0.3 * k), 0.2 + 0.1 * std::cos(0.2 * k), 9.6); };
+    auto gyr_at     = [](int k) { return Eigen::Vector3d(0.5 * std::sin(0.1 * k), 0.3, -0.4 * std::cos(0.15 * k)); };
+
+    ImuChain c;
+    Eigen::Affine3d T_w_i              = Eigen::Affine3d::Identity();
+    T_w_i.linear()                     = geometry::exp_so3(Eigen::Vector3d(0.2, -0.1, 0.3));
+    T_w_i.translation()                = Eigen::Vector3d(1.0, -2.0, 0.5);
+    std::shared_ptr<IMU> imu           = std::make_shared<IMU>(cfg, acc_at(0), gyr_at(0));
+    std::shared_ptr<Frame> kf          = std::make_shared<Frame>();
+    kf->init(imu, 1e9);
+    kf->setWorld2FrameTransform(T_w_i.inverse());
+    kf->setKeyFrame();
+    imu->setLastKF(kf);
+    imu->setBa(ba);
+    imu->setBg(bg);
+    imu->setVelocity(Eigen::Vector3d(0.3, -0.2, 0.1));
+    c.frames.push_back(kf);
+    c.imu_i = imu;
+
+    std::shared_ptr<IMU> last = imu;
+    for (int k = 1; k <= n_samples; k++) {
+        std::shared_ptr<IMU> cur = std::make_shared<IMU>(cfg, acc_at(k), gyr_at(k));
+        cur->setLastIMU(last);
+        cur->setLastKF(kf);
+        std::shared_ptr<Frame> f = std::make_shared<Frame>();
+        double t = 1.0 + k * dt + ((gap_after >= 0 && k > gap_after) ? gap_s : 0.0);
+        f->init(cur, (unsigned long long)(t * 1e9));
+        cur->processIMU();
+        c.frames.push_back(f);
+        last = cur;
+    }
+    c.imu_j = last;
+    return c;
+}
+
+TEST_F(ImuTest, biasJacobiansMatchReintegration) {
+
+    // The preintegration bias Jacobians must predict how the deltas change when the chain is
+    // re-integrated with a slightly different bias (independent of the Jacobian formulas).
+    const Eigen::Vector3d ba(0.05, -0.02, 0.03), bg(0.01, -0.02, 0.015);
+    ImuChain ref = integrateChain(_imu_cfg, ba, bg);
+    const double h = 1e-6;
+
+    for (int axis = 0; axis < 3; axis++) {
+        Eigen::Vector3d e = Eigen::Vector3d::Zero();
+        e(axis)           = h;
+
+        ImuChain cg = integrateChain(_imu_cfg, ba, bg + e);
+        Eigen::Vector3d num_dR_dbg = geometry::log_so3(ref.imu_j->getDeltaR().transpose() * cg.imu_j->getDeltaR()) / h;
+        Eigen::Vector3d num_dv_dbg = (cg.imu_j->getDeltaV() - ref.imu_j->getDeltaV()) / h;
+        Eigen::Vector3d num_dp_dbg = (cg.imu_j->getDeltaP() - ref.imu_j->getDeltaP()) / h;
+        EXPECT_LT((num_dR_dbg - ref.imu_j->_J_dR_bg.col(axis)).norm(), 1e-4) << "dR/dbg axis " << axis;
+        EXPECT_LT((num_dv_dbg - ref.imu_j->_J_dv_bg.col(axis)).norm(), 1e-4) << "dv/dbg axis " << axis;
+        EXPECT_LT((num_dp_dbg - ref.imu_j->_J_dp_bg.col(axis)).norm(), 1e-4) << "dp/dbg axis " << axis;
+
+        ImuChain ca = integrateChain(_imu_cfg, ba + e, bg);
+        Eigen::Vector3d num_dv_dba = (ca.imu_j->getDeltaV() - ref.imu_j->getDeltaV()) / h;
+        Eigen::Vector3d num_dp_dba = (ca.imu_j->getDeltaP() - ref.imu_j->getDeltaP()) / h;
+        EXPECT_LT((num_dv_dba - ref.imu_j->_J_dv_ba.col(axis)).norm(), 1e-4) << "dv/dba axis " << axis;
+        EXPECT_LT((num_dp_dba - ref.imu_j->_J_dp_ba.col(axis)).norm(), 1e-4) << "dp/dba axis " << axis;
+    }
+}
+
+TEST_F(ImuTest, imuFactorJacobiansAwayFromZero) {
+
+    // Issue 12: the pose-j rotation block is only right at a zero increment.
+    ImuChain c = integrateChain(_imu_cfg, Eigen::Vector3d(0.05, -0.02, 0.03), Eigen::Vector3d(0.01, -0.02, 0.015));
+    ceres::CostFunction *cost_fct = new IMUFactor(c.imu_i, c.imu_j);
+
+    PoseParametersBlock dX_i(Eigen::Affine3d::Identity()), dX_j(Eigen::Affine3d::Identity());
+    PointXYZParametersBlock dvi(Eigen::Vector3d::Zero()), dvj(Eigen::Vector3d::Zero());
+    PointXYZParametersBlock dba(Eigen::Vector3d::Zero()), dbg(Eigen::Vector3d::Zero());
+    std::vector<double *> parameters_blocks = {
+        dX_i.values(), dX_j.values(), dvi.values(), dvj.values(), dba.values(), dbg.values()};
+
+    EXPECT_NEAR(isae_test::ResidualNorm(*cost_fct, parameters_blocks), 0, 1e-3);
+    EXPECT_TRUE(isae_test::JacobiansMatch(*cost_fct, parameters_blocks));
+    EXPECT_TRUE(isae_test::JacobiansMatchAtRandomPoint(*cost_fct, parameters_blocks, 0.05, 1));
+    EXPECT_TRUE(isae_test::JacobiansMatchAtRandomPoint(*cost_fct, parameters_blocks, 0.05, 2));
+    delete cost_fct;
+}
+
+TEST_F(ImuTest, imuFactorInitJacobiansAtNonUnitScale) {
+
+    // Issue 3: the scale Jacobian omits exp(lambda), which is invisible at lambda = 0.
+    ImuChain c = integrateChain(_imu_cfg, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    ceres::CostFunction *cost_fct = new IMUFactorInit(c.imu_i, c.imu_j);
+
+    double r_w_i[2]  = {0.02, -0.03};
+    double lambda[1] = {std::log(3.0)};
+    PointXYZParametersBlock dvi(Eigen::Vector3d::Zero()), dvj(Eigen::Vector3d::Zero());
+    PointXYZParametersBlock dba(Eigen::Vector3d::Zero()), dbg(Eigen::Vector3d::Zero());
+    std::vector<double *> parameters_blocks = {r_w_i, dvi.values(), dvj.values(), dba.values(), dbg.values(), lambda};
+
+    EXPECT_TRUE(isae_test::JacobiansMatch(*cost_fct, parameters_blocks));
+    EXPECT_TRUE(isae_test::JacobiansMatchAtRandomPoint(*cost_fct, parameters_blocks, 0.05, 3));
+    delete cost_fct;
+}
+
+TEST_F(ImuTest, imuPriorJacobiansWithDenseWhitening) {
+
+    // Issue 13: every Jacobian block must carry the square-root information, which is dense after
+    // sparsification.
+    Eigen::Affine3d T       = Eigen::Affine3d::Identity();
+    T.linear()              = geometry::exp_so3(Eigen::Vector3d(0.3, -0.2, 0.1));
+    T.translation()         = Eigen::Vector3d(0.5, 1.0, -0.4);
+    Eigen::Affine3d T_prior = T * geometry::se3_Vec6dtoRT((Vector6d() << 0.01, -0.02, 0.01, 0.05, 0.0, -0.03).finished());
+
+    std::mt19937 gen(7);
+    std::uniform_real_distribution<double> dist(-1, 1);
+    Eigen::MatrixXd A(15, 15);
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            A(i, j) = dist(gen);
+    Eigen::MatrixXd sqrt_inf = A + 5 * Eigen::MatrixXd::Identity(15, 15);
+
+    ceres::CostFunction *cost_fct = new IMUPriordx(T,
+                                                   T_prior,
+                                                   Eigen::Vector3d(0.1, 0.2, 0.3),
+                                                   Eigen::Vector3d(0.12, 0.18, 0.31),
+                                                   Eigen::Vector3d(0.01, 0.0, -0.01),
+                                                   Eigen::Vector3d::Zero(),
+                                                   Eigen::Vector3d(0.001, 0.002, 0.0),
+                                                   Eigen::Vector3d::Zero(),
+                                                   sqrt_inf);
+
+    PoseParametersBlock dX(Eigen::Affine3d::Identity());
+    PointXYZParametersBlock dv(Eigen::Vector3d::Zero()), dba(Eigen::Vector3d::Zero()), dbg(Eigen::Vector3d::Zero());
+    std::vector<double *> parameters_blocks = {dX.values(), dv.values(), dba.values(), dbg.values()};
+
+    EXPECT_TRUE(isae_test::JacobiansMatch(*cost_fct, parameters_blocks));
+    EXPECT_TRUE(isae_test::JacobiansMatchAtRandomPoint(*cost_fct, parameters_blocks, 0.05, 4));
+    delete cost_fct;
+}
+
+TEST_F(ImuTest, imuDataGapsAreIntegratedAndNotTurnedIntoFactors) {
+
+    // Issue 18: a step longer than 1 s used to be replaced by 1 / rate, so the preintegration covered
+    // less time than the factor built on it.
+    const Eigen::Vector3d ba = Eigen::Vector3d::Zero(), bg = Eigen::Vector3d::Zero();
+    const double dt          = 1.0 / _imu_cfg->rate_hz;
+    ImuChain ok  = integrateChain(_imu_cfg, ba, bg, 40);
+    ImuChain gap = integrateChain(_imu_cfg, ba, bg, 40, 20, 2.0);
+
+    EXPECT_EQ(ok.imu_j->getGapSteps(), 0);
+    EXPECT_NEAR(ok.imu_j->getIntegratedDt(), 40 * dt, 1e-9);
+    EXPECT_EQ(gap.imu_j->getGapSteps(), 1);
+    EXPECT_TRUE(ok.imu_j->hasValidCovariance());
+    EXPECT_FALSE(std::make_shared<IMU>(_imu_cfg, _acc, _gyr)->hasValidCovariance()) << "zero covariance";
+    EXPECT_NEAR(gap.imu_j->getIntegratedDt(), 40 * dt + 2.0, 1e-9);
+
+    // No preintegration factor across the gap, one otherwise
+    for (ImuChain *c : {&ok, &gap}) {
+        std::shared_ptr<Frame> kf_i = c->frames.front(), kf_j = c->frames.back();
+        kf_i->setPrior(kf_i->getWorld2FrameTransform(), 100 * Vector6d::Ones());
+        kf_j->setPrior(kf_j->getWorld2FrameTransform(), 100 * Vector6d::Ones());
+        kf_j->setKeyFrame();
+        std::shared_ptr<LocalMap> local_map = std::make_shared<LocalMap>(0, 10, 0);
+        local_map->addFrame(kf_i);
+        local_map->addFrame(kf_j);
+        isae::AngularAdjustmentCERESAnalytic ceres_ba;
+        ceres_ba.localMapVIOptimization(local_map, 0);
+        EXPECT_EQ(ceres_ba.getLastVIStats().n_imu_factors, c == &ok ? 1u : 0u);
+    }
+}
+
+
+/*!
+ * @brief Simulated smooth motion with keyframes at their true poses and an IMU chain whose
+ * measurements integrate exactly to the motion (zero-order hold), with the given biases.
+ */
+struct SimKFs {
+    std::vector<std::shared_ptr<Frame>> frames, kfs;
+    std::vector<Eigen::Vector3d> kf_velocities;
+    std::shared_ptr<LocalMap> map;
+};
+
+static Eigen::Vector3d simP(double t) {
+    return Eigen::Vector3d(0.5 * std::sin(0.8 * t), 0.3 * std::cos(0.6 * t) - 0.3, 0.1 * std::sin(1.1 * t));
+}
+static Eigen::Vector3d simV(double t) {
+    return Eigen::Vector3d(0.4 * std::cos(0.8 * t), -0.18 * std::sin(0.6 * t), 0.11 * std::cos(1.1 * t));
+}
+static Eigen::Matrix3d simR(double t) {
+    return geometry::exp_so3(Eigen::Vector3d(0.3 * std::sin(0.5 * t), 0.2 * std::cos(0.7 * t) - 0.2, 0.4 * t));
+}
+
+static SimKFs simulateKFs(const std::shared_ptr<imu_config> &cfg,
+                          const Eigen::Vector3d &ba_true,
+                          const Eigen::Vector3d &bg_true,
+                          int n_kf     = 10,
+                          int kf_every = 60) {
+    const double dt = 1.0 / cfg->rate_hz;
+    auto meas       = [&](int k, Eigen::Vector3d &acc, Eigen::Vector3d &gyr) {
+        double t = k * dt;
+        gyr      = geometry::log_so3(simR(t).transpose() * simR(t + dt)) / dt + bg_true;
+        acc      = simR(t).transpose() * ((simV(t + dt) - simV(t)) / dt - g) + ba_true;
+    };
+    auto pose = [&](double t) {
+        Eigen::Affine3d T_w_f = Eigen::Affine3d::Identity();
+        T_w_f.linear()        = simR(t);
+        T_w_f.translation()   = simP(t);
+        return T_w_f;
+    };
+
+    SimKFs sim;
+    sim.map = std::make_shared<LocalMap>(0, n_kf + 1, 0);
+    Eigen::Vector3d acc, gyr;
+    meas(0, acc, gyr);
+    std::shared_ptr<IMU> imu  = std::make_shared<IMU>(cfg, acc, gyr);
+    std::shared_ptr<Frame> kf = std::make_shared<Frame>();
+    kf->init(imu, 1e9);
+    kf->setWorld2FrameTransform(pose(0).inverse());
+    kf->setKeyFrame();
+    imu->setLastKF(kf);
+    sim.frames.push_back(kf);
+    sim.kfs.push_back(kf);
+    sim.kf_velocities.push_back(simV(0));
+    sim.map->addFrame(kf);
+
+    std::shared_ptr<IMU> last = imu;
+    for (int k = 1; k <= (n_kf - 1) * kf_every; k++) {
+        meas(k, acc, gyr);
+        std::shared_ptr<IMU> cur = std::make_shared<IMU>(cfg, acc, gyr);
+        cur->setLastIMU(last);
+        cur->setLastKF(kf);
+        std::shared_ptr<Frame> f = std::make_shared<Frame>();
+        f->init(cur, (unsigned long long)(1e9 + k * dt * 1e9 + 0.5));
+        cur->processIMU();
+        sim.frames.push_back(f);
+        if (k % kf_every == 0) {
+            f->setWorld2FrameTransform(pose(k * dt).inverse());
+            f->setKeyFrame();
+            sim.map->addFrame(f);
+            sim.kfs.push_back(f);
+            sim.kf_velocities.push_back(simV(k * dt));
+            kf = f;
+        }
+        last = cur;
+    }
+    return sim;
+}
+
+TEST_F(ImuTest, viInitRecoversGyroBiasAndVelocities) {
+
+    // Issue 2: VIInit applied the accelerometer bias change twice and dropped the gyro bias change.
+    const Eigen::Vector3d ba_true(0.0, 0.0, 0.0), bg_true(0.02, -0.015, 0.01);
+    SimKFs sim = simulateKFs(_imu_cfg, ba_true, bg_true);
+
+    isae::AngularAdjustmentCERESAnalytic ceres_ba;
+    Eigen::Matrix3d R_w_i;
+    ceres_ba.VIInit(sim.map, R_w_i, false);
+
+    EXPECT_LT(geometry::log_so3(R_w_i).norm(), 1e-2) << "the world was already gravity-aligned";
+    for (size_t i = 0; i < sim.kfs.size(); i++) {
+        std::shared_ptr<IMU> imu = sim.kfs[i]->getIMU();
+        EXPECT_LT((imu->getBg() - bg_true).norm(), 2e-3) << "KF " << i << " bg " << imu->getBg().transpose();
+        EXPECT_LT((imu->getBa() - ba_true).norm(), 2e-2) << "KF " << i << " ba " << imu->getBa().transpose();
+        EXPECT_LT((imu->getVelocity() - sim.kf_velocities[i]).norm(), 5e-2) << "KF " << i;
+    }
+
+    // The deltas must have been corrected to the new bias: the IMU factors are then consistent with
+    // the true states (residual small compared to the uncorrected deltas)
+    for (size_t i = 1; i < sim.kfs.size(); i++) {
+        Eigen::Matrix3d dR_true = sim.kfs[i - 1]->getWorld2FrameTransform().rotation() *
+                                  sim.kfs[i]->getFrame2WorldTransform().rotation();
+        EXPECT_LT(geometry::log_so3(sim.kfs[i]->getIMU()->getDeltaR().transpose() * dR_true).norm(), 2e-3)
+            << "KF " << i;
+    }
+}
+
+TEST_F(ImuTest, viInitModelMatchesTiltedScaledWorld) {
+
+    // Issue 3: the inertial-initialization factor must vanish at the true gravity tilt, scale,
+    // velocities and biases, when the KF poses come from a tilted, scaled visual world.
+    const Eigen::Vector3d bg_true(0.01, -0.02, 0.005), w_true(0.08, -0.05, 0);
+    const double s_true        = 2.5;
+    const Eigen::Matrix3d R_wi = geometry::exp_so3(w_true);
+    SimKFs sim                 = simulateKFs(_imu_cfg, Eigen::Vector3d::Zero(), bg_true);
+
+    // Visual world: p_w = R_wi p_I / s, R_w_f = R_wi R_I_f (VIInit maps it back with p_I = s R_wi^T p_w)
+    std::vector<Eigen::Vector3d> p_true;
+    for (auto &kf : sim.kfs) {
+        Eigen::Affine3d T_I_f = kf->getFrame2WorldTransform(), T_w_f = Eigen::Affine3d::Identity();
+        p_true.push_back(T_I_f.translation());
+        T_w_f.linear()      = R_wi * T_I_f.linear();
+        T_w_f.translation() = R_wi * T_I_f.translation() / s_true;
+        kf->setWorld2FrameTransform(T_w_f.inverse());
+    }
+
+    for (size_t i = 1; i < sim.kfs.size(); i++) {
+        std::shared_ptr<IMU> imu_i = sim.kfs[i - 1]->getIMU(), imu_j = sim.kfs[i]->getIMU();
+        IMUFactorInit factor(imu_i, imu_j);
+        double r_wi[2]   = {w_true.x(), w_true.y()};
+        double lambda[1] = {std::log(s_true)};
+        Eigen::Vector3d dvi = sim.kf_velocities[i - 1] - imu_i->getVelocity();
+        Eigen::Vector3d dvj = sim.kf_velocities[i] - imu_j->getVelocity();
+        Eigen::Vector3d dba = Eigen::Vector3d::Zero(), dbg = bg_true - imu_i->getBg();
+        std::vector<double *> params = {r_wi, dvi.data(), dvj.data(), dba.data(), dbg.data(), lambda};
+        EXPECT_LT(isae_test::ResidualNorm(factor, params), 0.1) << "KF pair " << i;
+    }
+
+    // End to end: the initialization recovers scale and tilt, and the positions become the true ones
+    isae::AngularAdjustmentCERESAnalytic ceres_ba;
+    Eigen::Matrix3d R_w_i;
+    double s = ceres_ba.VIInit(sim.map, R_w_i, true);
+    EXPECT_NEAR(s, s_true, 0.01 * s_true);
+    EXPECT_LT(geometry::log_so3(R_w_i.transpose() * R_wi).norm(), 1e-2);
+    for (size_t i = 0; i < sim.kfs.size(); i++)
+        EXPECT_LT((sim.kfs[i]->getFrame2WorldTransform().translation() - p_true[i]).norm(), 1e-2) << "KF " << i;
+}
+
+TEST(ImuInitTest, staticInitializationAlignsGravityAndGuessesBiases) {
+
+    // Level start: the old Rodrigues formula normalized a zero cross product (NaN orientation)
+    std::vector<Eigen::Vector3d> accs(10, Eigen::Vector3d(0, 0, 9.81)), gyrs(10, Eigen::Vector3d(0.01, 0, -0.02));
+    Eigen::Matrix3d R;
+    Eigen::Vector3d ba, bg;
+    EXPECT_TRUE(staticImuInitialization(accs, gyrs, R, ba, bg));
+    ASSERT_TRUE(R.allFinite());
+    EXPECT_NEAR((R * Eigen::Vector3d(0, 0, 9.81) - Eigen::Vector3d(0, 0, 9.81)).norm(), 0, 1e-9);
+    EXPECT_NEAR(ba.norm(), 0, 1e-9);
+    EXPECT_NEAR((bg - Eigen::Vector3d(0.01, 0, -0.02)).norm(), 0, 1e-12);
+
+    // Upside down
+    accs.assign(10, Eigen::Vector3d(0, 0, -9.81));
+    EXPECT_TRUE(staticImuInitialization(accs, gyrs, R, ba, bg));
+    ASSERT_TRUE(R.allFinite());
+    EXPECT_NEAR((R * Eigen::Vector3d(0, 0, -9.81) - Eigen::Vector3d(0, 0, 9.81)).norm(), 0, 1e-9);
+
+    // Tilted, with an accelerometer bias along gravity: the measured up direction maps to world up
+    const Eigen::Matrix3d R_true = geometry::exp_so3(Eigen::Vector3d(0.3, -0.2, 0.5));
+    const Eigen::Vector3d up_f   = R_true.transpose() * Eigen::Vector3d(0, 0, 1);
+    accs.assign(10, up_f * 9.91);
+    EXPECT_TRUE(staticImuInitialization(accs, gyrs, R, ba, bg));
+    EXPECT_NEAR((R * up_f - Eigen::Vector3d(0, 0, 1)).norm(), 0, 1e-9);
+    EXPECT_NEAR((ba - 0.1 * up_f).norm(), 0, 1e-9);
+
+    // Moving: no bias guess
+    for (int i = 0; i < 10; i++)
+        gyrs[i] = Eigen::Vector3d(0.3 * std::sin(i), 0, 0);
+    EXPECT_FALSE(staticImuInitialization(accs, gyrs, R, ba, bg));
+    EXPECT_EQ(ba.norm(), 0);
+    EXPECT_EQ(bg.norm(), 0);
+}
+
+TEST_F(ImuTest, imuFactorAccountsForBiasChangesAfterIntegration) {
+
+    // Issue 4: the back end changes the bias of KF i after its preintegration was computed. The factor
+    // must correct the deltas for (bias of KF i) - (linearization bias), not ignore it.
+    const Eigen::Vector3d b0a(0.05, -0.02, 0.03), b0g(0.01, -0.02, 0.015);
+    const Eigen::Vector3d da(0.004, -0.003, 0.002), dg(0.0015, 0.001, -0.002);
+    ImuChain c0 = integrateChain(_imu_cfg, b0a, b0g);           // integrated at b0
+    ImuChain c1 = integrateChain(_imu_cfg, b0a + da, b0g + dg); // reference: integrated at b0 + d
+    EXPECT_NEAR((c0.imu_j->getBgLin() - b0g).norm(), 0, 1e-12);
+
+    // Same KF poses and velocities for both (those of c1, where the reference factor is ~0)
+    c0.frames.front()->setWorld2FrameTransform(c1.frames.front()->getWorld2FrameTransform());
+    c0.frames.back()->setWorld2FrameTransform(c1.frames.back()->getWorld2FrameTransform());
+    c0.imu_i->setVelocity(c1.imu_i->getVelocity());
+    c0.imu_j->setVelocity(c1.imu_j->getVelocity());
+    c0.imu_i->setBa(b0a + da); // the back end moved the bias of KF i
+    c0.imu_i->setBg(b0g + dg);
+
+    PoseParametersBlock dX_i(Eigen::Affine3d::Identity()), dX_j(Eigen::Affine3d::Identity());
+    PointXYZParametersBlock dvi(Eigen::Vector3d::Zero()), dvj(Eigen::Vector3d::Zero());
+    PointXYZParametersBlock dba(Eigen::Vector3d::Zero()), dbg(Eigen::Vector3d::Zero());
+    std::vector<double *> params = {dX_i.values(), dX_j.values(), dvi.values(), dvj.values(), dba.values(), dbg.values()};
+
+    IMUFactor f0(c0.imu_i, c0.imu_j), f1(c1.imu_i, c1.imu_j);
+    Eigen::Matrix<double, 9, 1> r0, r1;
+    f0.Evaluate(params.data(), r0.data(), nullptr);
+    f1.Evaluate(params.data(), r1.data(), nullptr);
+
+    // Ignoring the bias change (previous behaviour) = an increment cancelling it
+    Eigen::Map<Eigen::Vector3d>(dba.values()) = -da;
+    Eigen::Map<Eigen::Vector3d>(dbg.values()) = -dg;
+    Eigen::Matrix<double, 9, 1> r_ignored;
+    f0.Evaluate(params.data(), r_ignored.data(), nullptr);
+
+    EXPECT_LT((r0 - r1).norm(), 0.02 * (r_ignored - r1).norm())
+        << "first-order correction " << (r0 - r1).norm() << " vs ignored " << (r_ignored - r1).norm();
+}
+
+TEST_F(ImuTest, repropagateEqualsFreshIntegration) {
+
+    const Eigen::Vector3d b0a(0.05, -0.02, 0.03), b0g(0.01, -0.02, 0.015);
+    const Eigen::Vector3d b1a(0.25, 0.1, -0.1), b1g(0.04, 0.03, -0.05); // beyond first order
+    ImuChain c0 = integrateChain(_imu_cfg, b0a, b0g);
+    ImuChain c1 = integrateChain(_imu_cfg, b1a, b1g);
+
+    ASSERT_TRUE(c0.imu_j->repropagate(b1a, b1g));
+    EXPECT_NEAR((c0.imu_j->getDeltaR() - c1.imu_j->getDeltaR()).norm(), 0, 1e-12);
+    EXPECT_NEAR((c0.imu_j->getDeltaV() - c1.imu_j->getDeltaV()).norm(), 0, 1e-12);
+    EXPECT_NEAR((c0.imu_j->getDeltaP() - c1.imu_j->getDeltaP()).norm(), 0, 1e-12);
+    EXPECT_NEAR((c0.imu_j->getCov() - c1.imu_j->getCov()).norm(), 0, 1e-12);
+    EXPECT_NEAR((c0.imu_j->_J_dR_bg - c1.imu_j->_J_dR_bg).norm(), 0, 1e-12);
+    EXPECT_NEAR((c0.imu_j->_J_dp_bg - c1.imu_j->_J_dp_bg).norm(), 0, 1e-12);
+    EXPECT_NEAR(c0.imu_j->getIntegratedDt(), c1.imu_j->getIntegratedDt(), 1e-12);
+    EXPECT_NEAR((c0.imu_j->getBgLin() - b1g).norm(), 0, 1e-12);
+}
+
+TEST_F(ImuTest, droppingAKeyframeKeepsItsImuInformation) {
+
+    // Issue 5: when a low-parallax KF is removed, the next KF's preintegration is integrated from the KF
+    // before it, instead of cutting the IMU link.
+    const Eigen::Vector3d ba(0.02, -0.01, 0.03), bg(0.01, 0.005, -0.01);
+    SimKFs three = simulateKFs(_imu_cfg, ba, bg, 3, 60); // KFs at samples 0, 60, 120
+    SimKFs two   = simulateKFs(_imu_cfg, ba, bg, 2, 120); // KFs at samples 0, 120: the reference
+
+    std::shared_ptr<Frame> kf0 = three.kfs[0], kf1 = three.kfs[1], kf2 = three.kfs[2];
+    EXPECT_TRUE(AOptimizer::imuFactorUsable(kf1, kf2));
+    EXPECT_FALSE(AOptimizer::imuFactorUsable(kf0, kf2));
+
+    kf2->getIMU()->setLastKF(kf0);
+    ASSERT_TRUE(kf2->getIMU()->repropagate(kf0->getIMU()->getBa(), kf0->getIMU()->getBg()));
+    std::shared_ptr<IMU> ref = two.kfs[1]->getIMU();
+    EXPECT_NEAR((kf2->getIMU()->getDeltaR() - ref->getDeltaR()).norm(), 0, 1e-12);
+    EXPECT_NEAR((kf2->getIMU()->getDeltaV() - ref->getDeltaV()).norm(), 0, 1e-12);
+    EXPECT_NEAR((kf2->getIMU()->getDeltaP() - ref->getDeltaP()).norm(), 0, 1e-12);
+    EXPECT_NEAR((kf2->getIMU()->getCov() - ref->getCov()).norm(), 0, 1e-12);
+    EXPECT_NEAR(kf2->getIMU()->getIntegratedDt(), ref->getIntegratedDt(), 1e-12);
+
+    // The factor admission follows the new link
+    EXPECT_TRUE(AOptimizer::imuFactorUsable(kf0, kf2));
+    EXPECT_FALSE(AOptimizer::imuFactorUsable(kf1, kf2));
+}
+
+/*!
+ * @brief Simulated KFs (simulateKFs) with cameras (stereo: left at the frame origin, right 10 cm aside) and a grid
+ * of landmarks in front of each KF, observed by it and the next three KFs where they project. Features are the
+ * exact projections, so the true states are the optimum of every window problem.
+ */
+struct VIScene {
+    SimKFs sim;
+    std::shared_ptr<LocalMap> map;
+    std::vector<Eigen::Affine3d> T_f_w_true;
+};
+
+static VIScene buildVIScene(const std::shared_ptr<imu_config> &cfg,
+                            bool stereo,
+                            int n_kf,
+                            double pixel_noise = 0,
+                            size_t window   = 0) {
+    VIScene sc;
+    std::mt19937 rng(42);
+    std::normal_distribution<double> noise(0, pixel_noise > 0 ? pixel_noise : 1);
+    sc.sim = simulateKFs(cfg, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), n_kf, 60);
+    std::vector<std::shared_ptr<Frame>> &kfs = sc.sim.kfs;
+
+    Eigen::Matrix3d K;
+    K << 300, 0, 400, 0, 300, 400, 0, 0, 1;
+    for (auto &kf : kfs) {
+        std::vector<std::shared_ptr<ImageSensor>> cams;
+        cams.push_back(std::make_shared<Camera>(cv::Mat::zeros(800, 800, CV_8U), K));
+        if (stereo)
+            cams.push_back(std::make_shared<Camera>(cv::Mat::zeros(800, 800, CV_8U), K));
+        kf->init(cams, kf->getTimestamp()); // keeps the IMU, adds the cameras
+        cams[0]->setFrame2SensorTransform(Eigen::Affine3d::Identity());
+        if (stereo) {
+            Eigen::Affine3d T_r_f   = Eigen::Affine3d::Identity();
+            T_r_f.translation().x() = -0.1;
+            cams[1]->setFrame2SensorTransform(T_r_f);
+        }
+        sc.T_f_w_true.push_back(kf->getWorld2FrameTransform());
+    }
+
+    for (size_t i = 0; i < kfs.size(); i++) {
+        for (int a = -2; a <= 2; a++) {
+            for (int b = -2; b <= 2; b++) {
+                Eigen::Affine3d T_w_l = Eigen::Affine3d::Identity();
+                T_w_l.translation() =
+                    kfs[i]->getFrame2WorldTransform() * Eigen::Vector3d(0.6 * a, 0.6 * b, 4.0 + 0.3 * ((a + b + 5) % 3));
+                std::shared_ptr<ALandmark> lmk =
+                    std::make_shared<Point3D>(T_w_l, std::vector<std::shared_ptr<AFeature>>());
+                for (size_t j = i; j < std::min(i + 4, kfs.size()); j++) {
+                    bool seen = false;
+                    for (auto &cam : kfs[j]->getSensors()) {
+                        std::vector<Eigen::Vector2d> p2d;
+                        if (!cam->project(T_w_l, lmk->getModel(), p2d))
+                            continue;
+                        if (pixel_noise > 0)
+                            p2d[0] += Eigen::Vector2d(noise(rng), noise(rng));
+                        std::shared_ptr<AFeature> feat = std::make_shared<Point2D>(p2d);
+                        cam->addFeature("pointxd", feat);
+                        lmk->addFeature(feat);
+                        seen = true;
+                    }
+                    if (seen)
+                        kfs[j]->addLandmark(lmk);
+                }
+                lmk->setInlier(); // LocalMap::addFrame puts it in the map
+            }
+        }
+    }
+
+    // Window with the landmarks (the first `window` KFs, all by default), first KF fixed
+    sc.map = std::make_shared<LocalMap>(0, n_kf + 1, 1);
+    for (size_t i = 0; i < (window ? window : kfs.size()); i++)
+        sc.map->addFrame(kfs[i]);
+
+    // Start away from the truth (except the fixed first KF)
+    for (size_t i = 1; i < kfs.size(); i++) {
+        Eigen::Affine3d T_w_f = kfs[i]->getFrame2WorldTransform();
+        Eigen::Affine3d dT    = Eigen::Affine3d::Identity();
+        dT.linear()           = geometry::exp_so3(0.01 * Eigen::Vector3d(1, -1, 0.5));
+        dT.translation()      = Eigen::Vector3d(0.02, -0.01, 0.015);
+        kfs[i]->setWorld2FrameTransform((T_w_f * dT).inverse());
+        kfs[i]->getIMU()->setVelocity(sc.sim.kf_velocities[i] + Eigen::Vector3d(0.03, -0.02, 0.01));
+    }
+    kfs[0]->getIMU()->setVelocity(sc.sim.kf_velocities[0]);
+    return sc;
+}
+
+static double maxPoseError(const VIScene &sc, size_t from) {
+    double err = 0;
+    for (size_t i = from; i < sc.sim.kfs.size(); i++) {
+        Eigen::Affine3d d = sc.T_f_w_true[i] * sc.sim.kfs[i]->getFrame2WorldTransform();
+        err = std::max({err, d.translation().norm(), geometry::log_so3(d.rotation()).norm()});
+    }
+    return err;
+}
+
+// Issue 20: every supported combination of optimizer x marginalization x sparsification x estimate_td, mono and
+// stereo, inserts the expected factors and recovers the true window states. The Numeric optimizer has no
+// marginalization and no time offset (refused at config load), so those combinations are not run.
+TEST_F(ImuTest, everySupportedOptionCombinationInsertsItsFactors) {
+    struct Optim {
+        std::string name;
+        std::function<std::shared_ptr<AOptimizer>()> make;
+        bool supports_marg_td;
+    };
+    const std::vector<Optim> optims = {
+        {"AngularAnalytic", [] { return std::make_shared<AngularAdjustmentCERESAnalytic>(); }, true},
+        {"Analytic", [] { return std::make_shared<BundleAdjustmentCERESAnalytic>(); }, true},
+        {"Numeric", [] { return std::make_shared<BundleAdjustmentCERESNumeric>(); }, false}};
+    const int n_kf = 7;
+
+    for (bool stereo : {true, false}) {
+        for (const Optim &o : optims) {
+            for (int marg = 0; marg <= 1; marg++) {
+                for (int sparse = 0; sparse <= marg; sparse++) {
+                    for (int td = 0; td <= 1; td++) {
+                        if (!o.supports_marg_td && (marg || td))
+                            continue;
+                        const std::string label = std::string(stereo ? "stereo " : "mono ") + o.name +
+                                                  " marg=" + std::to_string(marg) + " sparse=" +
+                                                  std::to_string(sparse) + " td=" + std::to_string(td);
+                        VIScene sc                        = buildVIScene(_imu_cfg, stereo, n_kf);
+                        std::shared_ptr<AOptimizer> optim = o.make();
+                        auto optimize = [&]() {
+                            if (td) {
+                                double t = 0;
+                                optim->localMapVIOptimizationTd(sc.map, t, 1);
+                                EXPECT_LT(std::abs(t), 1e-3) << label << ": time offset " << t;
+                            } else {
+                                optim->localMapVIOptimization(sc.map, 1);
+                            }
+                        };
+
+                        optimize();
+                        VIOptimStats st = optim->getLastVIStats();
+                        EXPECT_TRUE(st.usable) << label;
+                        EXPECT_EQ(st.n_imu_factors, uint(n_kf - 1)) << label;
+                        EXPECT_EQ(st.n_prior_factors, 0u) << label;
+                        EXPECT_GT(st.n_other_factors, 100u) << label << ": visual factors";
+                        EXPECT_LT(maxPoseError(sc, 1), 2e-3) << label;
+
+                        if (!marg)
+                            continue;
+                        ASSERT_TRUE(optim->marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), sparse))
+                            << label;
+                        sc.map->discardLastFrame();
+                        optimize();
+                        st = optim->getLastVIStats();
+                        EXPECT_TRUE(st.usable) << label << " after marginalization";
+                        EXPECT_EQ(st.n_imu_factors, uint(n_kf - 2)) << label << " after marginalization";
+                        EXPECT_GT(st.n_prior_factors, 0u) << label << " after marginalization";
+                        EXPECT_LT(maxPoseError(sc, 1), 2e-3) << label << " after marginalization";
+                    }
+                }
+            }
+        }
+    }
+}
+
+static double maxVelocityError(const VIScene &sc, size_t from) {
+    double err = 0;
+    for (size_t i = from; i < sc.sim.kfs.size(); i++)
+        err = std::max(err, (sc.sim.kfs[i]->getIMU()->getVelocity() - sc.sim.kf_velocities[i]).norm());
+    return err;
+}
+
+static std::vector<Eigen::Affine3d> windowPoses(const VIScene &sc, size_t from) {
+    std::vector<Eigen::Affine3d> T;
+    for (size_t i = from; i < sc.sim.kfs.size(); i++)
+        T.push_back(sc.sim.kfs[i]->getWorld2FrameTransform());
+    return T;
+}
+
+// The dense marginalization prior is linearized at the states of the moment it is built. When it is used
+// again after the window moved those states (the next marginalization folds it in; a low-parallax KF drop
+// re-uses it in a second window), it must measure the states from its linearization point, not from the
+// state at the start of each window.
+TEST_F(ImuTest, marginalizationPriorKeepsItsLinearizationPoint) {
+    for (bool stereo : {true, false}) {
+        const std::string label = stereo ? "stereo" : "mono";
+        VIScene sc = buildVIScene(_imu_cfg, stereo, 8);
+        // KF 1 becomes the fixed (gauge) frame of the window once KF 0 is marginalized: start it at the truth
+        sc.sim.kfs[1]->setWorld2FrameTransform(sc.T_f_w_true[1]);
+        AngularAdjustmentCERESAnalytic optim;
+
+        // Prior built away from the optimum (perturbed states), then the window converges
+        ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), false)) << label;
+        sc.map->discardLastFrame();
+        optim.localMapVIOptimization(sc.map, 1);
+        EXPECT_GT(optim.getLastVIStats().n_prior_factors, 0u) << label;
+
+        // Re-optimizing the converged window with the same prior must not move it
+        const std::vector<Eigen::Affine3d> T_before = windowPoses(sc, 1);
+        optim.localMapVIOptimization(sc.map, 1);
+        const std::vector<Eigen::Affine3d> T_after = windowPoses(sc, 1);
+        double moved = 0;
+        for (size_t i = 0; i < T_before.size(); i++)
+            moved = std::max(moved, (T_before[i] * T_after[i].inverse()).translation().norm());
+        EXPECT_LT(moved, 1e-3) << label << ": a converged window moved when optimized again";
+
+        // A second marginalization folds the first prior in: the chain still ends at the truth (exact data)
+        ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), false)) << label;
+        sc.map->discardLastFrame();
+        optim.localMapVIOptimization(sc.map, 1);
+        EXPECT_LT(maxPoseError(sc, 2), 3e-3) << label;
+        EXPECT_LT(maxVelocityError(sc, 2), 1e-2) << label;
+    }
+}
+
+TEST(ImuConfigTest, noiseKeysAreReadIntoTheRightFields) {
+
+    // Issue 1: the gyroscope random walk was read from accelerometer_random_walk.
+    const std::string path = "imu_config_test.yaml";
+    std::ofstream f(path);
+    f << "ncam: 0\n"
+      << "imu:\n"
+      << "  topic: /imu0\n"
+      << "  T_BS:\n"
+      << "    data: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]\n"
+      << "  rate_hz: 200\n"
+      << "  gyroscope_noise_density: 0.1\n"
+      << "  gyroscope_random_walk: 0.2\n"
+      << "  accelerometer_noise_density: 0.3\n"
+      << "  accelerometer_random_walk: 0.4\n"
+      << "  dt_imu_cam: 0.0\n";
+    f.close();
+
+    Config cfg;
+    cfg.slam_mode = "bimonovio";
+    ADataProvider prov(path, cfg);
+    std::shared_ptr<imu_config> c = prov.getIMUConfig();
+    ASSERT_TRUE(c);
+    EXPECT_DOUBLE_EQ(c->gyr_noise, 0.1);
+    EXPECT_DOUBLE_EQ(c->bgyr_noise, 0.2);
+    EXPECT_DOUBLE_EQ(c->acc_noise, 0.3);
+    EXPECT_DOUBLE_EQ(c->bacc_noise, 0.4);
+    std::remove(path.c_str());
+}
+
+TEST(ImuConfigTest, measurementsAreRotatedIntoTheBodyFrame) {
+
+    // Issue 6: T_BS must be applied by every reader; it now happens in createImuSensor.
+    const std::string path = "imu_tbs_test.yaml";
+    std::ofstream f(path);
+    f << "ncam: 0\n"
+      << "imu:\n"
+      << "  topic: /imu0\n"
+      << "  T_BS:\n" // R_x(+90 deg): sensor y -> body z
+      << "    data: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]\n"
+      << "  rate_hz: 200\n"
+      << "  gyroscope_noise_density: 0.1\n"
+      << "  gyroscope_random_walk: 0.2\n"
+      << "  accelerometer_noise_density: 0.3\n"
+      << "  accelerometer_random_walk: 0.4\n"
+      << "  dt_imu_cam: 0.0\n";
+    f.close();
+
+    Config cfg;
+    cfg.slam_mode = "monovio";
+    ADataProvider prov(path, cfg);
+    std::shared_ptr<IMU> imu = prov.createImuSensor(Eigen::Vector3d(0, 9.81, 0), Eigen::Vector3d(0.1, 0.2, 0.3));
+    EXPECT_NEAR((imu->getAcc() - Eigen::Vector3d(0, 0, 9.81)).norm(), 0, 1e-12);
+    EXPECT_NEAR((imu->getGyr() - Eigen::Vector3d(0.1, -0.3, 0.2)).norm(), 0, 1e-12);
+    std::remove(path.c_str());
 }
 
 } // namespace isae

@@ -1,5 +1,9 @@
 #include "isaeslam/slamCore.h"
 
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
+
 namespace isae {
 
 SLAMCore::SLAMCore(std::shared_ptr<isae::SLAMParameters> slam_param) : _slam_param(slam_param) {
@@ -102,16 +106,17 @@ void SLAMCore::initLandmarks(std::shared_ptr<Frame> &f) {
         int nb_created = 0;
         for (auto &ttime : ttracks_in_time.second) {
 
-            // Check if the landmark is not initialized
-            if (ttime.first->getLandmark().lock()) {
-                if (ttime.first->getLandmark().lock()->isInitialized())
-                    continue;
-            }
+            // Check if the landmark is not initialized (a stale match may have lost its landmark)
+            std::shared_ptr<ALandmark> lmk = ttime.first->getLandmark().lock();
+            if (!lmk || lmk->isInitialized())
+                continue;
 
-            // Build the feature vector
+            // Build the feature vector (only features still attached to a sensor can be triangulated)
             std::vector<std::shared_ptr<AFeature>> features;
-            for (auto feat : ttime.first->getLandmark().lock()->getFeatures()) {
-                features.push_back(feat.lock());
+            for (auto feat : lmk->getFeatures()) {
+                std::shared_ptr<AFeature> f = feat.lock();
+                if (f && f->getSensor())
+                    features.push_back(f);
             }
             _slam_param->getLandmarksInitializer()[ttracks_in_time.first]->initFromFeatures(features);
             nb_created++;
@@ -126,6 +131,8 @@ void SLAMCore::initLandmarks(std::shared_ptr<Frame> &f) {
         int nb_created = 0;
         for (auto &ttime : ttracks_in_time.second) {
             std::vector<std::shared_ptr<AFeature>> feats;
+            if (!ttime.first->getSensor() || !ttime.second->getSensor())
+                continue;
 
             to_init.push_back(ttime);
             feats.push_back(ttime.first);
@@ -401,7 +408,7 @@ bool SLAMCore::shouldInsertKeyframe(std::shared_ptr<Frame> &f) {
         }
     }
 
-    avg_parallax /= (n_matches + n_matches_lmk);
+    avg_parallax /= n_matches; // n_matches already counts the landmark matches
     avg_parallax *= 180 / M_PI;
     _parallax = avg_parallax;
 
@@ -409,17 +416,20 @@ bool SLAMCore::shouldInsertKeyframe(std::shared_ptr<Frame> &f) {
 
     // Case when it is already a KF
     if (f->isKeyFrame()) {
+        logKfVote(f, n_matches, n_matches_lmk, "forced");
         return true;
     }
 
     // Case when the parallax fall under the parallax noise condition => KF not voted
     if (avg_parallax < _min_movement_parallax) {
+        logKfVote(f, n_matches, n_matches_lmk, "no_motion");
         return false;
     }
 
     // Case when the parallax in degree is over the threshold => KF voted
     if (avg_parallax > _max_movement_parallax) {
         f->setKeyFrame();
+        logKfVote(f, n_matches, n_matches_lmk, "parallax");
         return true;
     }
 
@@ -427,18 +437,60 @@ bool SLAMCore::shouldInsertKeyframe(std::shared_ptr<Frame> &f) {
     // In mono mode we include also the non triangulated features to avoid poor triangulation
     // Else we just consider the triangulated landmarks
     if (_slam_param->_config.slam_mode == "mono" || _slam_param->_config.slam_mode == "monovio") {
-        if ((n_matches_lmk + n_matches) < _min_lmk_number) {
+        if (n_matches < _min_lmk_number) { // n_matches already counts the landmark matches
             f->setKeyFrame();
+            logKfVote(f, n_matches, n_matches_lmk, "few_lmk");
             return true;
         }
     } else {
         if (n_matches_lmk < _min_lmk_number) {
             f->setKeyFrame();
+            logKfVote(f, n_matches, n_matches_lmk, "few_lmk");
             return true;
         }
     }
 
+    logKfVote(f, n_matches, n_matches_lmk, "none");
     return false;
+}
+
+void SLAMCore::logKfVote(const std::shared_ptr<Frame> &f, double n_matches, double n_matches_lmk, const char *reason) {
+    // Diagnostics of the KF voting (log_slam/kf_votes.csv): one row per tracked frame
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+    std::ofstream fw("log_slam/kf_votes.csv", _kf_votes_started ? std::ofstream::app : std::ofstream::trunc);
+    if (!_kf_votes_started) {
+        fw << "timestamp (ns), last_kf_timestamp (ns), parallax_deg, n_matches, n_matches_lmk, reason\n";
+        _kf_votes_started = true;
+    }
+    fw << f->getTimestamp() << "," << getLastKF()->getTimestamp() << "," << _parallax << "," << n_matches << ","
+       << n_matches_lmk << "," << reason << "\n";
+}
+
+void SLAMCore::logKfFeatures(const std::shared_ptr<Frame> &kf) {
+    static const bool enabled = (std::getenv("EXECO_KF_FEATURES_LOG") != nullptr);
+    if (!enabled || kf->getSensors().empty())
+        return;
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+    std::ofstream fw("log_slam/kf_features.csv", _kf_features_started ? std::ofstream::app : std::ofstream::trunc);
+    if (!_kf_features_started) {
+        // status: 0 no landmark, 1 initialized landmark, 2 resurrected landmark, 3 landmark not initialized
+        fw << "kf_timestamp (ns), u, v, status\n";
+        _kf_features_started = true;
+    }
+    fw << std::fixed << std::setprecision(1);
+    for (const auto &feat : kf->getSensors().at(0)->getFeatures()["pointxd"]) {
+        const auto lmk = feat->getLandmark().lock();
+        const int status = !lmk ? 0 : lmk->isResurected() ? 2 : lmk->isInitialized() ? 1 : 3;
+        const Eigen::Vector2d pt = feat->getPoints().at(0);
+        fw << kf->getTimestamp() << "," << pt.x() << "," << pt.y() << "," << status << "\n";
+    }
+}
+
+bool SLAMCore::plausibleUpdate(const Eigen::Affine3d &T_ref, const Eigen::Affine3d &T_new) {
+    const double ref = std::max(geometry::se3_RTtoVec6d(T_ref).norm(), 0.1);
+    return (geometry::se3_RTtoVec6d(T_new) - geometry::se3_RTtoVec6d(T_ref)).norm() <= 10 * ref;
 }
 
 bool SLAMCore::predict(std::shared_ptr<Frame> &f) {
@@ -455,17 +507,15 @@ bool SLAMCore::predict(std::shared_ptr<Frame> &f) {
         return false;
     } else {
 
-        // Check if the pose is valid
-        if (T_const.translation().norm() > 0.1) {
-            double delta_norm = (geometry::se3_RTtoVec6d(T_last_curr) - geometry::se3_RTtoVec6d(T_const)).norm() /
-                                geometry::se3_RTtoVec6d(T_const).norm();
-            if (delta_norm > 10) {
-                std::cerr << "Predict fails, PnP pose is not valid" << std::endl;
-                std::cout << "T_last_curr: " << T_last_curr.translation().transpose() << std::endl;
-                std::cout << "T_const: " << T_const.translation().transpose() << std::endl;
-                _matches_in_time_lmk["pointxd"].clear(); // The matches are not valid, clear them
-                return false;
-            }
+        // Check if the pose is valid: its deviation from the constant velocity prediction must stay below 10 times
+        // the predicted motion. The reference has a floor (it was skipped below 0.1 m of predicted translation,
+        // which let PnP solutions with a flipped rotation (85 deg) through during slow motion)
+        if (!plausibleUpdate(T_const, T_last_curr)) {
+            std::cerr << "Predict fails, PnP pose is not valid" << std::endl;
+            std::cout << "T_last_curr: " << T_last_curr.translation().transpose() << std::endl;
+            std::cout << "T_const: " << T_const.translation().transpose() << std::endl;
+            _matches_in_time_lmk["pointxd"].clear(); // The matches are not valid, clear them
+            return false;
         }
 
         // Update the pose only for pnp
@@ -476,6 +526,85 @@ bool SLAMCore::predict(std::shared_ptr<Frame> &f) {
 
         return true;
     }
+}
+
+void SLAMCore::bridgePreintegration(const std::shared_ptr<Frame> &kf, const std::shared_ptr<Frame> &kf_prev) {
+    std::shared_ptr<IMU> imu = kf->getIMU();
+    if (!imu)
+        return;
+    if (kf_prev && kf_prev->getIMU()) {
+        imu->setLastKF(kf_prev);
+        if (imu->repropagate(kf_prev->getIMU()->getBa(), kf_prev->getIMU()->getBg()))
+            return;
+    }
+    imu->setLastKF(nullptr);
+}
+
+bool SLAMCore::canBridge(const std::shared_ptr<Frame> &kf, const std::shared_ptr<Frame> &kf_prev) const {
+    return kf && kf_prev && kf->getIMU() && kf_prev->getIMU() &&
+           (kf->getTimestamp() - kf_prev->getTimestamp()) * 1e-9 <= AOptimizer::kMaxImuFactorDt;
+}
+
+bool SLAMCore::inertialInitAccepted(double scale) {
+    if (!(scale > 0) || !std::isfinite(scale)) {
+        std::cout << "Inertial initialization rejected: scale " << scale << std::endl;
+        return false;
+    }
+    for (auto &f : _local_map->getFrames()) {
+        if (!f->getWorld2FrameTransform().matrix().allFinite() || !f->getIMU())
+            continue;
+        std::shared_ptr<IMU> imu = f->getIMU();
+        if (!imu->getVelocity().allFinite() || !imu->getBa().allFinite() || !imu->getBg().allFinite() ||
+            imu->getBa().norm() > 2 || imu->getBg().norm() > 0.5) {
+            std::cout << "Inertial initialization rejected: v " << imu->getVelocity().transpose() << ", ba "
+                      << imu->getBa().transpose() << ", bg " << imu->getBg().transpose() << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
+void SLAMCore::logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats) {
+
+    if (!kf || !kf->getIMU())
+        return;
+
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+
+    std::ofstream fw("log_slam/vio_diag.csv", _vio_diag_started ? std::ofstream::app : std::ofstream::trunc);
+    if (!_vio_diag_started) {
+        fw << "kf_timestamp (ns), last_kf_timestamp (ns), factor_dt, imu_integrated_dt, imu_gap_steps, "
+           << "rejected_imu_total, n_imu_factors, solver_usable, termination, initial_cost, final_cost, iterations, "
+           << "nonfinite_states, v_x, v_y, v_z, ba_x, ba_y, ba_z, bg_x, bg_y, bg_z, n_prior_factors, n_other_factors, "
+           << "prior_cost0, prior_lmk_offset, prior_frame_rot_offset, prior_frame_t_offset, prior_v_offset, "
+           << "prior_ba_offset, cost_visual, cost_imu, cost_bias, cost_prior\n";
+        _vio_diag_started = true;
+    }
+
+    // Count window states with non-finite pose, velocity or biases
+    int nonfinite = 0;
+    for (auto &f : _local_map->getFrames()) {
+        bool ok = f->getWorld2FrameTransform().matrix().allFinite();
+        if (f->getIMU())
+            ok = ok && f->getIMU()->getVelocity().allFinite() && f->getIMU()->getBa().allFinite() &&
+                 f->getIMU()->getBg().allFinite();
+        nonfinite += !ok;
+    }
+
+    std::shared_ptr<IMU> imu      = kf->getIMU();
+    std::shared_ptr<Frame> lastkf = imu->getLastKF();
+    double factor_dt = lastkf ? (kf->getTimestamp() - lastkf->getTimestamp()) * 1e-9 : -1;
+    Eigen::Vector3d v = imu->getVelocity(), ba = imu->getBa(), bg = imu->getBg();
+    fw << kf->getTimestamp() << "," << (lastkf ? lastkf->getTimestamp() : 0) << "," << factor_dt << ","
+       << imu->getIntegratedDt() << "," << imu->getGapSteps() << "," << _n_rejected_imu << ","
+       << stats.n_imu_factors << "," << stats.usable << "," << stats.termination << "," << stats.initial_cost << ","
+       << stats.final_cost << "," << stats.iterations << "," << nonfinite << "," << v.x() << "," << v.y() << ","
+       << v.z() << "," << ba.x() << "," << ba.y() << "," << ba.z() << "," << bg.x() << "," << bg.y() << ","
+       << bg.z() << "," << stats.n_prior_factors << "," << stats.n_other_factors << "," << stats.prior_cost0 << ","
+       << stats.prior_lmk_offset << "," << stats.prior_frame_rot_off << "," << stats.prior_frame_t_off << ","
+       << stats.prior_v_off << "," << stats.prior_ba_off << "," << stats.cost_visual << "," << stats.cost_imu << ","
+       << stats.cost_bias << "," << stats.cost_prior << "\n";
 }
 
 void SLAMCore::profiling() {
@@ -614,17 +743,50 @@ void SLAMCore::profiling() {
     fw << "Back end dt: " << backend_dt << "\n";
 }
 
+std::shared_ptr<Frame> SLAMCore::nextFrame() {
+    if (!_frontend_lock)
+        return _slam_param->getDataProvider()->next();
+
+    _frontend_lock->unlock();
+    _step_cv.notify_all();
+    std::shared_ptr<Frame> f = _slam_param->getDataProvider()->next();
+    _frontend_lock->lock();
+
+    // The front end must not process a frame before the back end has added the last voted KF to the local map:
+    // getLastKF() would still be the KF before it, and the frame (IMU preintegration, tracking) would be anchored
+    // to that older KF, e.g. an IMU factor skipping a KF of the window
+    waitBackEnd();
+    return f;
+}
+
+void SLAMCore::waitBackEnd() {
+    if (!_frontend_lock)
+        return;
+    _step_cv.notify_all();
+    _step_cv.wait(*_frontend_lock, [this] { return _frame_to_optim == nullptr; });
+}
+
 void SLAMCore::runFrontEnd() {
+
+    std::unique_lock<std::mutex> lock(_step_mutex);
+    _frontend_lock = &lock;
 
     while (true) {
 
         if (!_is_init) {
+            // A re-initialization starts once the back end is done with the last KF
+            waitBackEnd();
             bool init_success = this->init();
             while (!init_success)
                 init_success = this->init();
         } else
             this->frontEndStep();
+
+        // Let the back end take the KF that may have been voted
+        lock.unlock();
+        _step_cv.notify_all();
         std::this_thread::sleep_for(std::chrono::microseconds(1));
+        lock.lock();
     }
 }
 
@@ -632,8 +794,12 @@ void SLAMCore::runBackEnd() {
 
     while (true) {
 
-        this->backEndStep();
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        {
+            std::unique_lock<std::mutex> lock(_step_mutex);
+            _step_cv.wait(lock, [this] { return _frame_to_optim != nullptr; });
+            this->backEndStep();
+        }
+        _step_cv.notify_all();
     }
 }
 

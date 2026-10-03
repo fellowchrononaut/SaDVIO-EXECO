@@ -55,12 +55,13 @@ inline Eigen::Matrix3d so3_rightJacobian(const Eigen::Vector3d &w) {
 * Source https://arxiv.org/abs/1812.01537
 */
 inline Eigen::Matrix3d so3_leftJacobian(const Eigen::Vector3d &w) {
-    Eigen::Matrix3d Jl;
-    double w_norm     = w.norm();
-    Eigen::Vector3d a = w / w_norm;
-    Jl = sin(w_norm) / w_norm * Eigen::Matrix3d::Identity() + (1 - sin(w_norm) / w_norm) * a * a.transpose() +
-         (1 - cos(w_norm)) / w_norm * skewMatrix(a);
-    return Jl;
+    double w_norm          = w.norm();
+    Eigen::Matrix3d w_skew = skewMatrix(w);
+    // Small angle: first-order expansion (the closed form divides by |w|)
+    if (w_norm < 1e-5)
+        return Eigen::Matrix3d::Identity() + 0.5 * w_skew;
+    return Eigen::Matrix3d::Identity() + ((1 - cos(w_norm)) / (w_norm * w_norm)) * w_skew +
+           ((w_norm - sin(w_norm)) / (w_norm * w_norm * w_norm)) * w_skew * w_skew;
 }
 
 /*!

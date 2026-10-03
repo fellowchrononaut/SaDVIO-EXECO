@@ -22,7 +22,8 @@ class MeshTest : public testing::Test {
 
   public:
     void SetUp() override {
-        srand((unsigned int)time(0));
+        std::srand(12345u); // same random state for every test, whatever the run order
+        srand(12345u); // fixed seed: reproducible tests (was time-seeded)
 
         // Set Frame
         _frame0 = std::shared_ptr<Frame>(new Frame());
