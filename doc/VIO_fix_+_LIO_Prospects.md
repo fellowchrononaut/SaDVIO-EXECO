@@ -493,6 +493,38 @@ config never reaches:
 - [x] Memory grew through the run (each IMU sample kept the previous one alive, ≈ 0.5 MB/s on magistrale2):
       the history is released when a KF leaves the window.
 
+**Found after the review of the commits (`doc/vio_imu_fix/COMMITS_ASSESSMENT.md`, 2026-10-04):**
+- [x] The dense prior's rotation Jacobian missed `Jr(x)` (exact only at a zero increment).
+- [x] Interpolating an IMU sample at each image time hid raw IMU gaps from the integrator: such samples are
+      now marked and every integration step touching one counts as a gap.
+- [x] A failed window solve (Ceres FAILURE) was applied; the states are now kept.
+- [x] A non-finite pose did not reject the inertial initialization; the bias random walk was dropped for
+      intervals over 1 s; the IMU factor now requires its preintegration to cover the KF interval exactly.
+- [x] A prior that keeps the frame but no landmark was dropped everywhere: explicit `_has_prior` state.
+- [x] The dense VO prior was never added to the window by the AngularAnalytic optimizer (VO keeps no frame
+      and the insertion looked that frame up). Present in the original code.
+- [x] Sparse VIO information came from a plain inverse of a rank-deficient covariance (NaN without
+      landmarks): pseudo-inverse. The sparse VIO path also leaked every kept KF (`_map_frame_inf`).
+- [x] Mono VIO kept a stale prior across a re-initialization.
+- [x] Mono inertial initialization accepted an undetermined scale (scale -> 0.002 at constant velocity): it
+      now requires the scale's standard deviation from the solve (log scale < 0.1).
+- [x] Stereo VIO reset after 5 frames of visual dropout although the IMU carries the pose: re-initialization
+      threshold `max_lost_frames` (config; default VO 5, mono VIO 10, stereo VIO 20). Fixed EuRoC V2_03.
+- [x] A VIO re-initialization threw the state away and restarted at the origin (a jump of up to 10 m in the output):
+      it now starts from the last pose, velocity and biases, dead-reckoned with the IMU for up to 2 s
+      (`reinit_carry_state`). The results log lost the window at each reset; `eval_traj.py` scores the whole run.
+- [x] Stereo VO restarted at the origin after a dropout: it now starts at the last tracked pose extrapolated at its
+      velocity. The longest carry is a config option per family (`reinit_carry_max_age_vio`, `reinit_carry_max_age_vo`,
+      2 s each).
+- [x] Mono VO did not reset its failure count at a re-initialization (cascades of re-initializations); a failed
+      essential matrix in the mono and mono VIO init gave a NaN pose (NaN velocities in mono VIO).
+- [ ] Future: replace the time limit of a carried state by its uncertainty. Propagate the covariance of the carried
+      state through the dropout (VIO: pose, velocity, biases with the IMU noise and bias random walk; stereo VO: a
+      constant-velocity process noise) and drop it when the position or heading standard deviation passes a threshold.
+      It would adapt to the quality of the biases, which a fixed age cannot: measured dead-reckoning error (90th
+      percentile) at 5 s is 0.6 m with marginalization but 4 m with the default VIO in room1, and stereo VO is already
+      0.5–1.3 m and up to 80 deg off at 1.4 s.
+
 **Result (TUM-VI, 3 runs):** stereo VIO with `marginalization: 1` and `estimate_td: 1` — room1 ATE 0.069 m
 (VO 0.145, default VIO 0.266), magistrale2 ATE 1.47 m / end drift 3.2 m (VO 6.96 / 14.8, default VIO
 8.46 / 18.6), no resets. Details: `doc/vio_imu_fix/IMU_FIX_LEDGER.md`.
@@ -513,19 +545,24 @@ config never reaches:
       sparsification off.
 - [x] 6. **Sparsification separately.** Issues 13, 14 and 15; compare against the dense-prior
       baseline for accuracy and run time.
-- [ ] 7. **Datasets.** EuRoC MH_01 / V1_01 first (paper Table I: SaDVIO 0.09 m / 0.06 m ATE as a
+- [x] 7. **Datasets.** EuRoC MH_01 / V1_01 first (paper Table I: SaDVIO 0.09 m / 0.06 m ATE as a
       comparison target, not a pass/fail threshold), then RealSense and ExECoSim. Evaluate mono and
       stereo separately; record completion, ATE/RPE, scale, bias and velocity behaviour, run time.
       Do not let scale-aligned scoring hide a metric-scale failure.
-      *Status: EuRoC could not be downloaded (server down); TUM-VI room1 and magistrale2 were used
-      instead. RealSense waits for its camera-IMU calibration (Issue 6); ExECoSim not run.*
+      *Status (2026-10-04): TUM-VI rooms 1–6 and magistrale2, and all 11 EuRoC sequences. SaDVIO (paper
+      configuration) is at or below the paper's ATE on 9 of 11 EuRoC sequences and completes V2_03 (0.24 m vs
+      0.67). Still open: RealSense (waits for its camera-IMU calibration, Issue 6), ExECoSim not run, and
+      mono (see the open items in the ledger).*
 - [x] 8. **Option matrix.** Fix Issue 19 and the rest of Issue 20, then run the same sequences
       across every supported combination: `mono`/`bimono` × `Analytic`/`Numeric`/`AngularAnalytic`
       × `marginalization` 0/1 × `sparsification` 0/1 × `estimate_td` 0/1 × `multithreading` 0/1,
       on both readers. Vary one option at a time from a validated baseline so each regression has
       one cause.
 - [ ] 9. Once every supported combination passes, freeze SaDVIO (tag the commit) before starting
-      SaDLIO.
+      SaDLIO. *Not yet: mono VO and parts of mono VIO do not pass (open items in
+      `doc/vio_imu_fix/IMU_FIX_LEDGER.md`). Proposed meanwhile (2026-10-05): tag the IMU core
+      (the parts SaDLIO reuses) as a milestone; pre-freeze checks done (rebuilds, unit tests,
+      main-binary smoke runs), tag after the commit.*
 
 ---
 

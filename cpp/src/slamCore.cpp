@@ -551,7 +551,11 @@ bool SLAMCore::inertialInitAccepted(double scale) {
         return false;
     }
     for (auto &f : _local_map->getFrames()) {
-        if (!f->getWorld2FrameTransform().matrix().allFinite() || !f->getIMU())
+        if (!f->getWorld2FrameTransform().matrix().allFinite()) {
+            std::cout << "Inertial initialization rejected: non-finite pose" << std::endl;
+            return false;
+        }
+        if (!f->getIMU())
             continue;
         std::shared_ptr<IMU> imu = f->getIMU();
         if (!imu->getVelocity().allFinite() || !imu->getBa().allFinite() || !imu->getBg().allFinite() ||
@@ -613,18 +617,27 @@ void SLAMCore::profiling() {
         std::filesystem::create_directory("log_slam");
 
     if (!_is_init) {
+        // Clean the result files once per run: a re-initialization used to truncate them too, so the evaluation only
+        // saw the segment after the last one (a failing run looked like a short, accurate one)
+        if (_results_started && _segment_has_rows) {
+            _segment++; // a re-initialization: the next rows belong to a new segment
+            _segment_has_rows = false;
+        }
+        if (!_results_started) {
+            _results_started = true;
 
-        // Clean the result file
-        std::ofstream fw_res("log_slam/results.csv", std::ofstream::out | std::ofstream::trunc);
-        fw_res << "timestamp (ns), nframes, T_wf(00), T_wf(01), T_wf(02), T_wf(03), T_wf(10), T_wf(11), T_wf(12), "
-               << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23)\n";
-        fw_res.close();
+            // Clean the result file
+            std::ofstream fw_res("log_slam/results.csv", std::ofstream::out | std::ofstream::trunc);
+            fw_res << "timestamp (ns), nframes, T_wf(00), T_wf(01), T_wf(02), T_wf(03), T_wf(10), T_wf(11), T_wf(12), "
+                   << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23), segment\n";
+            fw_res.close();
 
-        std::ofstream fw_res1("log_slam/cov_mat.csv", std::ofstream::out | std::ofstream::trunc);
-        fw_res1
-            << "timestamp (ns), timestamp previous (ns), cov(00), cov(11), cov(22), cov(33), "
-            << "cov(44), cov(55), parallax, nb_tracks, nb_outliers, t(0), t(1), t(3), r(0), r(1), r(2), vel_norm \n";
-        fw_res1.close();
+            std::ofstream fw_res1("log_slam/cov_mat.csv", std::ofstream::out | std::ofstream::trunc);
+            fw_res1 << "timestamp (ns), timestamp previous (ns), cov(00), cov(11), cov(22), cov(33), "
+                    << "cov(44), cov(55), parallax, nb_tracks, nb_outliers, t(0), t(1), t(3), r(0), r(1), r(2), "
+                    << "vel_norm \n";
+            fw_res1.close();
+        }
 
         // For timing statistics
         // // Clean profiling file
@@ -648,17 +661,13 @@ void SLAMCore::profiling() {
         // fw_prof_be.close();
     } else {
 
-        // Write in a txt file for evaluation
+        // Write in a txt file for evaluation: each KF once, when it leaves the window (its final estimate). The KFs
+        // still in the window at a re-initialization are written before it (logWindowBeforeReset)
         if (getLastKF()) {
-            std::shared_ptr<Frame> f = _local_map->getFrames().front();
-            std::ofstream fw_res("log_slam/results.csv", std::ofstream::out | std::ofstream::app);
-            Eigen::Affine3d T_w_f   = f->getFrame2WorldTransform();
-            const Eigen::Matrix3d R = T_w_f.linear();
-            Eigen::Vector3d twc     = T_w_f.translation();
-            fw_res << f->getTimestamp() << "," << _nframes << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << ","
-                   << twc.x() << "," << R(1, 0) << "," << R(1, 1) << "," << R(1, 2) << "," << twc.y() << "," << R(2, 0)
-                   << "," << R(2, 1) << "," << R(2, 2) << "," << twc.z() << "\n";
-            fw_res.close();
+            std::shared_ptr<Frame> front = _local_map->getFrames().front();
+            if (_results_front && _results_front != front)
+                writeResultRow(_results_front);
+            _results_front = front;
         }
 
         if (_local_map->getFrames().size() > 2) {
@@ -743,19 +752,71 @@ void SLAMCore::profiling() {
     fw << "Back end dt: " << backend_dt << "\n";
 }
 
+void SLAMCore::writeResultRow(const std::shared_ptr<Frame> &f) {
+    if (!f || f->getTimestamp() <= _last_logged_ts)
+        return;
+    std::ofstream fw_res("log_slam/results.csv", std::ofstream::out | std::ofstream::app);
+    Eigen::Affine3d T_w_f   = f->getFrame2WorldTransform();
+    const Eigen::Matrix3d R = T_w_f.linear();
+    Eigen::Vector3d twc     = T_w_f.translation();
+    fw_res << f->getTimestamp() << "," << _nframes << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << ","
+           << twc.x() << "," << R(1, 0) << "," << R(1, 1) << "," << R(1, 2) << "," << twc.y() << "," << R(2, 0) << ","
+           << R(2, 1) << "," << R(2, 2) << "," << twc.z() << "," << _segment << "\n";
+    _last_logged_ts   = f->getTimestamp();
+    _segment_has_rows = true;
+}
+
+void SLAMCore::logWindowBeforeReset() {
+    if (!_results_started)
+        return;
+    writeResultRow(_results_front);
+    for (auto &f : _local_map->getFrames())
+        writeResultRow(f);
+    _results_front = nullptr;
+}
+
+void SLAMCore::captureCarriedState(const std::shared_ptr<IMU> &imu) {
+    _carried.valid = false;
+    if (!_slam_param->_config.reinit_carry_state || !imu || !imu->getFrame())
+        return;
+    const std::shared_ptr<Frame> f = imu->getFrame();
+    if (_carried.capture(f->getFrame2WorldTransform(),
+                         imu->getVelocity(),
+                         imu->getBa(),
+                         imu->getBg(),
+                         imu->getAcc(),
+                         imu->getGyr(),
+                         f->getTimestamp(),
+                         _last_visual_ts,
+                         imu->maxStepDt(),
+                         _slam_param->_config.reinit_carry_max_age_vio))
+        std::cout << "Re-initialization will start from the last state (" << _carried.age(f->getTimestamp())
+                  << " s after the last visual pose)" << std::endl;
+    else
+        std::cout << "Re-initialization from scratch: last state not usable (" << _carried.age(f->getTimestamp())
+                  << " s after the last visual pose, |ba| " << imu->getBa().norm() << ", |bg| "
+                  << imu->getBg().norm() << ")" << std::endl;
+}
+
 std::shared_ptr<Frame> SLAMCore::nextFrame() {
-    if (!_frontend_lock)
-        return _slam_param->getDataProvider()->next();
+    std::shared_ptr<Frame> f;
+    if (!_frontend_lock) {
+        f = _slam_param->getDataProvider()->next();
+    } else {
+        _frontend_lock->unlock();
+        _step_cv.notify_all();
+        f = _slam_param->getDataProvider()->next();
+        _frontend_lock->lock();
 
-    _frontend_lock->unlock();
-    _step_cv.notify_all();
-    std::shared_ptr<Frame> f = _slam_param->getDataProvider()->next();
-    _frontend_lock->lock();
+        // The front end must not process a frame before the back end has added the last voted KF to the local map:
+        // getLastKF() would still be the KF before it, and the frame (IMU preintegration, tracking) would be anchored
+        // to that older KF, e.g. an IMU factor skipping a KF of the window
+        waitBackEnd();
+    }
 
-    // The front end must not process a frame before the back end has added the last voted KF to the local map:
-    // getLastKF() would still be the KF before it, and the frame (IMU preintegration, tracking) would be anchored
-    // to that older KF, e.g. an IMU factor skipping a KF of the window
-    waitBackEnd();
+    // A state carried to the next initialization follows every IMU measurement, whichever code reads the frame
+    if (_carried.valid && f && f->getIMU())
+        _carried.propagate(f->getIMU()->getAcc(), f->getIMU()->getGyr(), f->getTimestamp(), f->getIMU()->rawGap());
     return f;
 }
 

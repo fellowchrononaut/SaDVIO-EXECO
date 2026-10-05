@@ -318,8 +318,9 @@ bool ImuImageMerger::emitImageFrame(long long t_img, const std::vector<std::shar
 
     // IMU measurements strictly before the image, one IMU-only frame each
     while (!_pending.empty() && _pending.front().ts < t_img) {
-        _last     = _pending.front();
-        _has_last = true;
+        _last        = _pending.front();
+        _has_last    = true;
+        _last_raw_ts = _last.ts;
         _pending.pop_front();
         std::vector<std::shared_ptr<ASensor>> sensors;
         sensors.push_back(_prov->createImuSensor(_last.acc, _last.gyr));
@@ -335,14 +336,20 @@ bool ImuImageMerger::emitImageFrame(long long t_img, const std::vector<std::shar
         if (_pending.front().ts == t_img) {
             _last = _pending.front();
             _pending.pop_front();
-            _has_last = true;
+            _has_last    = true;
+            _last_raw_ts = _last.ts;
             sensors.push_back(_prov->createImuSensor(_last.acc, _last.gyr));
         } else if (_has_last) {
             const ImuSample &next = _pending.front();
             const double a        = double(t_img - _last.ts) / double(next.ts - _last.ts);
             ImuSample s{t_img, (1 - a) * _last.acc + a * next.acc, (1 - a) * _last.gyr + a * next.gyr};
             _last = s;
-            sensors.push_back(_prov->createImuSensor(s.acc, s.gyr));
+            std::shared_ptr<IMU> imu = _prov->createImuSensor(s.acc, s.gyr);
+            // Interpolating across missing raw data invents measurements: mark it, so that the preintegration
+            // sees the gap even though the interpolated samples are one image period apart
+            if ((next.ts - _last_raw_ts) * 1e-9 > IMU::maxStepDtForRate(_prov->getIMUConfig()->rate_hz))
+                imu->markRawGap();
+            sensors.push_back(imu);
         }
     }
     _prov->addFrameToTheQueue(sensors, (unsigned long long)t_img);

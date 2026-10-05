@@ -8,11 +8,11 @@ void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
 
     // Explicit checks on the retained variables (the previous gating counted landmark *types*, or required a
     // frame to keep even in VO)
+    if (!_marginalization->_has_prior)
+        return;
     std::vector<std::shared_ptr<ALandmark>> kept;
     if (_marginalization->_lmk_to_keep.count("pointxd"))
         kept = _marginalization->_lmk_to_keep.at("pointxd");
-    if (kept.empty())
-        return;
 
     // Landmarks of the prior are supposed to be in the problem, add them otherwise
     auto lmk_block = [&](const std::shared_ptr<ALandmark> &lmk) {
@@ -72,7 +72,7 @@ void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
     }
 
     /// CASE 2 VO ///
-    if (!_marginalization->_lmk_with_prior)
+    if (kept.empty() || !_marginalization->_lmk_with_prior)
         return;
 
     // Unary factor for the landmark with a prior
@@ -102,7 +102,13 @@ void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
 bool AOptimizer::imuFactorUsable(const std::shared_ptr<Frame> &fi, const std::shared_ptr<Frame> &fj) {
     if (!fi || !fj || fi == fj || !fi->getIMU() || !fj->getIMU() || fj->getIMU()->getLastKF() != fi)
         return false;
-    if ((fj->getTimestamp() - fi->getTimestamp()) * 1e-9 > kMaxImuFactorDt)
+    const double span = (fj->getTimestamp() - fi->getTimestamp()) * 1e-9;
+    if (span > kMaxImuFactorDt)
+        return false;
+    // The preintegration must cover the interval between the two KFs. With an intact chain the integrated steps
+    // telescope to exactly this span (every frame has an IMU sample at its own stamp, whatever the dataset), so
+    // any difference beyond rounding means the preintegration does not start at fi
+    if (std::abs(fj->getIMU()->getIntegratedDt() - span) > 1e-6)
         return false;
     return fj->getIMU()->getGapSteps() == 0 && fj->getIMU()->hasValidCovariance();
 }
@@ -160,14 +166,10 @@ uint AOptimizer::addIMUResiduals(ceres::Problem &problem,
         if (!framei)
             continue;
 
-        // If dt > 1 ignore IMU measurement (TO DO: marginalize IMU measurement only to get a proper relative factor?)
-        if ((framej->getTimestamp() - framei->getTimestamp()) * 1e-9 > kMaxImuFactorDt)
-            continue;
-
         if (_map_frame_velpar.find(framei) != _map_frame_velpar.end() && framei != framej) {
 
-            // add IMU factor, unless IMU data is missing in the interval or its covariance is unusable
-            // (the bias random walk still holds)
+            // add IMU factor, unless the interval is longer than kMaxImuFactorDt, IMU data is missing in it or its
+            // covariance is unusable (the bias random walk, weighted by the interval, still holds in every case)
             if (imuFactorUsable(framei, framej)) {
                 ceres::CostFunction *cost_fct = new IMUFactor(framei->getIMU(), framej->getIMU());
                 problem.AddResidualBlock(cost_fct,
@@ -197,7 +199,7 @@ uint AOptimizer::addIMUResiduals(ceres::Problem &problem,
 size_t AOptimizer::fixedFramesGivenPrior(const std::vector<std::shared_ptr<Frame>> &frame_vector,
                                          size_t requested) const {
     const std::shared_ptr<Frame> &kept = _marginalization->_frame_to_keep;
-    if (!kept || !kept->getIMU() || _marginalization->_lmk_to_keep.empty())
+    if (!kept || !kept->getIMU() || !_marginalization->_has_prior)
         return requested;
     if (std::find(frame_vector.begin(), frame_vector.end(), kept) == frame_vector.end())
         return requested;
@@ -446,6 +448,8 @@ bool AOptimizer::localMapBA(std::shared_ptr<isae::LocalMap> &local_map, const si
 
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
+    if (!summary.IsSolutionUsable())
+        return discardFailedSolve(summary);
 
     // Update states
     for (auto &frame_posepar : _map_frame_posepar) {
@@ -517,6 +521,8 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
     ceres::Solve(options, &problem, &summary);
     recordVIStats(summary, n_imu_factors, n_prior_factors, problem.NumResidualBlocks());
     recordCostsPerType(problem);
+    if (!summary.IsSolutionUsable())
+        return discardFailedSolve(summary);
 
     // Update state
     for (auto &frame_posepar : _map_frame_posepar) {
@@ -564,6 +570,17 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
     // std::cout << summary.FullReport() << std::endl;
 
     return true;
+}
+
+bool AOptimizer::discardFailedSolve(const ceres::Solver::Summary &summary) {
+    std::cerr << "Window optimization failed, states kept: " << summary.message << std::endl;
+    _map_frame_posepar.clear();
+    _map_lmk_ptpar.clear();
+    _map_lmk_posepar.clear();
+    _map_frame_velpar.clear();
+    _map_frame_dbapar.clear();
+    _map_frame_dbgpar.clear();
+    return false;
 }
 
 double AOptimizer::VIInit(std::shared_ptr<isae::LocalMap> &local_map, Eigen::Matrix3d &R_w_i, bool optim_scale) {
@@ -653,6 +670,28 @@ double AOptimizer::VIInit(std::shared_ptr<isae::LocalMap> &local_map, Eigen::Mat
         std::cout << "Inertial initialization failed: " << summary.message << std::endl;
         _map_frame_velpar.clear();
         return -1;
+    }
+
+    // Mono: the motion so far must determine the scale. At constant velocity without rotation (or with too little
+    // acceleration) any scale fits with a matching velocity, and the solver stops anywhere (scale -> 0 in practice).
+    // The uncertainty of the log scale at the solution decides; it cannot be computed when the scale is free.
+    if (optim_scale) {
+        ceres::Covariance::Options cov_options;
+        cov_options.algorithm_type = ceres::DENSE_SVD;
+        ceres::Covariance covariance(cov_options);
+        const std::vector<std::pair<const double *, const double *>> blocks = {{lambda, lambda}};
+        double var_log_s = std::numeric_limits<double>::infinity();
+        if (covariance.Compute(blocks, &problem))
+            covariance.GetCovarianceBlock(lambda, lambda, &var_log_s);
+        const double sigma_log_s = std::sqrt(var_log_s);
+        if (!(sigma_log_s < kMaxInitScaleSigma)) {
+            std::cout << "Inertial initialization rejected: scale " << std::exp(lambda[0])
+                      << " not determined by the motion (sigma log scale " << sigma_log_s << ")" << std::endl;
+            _map_frame_velpar.clear();
+            return -1;
+        }
+        std::cout << "Inertial initialization: scale " << std::exp(lambda[0]) << ", sigma log scale " << sigma_log_s
+                  << std::endl;
     }
 
     // Update IMU velocity and biases (the bias change is shared by the whole window)

@@ -68,6 +68,12 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         warnings.push_back("sparsification has no effect without marginalization");
     if (cfg.estimate_td && !vio)
         warnings.push_back("estimate_td has no effect in slam_mode '" + cfg.slam_mode + "'");
+    if (cfg.max_lost_frames < 0)
+        errors.push_back("max_lost_frames must be >= 1, or 0 for the mode default");
+    if (cfg.reinit_carry_state != 0 && cfg.reinit_carry_state != 1)
+        errors.push_back("reinit_carry_state must be 0 or 1");
+    if (!(cfg.reinit_carry_max_age_vio > 0) || !(cfg.reinit_carry_max_age_vo > 0))
+        errors.push_back("reinit_carry_max_age_vio and reinit_carry_max_age_vo must be > 0 (s)");
 
     return errors;
 }
@@ -118,6 +124,12 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.optimizer             = yaml_file["optimizer"].as<std::string>();
     _config.tracker               = yaml_file["tracker"].as<std::string>();
     _config.estimate_td           = yaml_file["estimate_td"].as<int>();
+    _config.max_lost_frames       = yaml_file["max_lost_frames"] ? yaml_file["max_lost_frames"].as<int>() : 0;
+    _config.reinit_carry_state    = yaml_file["reinit_carry_state"] ? yaml_file["reinit_carry_state"].as<int>() : 1;
+    _config.reinit_carry_max_age_vio =
+        yaml_file["reinit_carry_max_age_vio"] ? yaml_file["reinit_carry_max_age_vio"].as<double>() : 2.0;
+    _config.reinit_carry_max_age_vo =
+        yaml_file["reinit_carry_max_age_vo"] ? yaml_file["reinit_carry_max_age_vo"].as<double>() : 2.0;
     _config.min_kf_number         = yaml_file["min_kf_number"].as<int>();
     _config.max_kf_number         = yaml_file["max_kf_number"].as<int>();
     _config.fixed_frame_number    = yaml_file["fixed_frame_number"].as<int>();

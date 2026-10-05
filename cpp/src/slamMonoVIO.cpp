@@ -29,13 +29,25 @@ bool SLAMMonoVIO::init() {
         count++;
     }
 
+    // After a visual dropout, start from the state the IMU carried (gravity-aligned pose, velocity, biases)
+    CarriedImuState carried;
+    const bool resume = _carried.at(_frame->getTimestamp(), carried);
+
     // Gravity alignment, and bias guess if the IMU was static
     Eigen::Vector3d ba, bg;
-    Eigen::Matrix3d R_i_f;
-    bool is_static   = staticImuInitialization(accs, gyrs, R_i_f, ba, bg);
-    T_i_f.linear()   = R_i_f;
-    if (!is_static)
-        std::cout << "IMU not static at start: biases left to the inertial initialization" << std::endl;
+    if (resume) {
+        T_i_f = carried.T_w_f;
+        ba    = carried.ba;
+        bg    = carried.bg;
+        std::cout << "Re-initialization from the last state (" << carried.age(_frame->getTimestamp())
+                  << " s after the last visual pose), v " << carried.v.transpose() << std::endl;
+    } else {
+        Eigen::Matrix3d R_i_f;
+        bool is_static = staticImuInitialization(accs, gyrs, R_i_f, ba, bg);
+        T_i_f.linear() = R_i_f;
+        if (!is_static)
+            std::cout << "IMU not static at start: biases left to the inertial initialization" << std::endl;
+    }
 
     // Set Keyframe and initialize preintegration
     _frame->setWorld2FrameTransform(T_i_f.inverse());
@@ -52,6 +64,8 @@ bool SLAMMonoVIO::init() {
     // Initial biases
     _frame->getIMU()->setBa(ba);
     _frame->getIMU()->setBg(bg);
+    if (resume)
+        _frame->getIMU()->setVelocity(carried.v);
     std::cout << "Bias accel " << ba.transpose() << std::endl;
     std::cout << "Bias gyro " << bg.transpose() << std::endl;
 
@@ -92,10 +106,19 @@ bool SLAMMonoVIO::init() {
                       _matches_in_time_lmk,
                       getLastKF()->getSensors().at(0)->getFeatures());
 
+        // Restart if the tracks are lost (as in mono VO): without any match the parallax is NaN and this loop never
+        // ended (e.g. a first KF in the dark)
+        if (_matches_in_time["pointxd"].size() < 20) {
+            std::cout << "Not enough matches and / or parallax, restarting init" << std::endl;
+            _local_map->reset();
+            return false;
+        }
+
         // Essential matrix filtering
         Eigen::Affine3d T_last_curr;
         Eigen::MatrixXd cov;
-        essential_ransac.estimateTransformBetween(getLastKF(), _frame, _matches_in_time["pointxd"], T_last_curr, cov);
+        const bool essential_ok =
+            essential_ransac.estimateTransformBetween(getLastKF(), _frame, _matches_in_time["pointxd"], T_last_curr, cov);
 
         // Remove outliers
         outlierRemoval();
@@ -116,12 +139,37 @@ bool SLAMMonoVIO::init() {
         }
         avg_parallax = avg_parallax * 180 / M_PI;
 
+        // A failed or degenerate essential matrix (e.g. a few ms of motion: its unit translation normalizes a zero
+        // vector, NaN) gives no pose: the frame keeps its IMU prediction and cannot be the second KF. The NaN pose was
+        // taken over by the IMU chain (NaN velocities, the inertial initialization failed or the window diverged)
+        const bool pose_ok = essential_ok && T_last_curr.matrix().allFinite() && T_last_curr.translation().norm() > 1e-6;
+        if (!pose_ok) {
+            _frame_to_display = _frame;
+            continue;
+        }
+
         if (avg_parallax > 4)
             ready_to_init = true;
 
-        // Compute current pose (with an arbitrary 10 cm scale)
-        Eigen::Affine3d T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
-        T_w_f.translation() /= 10;
+        // Compute current pose (with an arbitrary 10 cm scale, or the metric distance the carried state covered)
+        Eigen::Affine3d T_w_f;
+        if (resume) {
+            CarriedImuState cur;
+            if (!_carried.at(_frame->getTimestamp(), cur)) {
+                std::cout << "Re-initialization from the last state: state lost before enough parallax, restarting"
+                          << std::endl;
+                _carried.valid = false;
+                _local_map->reset();
+                return false;
+            }
+            // Direction from the essential matrix, length from the IMU
+            T_last_curr.translation() = T_last_curr.translation().normalized() *
+                                        (cur.T_w_f.translation() - carried.T_w_f.translation()).norm();
+            T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
+        } else {
+            T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
+            T_w_f.translation() /= 10;
+        }
         _frame->setWorld2FrameTransform(T_w_f.inverse());
 
         // Send the frame to the viewer
@@ -174,31 +222,42 @@ bool SLAMMonoVIO::init() {
     cleanFeatures(_frame);
     detectFeatures(_frame->getSensors().at(0));
 
-    // Perform Local BA on 10 KF before optimizing inertial variables
-    while (_local_map->getFrames().size() < 10) {
-        if (!step_init())
+    if (resume) {
+        // Gravity, biases, velocity and scale (the baseline above) are known: neither the visual-only phase nor the
+        // inertial initialization (which would also rotate and scale the map about the world origin, away from the
+        // carried pose). The two KFs are refined with their IMU factor
+        _carried.valid = false;
+        _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
+        logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
+        profiling(); // a new segment of results.csv (step_init does it otherwise)
+    } else {
+        // Perform Local BA on 10 KF before optimizing inertial variables
+        while (_local_map->getFrames().size() < 10) {
+            if (!step_init())
+                return false;
+        }
+
+        // Launch optimization of the inertial variables
+        Eigen::Matrix3d dRi;
+        double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi, true);
+        if (!inertialInitAccepted(scale)) {
+            _is_init = false;
+            _local_map->reset();
             return false;
+        }
+
+        // The motion model is a relative twist: the gravity rotation cancels out, but its translation
+        // is in the old (arbitrary) scale
+        _6d_velocity.tail<3>() *= scale;
+        _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
+        logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
+
+        std::cout << "Timestamp : " << getLastKF()->getTimestamp() << std::endl;
+        std::cout << "Orientation update : " << dRi << std::endl;
+        std::cout << "Gyro bias : " << getLastKF()->getIMU()->getBg().transpose() << std::endl;
+        std::cout << "Acc bias : " << getLastKF()->getIMU()->getBa().transpose() << std::endl;
+        _last_visual_ts = getLastKF()->getTimestamp();
     }
-
-    // Launch optimization of the inertial variables
-    Eigen::Matrix3d dRi;
-    double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi, true);
-    if (!inertialInitAccepted(scale)) {
-        _is_init = false;
-        _local_map->reset();
-        return false;
-    }
-
-    // The motion model is a relative twist: the gravity rotation cancels out, but its translation
-    // is in the old (arbitrary) scale
-    _6d_velocity.tail<3>() *= scale;
-    _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
-    logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
-
-    std::cout << "Timestamp : " << getLastKF()->getTimestamp() << std::endl;
-    std::cout << "Orientation update : " << dRi << std::endl;
-    std::cout << "Gyro bias : " << getLastKF()->getIMU()->getBg().transpose() << std::endl;
-    std::cout << "Acc bias : " << getLastKF()->getIMU()->getBa().transpose() << std::endl;
 
     _frame->getIMU()->setVelocity(_last_IMU->getVelocity());
 
@@ -465,6 +524,7 @@ bool SLAMMonoVIO::frontEndStep() {
     // If enough tracks perform ESKF update
     if (_matches_in_time_lmk["pointxd"].size() + _matches_in_time["pointxd"].size() > 5) {
         _successive_fails = 0;
+        _last_visual_ts   = _frame->getTimestamp();
 
         // Epipolar Filtering for matches in time
         isae::timer::tic();
@@ -588,13 +648,22 @@ bool SLAMMonoVIO::frontEndStep() {
     }
 
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
-    if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
-        (_successive_fails > 10)) {
+    const bool too_far =
+        (getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10;
+    if (too_far || (_successive_fails > maxLostFrames())) {
         std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
                   << std::endl;
         waitBackEnd(); // the back end must not add a pending KF to the reset map
+
+        // After a visual dropout the next initialization can start from the state the IMU carried (see SLAMBiMonoVIO)
+        if (too_far)
+            _carried.valid = false;
+        else
+            captureCarriedState(_last_IMU);
+        logWindowBeforeReset();
         _is_init = false;
         _local_map->reset();
+        _slam_param->getOptimizerBack()->resetMarginalization(); // its prior refers to the frames just discarded
 
         return true;
     }

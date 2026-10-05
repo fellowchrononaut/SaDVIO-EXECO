@@ -145,6 +145,7 @@ class Marginalization {
     std::shared_ptr<Frame> _frame_to_marg;                            //!< Frame to marginalize
     std::shared_ptr<Frame> _frame_to_keep;                            //!< Frame to keep
     typed_vec_landmarks _lmk_to_keep;                                 //!< Set of landmarks to keep
+    bool _has_prior = false; //!< A prior was computed and not discarded since (it may keep a frame and no landmark)
     typed_vec_landmarks _lmk_to_marg;                                 //!< Set of landmarks to marginalize
     std::unordered_map<std::shared_ptr<Frame>, int> _map_frame_idx;   //!< Map between frames and indices in _Ak
     std::unordered_map<std::shared_ptr<ALandmark>, int> _map_lmk_idx; //!< Map between landmarks and indices in _Ak
@@ -259,12 +260,14 @@ class MarginalizationFactor : public ceres::CostFunction {
 
         // Add frame dx
         int block_id = 0;
-        Eigen::Matrix3d Jr_inv = Eigen::Matrix3d::Identity(); // d(rotation dx) / d(rotation increment)
+        // d(rotation dx) / d(rotation increment): d Log(A Exp(x)) / dx = Jr^-1(Log(A Exp(x))) Jr(x), the parameter
+        // block being additive (Jr(x) = I only at x = 0)
+        Eigen::Matrix3d J_rot = Eigen::Matrix3d::Identity();
         if (_marginalization_info->_frame_to_keep) {
             const int i0 = _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep);
             Eigen::Map<const Eigen::Matrix<double, 6, 1>> xp(parameters[block_id]);
             const Eigen::Vector3d drot = geometry::log_so3(_A_rot * geometry::exp_so3(xp.head<3>()));
-            Jr_inv                     = geometry::so3_rightJacobian(drot).inverse();
+            J_rot = geometry::so3_rightJacobian(drot).inverse() * geometry::so3_rightJacobian(xp.head<3>());
             dx.segment<3>(i0)          = drot;
             dx.segment<3>(i0 + 3)      = _dt0 + _A_rot * xp.tail<3>();
             block_id++;
@@ -279,8 +282,10 @@ class MarginalizationFactor : public ceres::CostFunction {
         // Add landmarks dx
         for (auto tlmk : _marginalization_info->_lmk_to_keep) {
             for (auto lmk : tlmk.second) {
-                if (_marginalization_info->_map_lmk_idx.at(lmk) == -1)
+                if (_marginalization_info->_map_lmk_idx.at(lmk) == -1) {
+                    block_id++; // the landmark still has its parameter block
                     continue;
+                }
 
                 const auto &off = _lmk_offsets.at(lmk);
                 dx.segment<3>(_marginalization_info->_map_lmk_idx.at(lmk)) =
@@ -307,7 +312,7 @@ class MarginalizationFactor : public ceres::CostFunction {
                     jacobian.setZero();
                     const int i0 = _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep);
                     jacobian.leftCols(3) =
-                        _marginalization_info->_marginalization_jacobian.middleCols(i0, 3) * Jr_inv;
+                        _marginalization_info->_marginalization_jacobian.middleCols(i0, 3) * J_rot;
                     jacobian.middleCols(3, 3) =
                         _marginalization_info->_marginalization_jacobian.middleCols(i0 + 3, 3) * _A_rot;
                 }
@@ -344,8 +349,14 @@ class MarginalizationFactor : public ceres::CostFunction {
             // Jacobians on landmarks
             for (auto tlmk : _marginalization_info->_lmk_to_keep) {
                 for (auto lmk : tlmk.second) {
-                    if (_marginalization_info->_map_lmk_idx.at(lmk) == -1)
+                    if (_marginalization_info->_map_lmk_idx.at(lmk) == -1) {
+                        if (jacobians[block_id])
+                            Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+                                jacobians[block_id], n, 3)
+                                .setZero();
+                        block_id++;
                         continue;
+                    }
 
                     if (jacobians[block_id]) {
 

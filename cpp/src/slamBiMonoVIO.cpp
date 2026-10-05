@@ -32,14 +32,26 @@ bool SLAMBiMonoVIO::init() {
         count++;
     }
 
+    // After a visual dropout, start from the state the IMU carried (gravity-aligned pose, velocity, biases)
+    CarriedImuState carried;
+    const bool resume = _carried.at(_frame->getTimestamp(), carried);
+
     // Gravity alignment, and bias guess if the IMU was static
     Eigen::Vector3d ba, bg;
-    Eigen::Matrix3d R_i_f;
-    bool is_static   = staticImuInitialization(accs, gyrs, R_i_f, ba, bg);
-    T_i_f.linear()   = R_i_f;
-    if (!is_static)
-        std::cout << "IMU not static at start: biases left to the inertial initialization" << std::endl;
-    // Prior on the first frame, it is set as the origin
+    if (resume) {
+        T_i_f = carried.T_w_f;
+        ba    = carried.ba;
+        bg    = carried.bg;
+        std::cout << "Re-initialization from the last state (" << carried.age(_frame->getTimestamp())
+                  << " s after the last visual pose), v " << carried.v.transpose() << std::endl;
+    } else {
+        Eigen::Matrix3d R_i_f;
+        bool is_static = staticImuInitialization(accs, gyrs, R_i_f, ba, bg);
+        T_i_f.linear() = R_i_f;
+        if (!is_static)
+            std::cout << "IMU not static at start: biases left to the inertial initialization" << std::endl;
+    }
+    // Prior on the first frame, it is set as the origin (or the carried pose)
     _frame->setWorld2FrameTransform(T_i_f.inverse());
     // _frame->setPrior(T_i_f.inverse(), 100 * Vector6d::Ones());
 
@@ -60,6 +72,8 @@ bool SLAMBiMonoVIO::init() {
     // Initial biases
     _frame->getIMU()->setBa(ba);
     _frame->getIMU()->setBg(bg);
+    if (resume)
+        _frame->getIMU()->setVelocity(carried.v);
     std::cout << "Bias accel " << ba.transpose() << std::endl;
     std::cout << "Bias gyro " << bg.transpose() << std::endl;
 
@@ -86,26 +100,40 @@ bool SLAMBiMonoVIO::init() {
     cleanFeatures(_frame);
     detectFeatures(_frame->getSensors().at(0));
 
-    // Perform Local BA on 10 KF before optimizing inertial variables
-    while (_local_map->getFrames().size() < 10) {
-        if (!step_init())
+    if (resume) {
+        // Gravity, biases, velocity and scale are known: neither the visual-only phase nor the inertial
+        // initialization (which would also rotate the map about the world origin, away from the carried pose). The
+        // first KF needs landmarks to track from; otherwise the next frame is tried, the state follows the IMU
+        if (_frame->getLandmarks()["pointxd"].size() < _min_lmk_number) {
+            std::cout << "Re-initialization from the last state: " << _frame->getLandmarks()["pointxd"].size()
+                      << " landmarks, trying the next frame" << std::endl;
+            _local_map->reset();
             return false;
-    }
+        }
+        _carried.valid = false;
+    } else {
+        // Perform Local BA on 10 KF before optimizing inertial variables
+        while (_local_map->getFrames().size() < 10) {
+            if (!step_init())
+                return false;
+        }
 
-    // Launch optimization of the inertial variables
-    Eigen::Matrix3d dRi;
-    double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi);
-    if (!inertialInitAccepted(scale)) {
-        _is_init = false;
-        _local_map->reset();
-        return false;
-    }
-    _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
-    logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
+        // Launch optimization of the inertial variables
+        Eigen::Matrix3d dRi;
+        double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi);
+        if (!inertialInitAccepted(scale)) {
+            _is_init = false;
+            _local_map->reset();
+            return false;
+        }
+        _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
+        logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
 
-    std::cout << "Orientation update : " << dRi << std::endl;
-    std::cout << "Gyro bias : " << getLastKF()->getIMU()->getBg().transpose() << std::endl;
-    std::cout << "Acc bias : " << getLastKF()->getIMU()->getBa().transpose() << std::endl;
+        std::cout << "Orientation update : " << dRi << std::endl;
+        std::cout << "Gyro bias : " << getLastKF()->getIMU()->getBg().transpose() << std::endl;
+        std::cout << "Acc bias : " << getLastKF()->getIMU()->getBa().transpose() << std::endl;
+        _last_visual_ts = getLastKF()->getTimestamp();
+    }
 
     profiling();
     IMUprofiling();
@@ -472,6 +500,7 @@ bool SLAMBiMonoVIO::frontEndStep() {
 
     if (good_it) {
         _successive_fails = 0;
+        _last_visual_ts   = _frame->getTimestamp();
         // Update tracked landmarks
         updateLandmarks(_matches_in_time_lmk);
 
@@ -530,8 +559,10 @@ bool SLAMBiMonoVIO::frontEndStep() {
         _frame->setKeyFrame();
     }
 
-    // Force a KF to prevent the IMU to drift
-    if (dt > 1.0)
+    // Force a KF to prevent the IMU to drift, within the longest interval a preintegration factor may span: forced
+    // at dt > 1.0 s, the KF came at 1.05 s (20 Hz) and its IMU factor was refused (> 1 s), so a standstill left the
+    // window without any IMU factor (velocity drifting freely, a jump when motion resumed)
+    if (dt > 0.9 * AOptimizer::kMaxImuFactorDt)
         _frame->setKeyFrame();
 
     if (shouldInsertKeyframe(_frame)) {
@@ -620,8 +651,9 @@ bool SLAMBiMonoVIO::frontEndStep() {
     }
 
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
-    if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
-        (_successive_fails > 5)) {
+    const bool too_far =
+        (getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10;
+    if (too_far || (_successive_fails > maxLostFrames())) {
         std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
                   << std::endl;
         std::cout << "IMU dT : \n" << dT.matrix() << std::endl;
@@ -630,6 +662,14 @@ bool SLAMBiMonoVIO::frontEndStep() {
                   << std::endl;
 
         waitBackEnd(); // the back end must not add a pending KF to the reset map
+
+        // A visual dropout: the IMU carried the pose through it and the window refined it, so the next initialization
+        // can start from this state. A frame far from the last KF means a diverged state: start from scratch
+        if (too_far)
+            _carried.valid = false;
+        else
+            captureCarriedState(_last_IMU);
+        logWindowBeforeReset();
         _is_init = false;
         _local_map->reset();
         _slam_param->getOptimizerBack()->resetMarginalization();

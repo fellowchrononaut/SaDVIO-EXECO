@@ -8,6 +8,34 @@ the segment after its last re-initialization (see coverage).
 
 | label | seq | mode | overrides | n | ATE (m) | RPE 1 s (m) | RPE 5 s (m) | RPE rot 1 s (°) | scale | coverage | resets |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| ab_do2 | V1_01 | monovio | dataset_id="eth" | 2 | 0.163 ± 0.080 | 0.061 ± 0.003 | 0.179 ± 0.005 | 0.62 ± 0.03 | 1.018 ± 0.008 | 0.93 ± 0.03 | 1 |
+| ab_do2 | V1_02 | monovio | dataset_id="eth" | 2 | 0.188 ± 0.020 | 0.069 ± 0.001 | 0.160 ± 0.010 | 0.39 ± 0.02 | 1.010 ± 0.005 | 0.91 ± 0.03 | 1 |
+| ab_do2 | V2_02 | monovio | dataset_id="eth" | 2 | 0.325 ± 0.037 | 0.065 ± 0.006 | 0.173 ± 0.014 | 0.51 ± 0.01 | 0.961 ± 0.012 | 0.96 ± 0.00 | 0 |
+| ab_do2 | room2 | monovio | default | 2 | 0.791 ± 0.023 | 0.382 ± 0.027 | 0.786 ± 0.061 | 0.97 ± 0.05 | 0.623 ± 0.028 | 0.99 ± 0.00 | 0 |
+| ab_final5 | V1_01 | monovio | dataset_id="eth" | 2 | 0.101 ± 0.000 | 0.057 ± 0.002 | 0.178 ± 0.006 | 0.58 ± 0.01 | 1.010 ± 0.003 | 0.96 ± 0.00 | 0 |
+| ab_final5 | V1_02 | monovio | dataset_id="eth" | 2 | 0.141 ± 0.009 | 0.064 ± 0.006 | 0.145 ± 0.015 | 0.36 ± 0.02 | 1.021 ± 0.001 | 0.87 ± 0.01 | 1 |
+| ab_final5 | V1_03 | monovio | dataset_id="eth" | 2 | 1.471 ± 0.015 | 0.763 ± 0.006 | 1.648 ± 0.047 | 1.66 ± 0.19 | 0.054 ± 0.013 | 0.81 ± 0.04 | 7 |
+| ab_final5 | V2_01 | monovio | dataset_id="eth" | 2 | 0.107 ± 0.010 | 0.022 ± 0.001 | 0.059 ± 0.003 | 0.26 ± 0.01 | 0.997 ± 0.000 | 0.95 ± 0.00 | 0 |
+| ab_final5 | V2_02 | monovio | dataset_id="eth" | 2 | 0.469 ± 0.042 | 0.092 ± 0.007 | 0.237 ± 0.016 | 0.52 ± 0.02 | 0.940 ± 0.005 | 0.96 ± 0.01 | 0 |
+| ab_final5 | V2_03 | monovio | dataset_id="eth" | 2 | 1.217 ± 0.920 | 0.542 ± 0.354 | 1.606 ± 1.109 | 1.25 ± 0.06 | 0.518 ± 0.506 | 0.51 ± 0.39 | 1 |
+| ab_final5 | room1 | monovio | default | 2 | 0.285 ± 0.026 | 0.087 ± 0.005 | 0.191 ± 0.001 | 0.95 ± 0.01 | 0.936 ± 0.011 | 0.98 ± 0.00 | 0 |
+| ab_final5 | room2 | monovio | default | 2 | 0.695 ± 0.024 | 0.267 ± 0.028 | 0.558 ± 0.056 | 0.98 ± 0.04 | 0.730 ± 0.027 | 0.99 ± 0.00 | 0 |
+| ab_final5 | room3 | monovio | default | 2 | 0.346 ± 0.004 | 0.086 ± 0.011 | 0.188 ± 0.033 | 1.06 ± 0.00 | 0.937 ± 0.017 | 0.97 ± 0.00 | 0 |
+| ab_final5 | room4 | monovio | default | 2 | 0.222 ± 0.004 | 0.073 ± 0.003 | 0.173 ± 0.010 | 0.84 ± 0.01 | 0.895 ± 0.008 | 0.98 ± 0.00 | 0 |
+| ab_final5 | room5 | monovio | default | 2 | 0.489 ± 0.038 | 0.262 ± 0.017 | 0.478 ± 0.032 | 1.09 ± 0.01 | 0.707 ± 0.019 | 0.97 ± 0.00 | 0 |
+| ab_final5 | room6 | monovio | default | 2 | 0.203 ± 0.014 | 0.044 ± 0.002 | 0.139 ± 0.006 | 0.75 ± 0.01 | 0.962 ± 0.002 | 0.96 ± 0.00 | 0 |
+| ab_gi2 | V1_01 | monovio | dataset_id="eth" | 2 | 0.231 ± 0.036 | 0.060 ± 0.005 | 0.179 ± 0.007 | 0.62 ± 0.02 | 1.018 ± 0.000 | 0.96 ± 0.00 | 0 |
+| ab_gi2 | V1_02 | monovio | dataset_id="eth" | 2 | 0.259 ± 0.016 | 0.074 ± 0.001 | 0.182 ± 0.005 | 0.41 ± 0.02 | 1.004 ± 0.001 | 0.88 ± 0.00 | 2 |
+| ab_gi2 | V1_03 | monovio | dataset_id="eth" | 2 | 1.424 ± 0.024 | 0.732 ± 0.031 | 1.630 ± 0.019 | 1.53 ± 0.05 | 0.138 ± 0.058 | 0.85 ± 0.00 | 3 |
+| ab_gi2 | V2_01 | monovio | dataset_id="eth" | 2 | 0.092 ± 0.013 | 0.019 ± 0.001 | 0.050 ± 0.003 | 0.21 ± 0.00 | 0.997 ± 0.008 | 0.95 ± 0.00 | 0 |
+| ab_gi2 | V2_02 | monovio | dataset_id="eth" | 2 | 0.588 ± 0.002 | 0.126 ± 0.014 | 0.341 ± 0.044 | 0.57 ± 0.01 | 0.886 ± 0.023 | 0.96 ± 0.01 | 0 |
+| ab_gi2 | V2_03 | monovio | dataset_id="eth" | 2 | 1.225 ± 0.319 | 0.618 ± 0.394 | 1.705 ± 1.025 | 3.79 ± 2.79 | 0.426 ± 0.385 | 0.53 ± 0.44 | 1 |
+| ab_gi2 | room1 | monovio | default | 2 | 0.332 ± 0.099 | 0.125 ± 0.062 | 0.251 ± 0.103 | 0.96 ± 0.01 | 0.891 ± 0.070 | 0.96 ± 0.02 | 1 |
+| ab_gi2 | room2 | monovio | default | 2 | 0.870 ± 0.011 | 0.471 ± 0.015 | 0.974 ± 0.030 | 0.97 ± 0.00 | 0.537 ± 0.014 | 0.99 ± 0.00 | 0 |
+| ab_gi2 | room3 | monovio | default | 2 | 0.350 ± 0.024 | 0.075 ± 0.003 | 0.158 ± 0.001 | 1.05 ± 0.01 | 0.954 ± 0.001 | 0.98 ± 0.00 | 0 |
+| ab_gi2 | room4 | monovio | default | 2 | 0.187 ± 0.001 | 0.054 ± 0.009 | 0.133 ± 0.026 | 0.85 ± 0.03 | 0.931 ± 0.020 | 0.98 ± 0.00 | 0 |
+| ab_gi2 | room5 | monovio | default | 2 | 0.374 ± 0.019 | 0.172 ± 0.009 | 0.319 ± 0.012 | 1.10 ± 0.01 | 0.817 ± 0.012 | 0.97 ± 0.00 | 0 |
+| ab_gi2 | room6 | monovio | default | 2 | 0.160 ± 0.030 | 0.035 ± 0.000 | 0.106 ± 0.006 | 0.70 ± 0.01 | 0.978 ± 0.006 | 0.96 ± 0.00 | 0 |
 | abl_abl_noconv | room1 | monovio | default | 5 | 0.253 ± 0.053 | 0.083 ± 0.027 | 0.172 ± 0.040 | 0.95 ± 0.04 | 0.935 ± 0.035 | 0.97 ± 0.01 | 0 |
 | abl_final2 | room1 | monovio | default | 5 | 0.309 ± 0.057 | 0.105 ± 0.027 | 0.207 ± 0.039 | 0.94 ± 0.04 | 0.910 ± 0.031 | 0.97 ± 0.02 | 0 |
 | accint | rs_accinterp | bimonovio | dataset_id="realsense_d455_vio" | 2 | 71.823 ± 68.143 | 76.780 ± 74.927 | 89.963 ± 85.663 | — | 0.140 ± 0.137 | 0.61 ± 0.28 | 1 |
@@ -21,6 +49,12 @@ the segment after its last re-initialization (see coverage).
 | an_margtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 3 | 0.071 ± 0.012 | 0.014 ± 0.001 | 0.031 ± 0.004 | 0.67 ± 0.01 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | an_margtd | room1 | monovio | estimate_td=1 marginalization=1 | 3 | 0.175 ± 0.057 | 0.049 ± 0.012 | 0.119 ± 0.022 | 0.77 ± 0.01 | 0.970 ± 0.016 | 0.97 ± 0.01 | 0 |
 | an_td | room1 | bimonovio | estimate_td=1 | 3 | 0.178 ± 0.029 | 0.018 ± 0.001 | 0.050 ± 0.004 | 0.77 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| asmt | room1 | bimono | default | 1 | 0.138 | 0.024 | 0.055 | 0.89 | 1.000 | 0.98 | 0 |
+| asmt | room1 | bimonovio | default | 2 | 0.254 ± 0.005 | 0.025 ± 0.000 | 0.072 ± 0.003 | 0.87 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| asmt | room1 | monovio | default | 2 | 0.251 ± 0.035 | 0.080 ± 0.018 | 0.168 ± 0.029 | 0.95 ± 0.00 | 0.943 ± 0.024 | 0.98 ± 0.00 | 0 |
+| asmt_margtd | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 3 | 1.853 ± 0.695 | 0.015 ± 0.000 | 0.047 ± 0.003 | 0.73 ± 0.01 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| asmt_margtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 3 | 0.081 ± 0.019 | 0.014 ± 0.000 | 0.037 ± 0.001 | 0.68 ± 0.00 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| asmt_mt_margtd | room1 | bimonovio | estimate_td=1 marginalization=1 multithreading=1 | 2 | 0.079 ± 0.007 | 0.014 ± 0.000 | 0.038 ± 0.001 | 0.66 ± 0.01 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | baseline | magistrale2 | bimono | default | 3 | 6.737 ± 0.169 | 0.045 ± 0.004 | 0.097 ± 0.006 | 1.52 ± 0.15 | 1.000 ± 0.000 | 1.00 ± 0.00 | 0 |
 | baseline | magistrale2 | bimonovio | default | 3 | 3.187 ± 4.002 | 1.033 ± 1.231 | 2.740 ± 3.416 | 4.63 ± 1.51 | 1.000 ± 0.000 | 0.19 ± 0.11 | 13 |
 | baseline | magistrale2 | mono | default | 3 | 0.252 ± 0.059 | 0.550 ± 0.156 | — | 52.60 ± 15.80 | 0.880 ± 0.172 | 0.01 ± 0.00 | 0 |
@@ -41,6 +75,84 @@ the segment after its last re-initialization (see coverage).
 | cd_margtd | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 3 | 1.474 ± 0.166 | 0.015 ± 0.002 | 0.046 ± 0.010 | 0.75 ± 0.03 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
 | cd_margtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 3 | 0.069 ± 0.004 | 0.014 ± 0.000 | 0.037 ± 0.000 | 0.66 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | cd_margtd | room1 | monovio | estimate_td=1 marginalization=1 | 3 | 0.194 ± 0.013 | 0.052 ± 0.012 | 0.119 ± 0.020 | 0.78 ± 0.03 | 0.961 ± 0.014 | 0.98 ± 0.00 | 0 |
+| do_default | V2_03 | bimonovio | dataset_id="eth" | 1 | 1.073 | 0.081 | 0.283 | 0.86 | 1.000 | 0.97 | 0 |
+| do_sadvio | V2_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.169 ± 0.022 | 0.028 ± 0.000 | 0.081 ± 0.004 | 0.28 ± 0.01 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| do_viomarg | V2_03 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.187 | 0.029 | 0.086 | 0.31 | 1.000 | 0.97 | 0 |
+| do_viomargtd | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 2 | 1.995 ± 0.090 | 0.016 ± 0.000 | 0.048 ± 0.002 | 0.73 ± 0.01 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| e_viomargtd | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 2 | 2.753 ± 1.317 | 0.016 ± 0.002 | 0.052 ± 0.012 | 0.74 ± 0.03 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| e_viomargtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 2 | 0.076 ± 0.002 | 0.013 ± 0.000 | 0.035 ± 0.000 | 0.68 ± 0.00 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| e_viomargtd | room1 | monovio | estimate_td=1 marginalization=1 | 2 | 0.144 ± 0.004 | 0.035 ± 0.002 | 0.076 ± 0.001 | 1.16 ± 0.01 | 0.977 ± 0.005 | 0.98 ± 0.00 | 0 |
+| e_vomarg | magistrale2 | bimono | marginalization=1 | 2 | 6.941 ± 0.705 | 0.038 ± 0.001 | 0.084 ± 0.003 | 1.46 ± 0.05 | 1.000 ± 0.000 | 1.00 ± 0.00 | 0 |
+| e_vomarg | room1 | bimono | marginalization=1 | 3 | 0.166 ± 0.038 | 0.027 ± 0.002 | 0.061 ± 0.003 | 0.94 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| e_vomarg | room1 | mono | marginalization=1 | 2 | 0.562 ± 0.215 | 0.476 ± 0.206 | 0.789 ± 0.296 | 5.38 ± 0.05 | 0.297 ± 0.083 | 0.79 ± 0.00 | 2 |
+| e_vomargsp | room1 | bimono | marginalization=1 sparsification=1 | 2 | 0.163 ± 0.018 | 0.026 ± 0.002 | 0.060 ± 0.003 | 0.96 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| eu_default | MH_01 | bimono | dataset_id="eth" | 1 | 0.046 | 0.016 | 0.043 | 0.13 | 1.000 | 0.99 | 0 |
+| eu_default | MH_01 | bimonovio | dataset_id="eth" | 1 | 0.058 | 0.013 | 0.039 | 0.10 | 1.000 | 0.99 | 0 |
+| eu_default | MH_02 | bimono | dataset_id="eth" | 1 | 0.066 | 0.013 | 0.030 | 0.20 | 1.000 | 0.98 | 0 |
+| eu_default | MH_02 | bimonovio | dataset_id="eth" | 1 | 0.315 | 0.038 | 0.105 | 0.22 | 1.000 | 0.98 | 0 |
+| eu_default | MH_03 | bimono | dataset_id="eth" | 1 | 0.171 | 0.047 | 0.143 | 0.29 | 1.000 | 0.96 | 0 |
+| eu_default | MH_03 | bimonovio | dataset_id="eth" | 1 | 0.149 | 0.041 | 0.115 | 0.15 | 1.000 | 0.97 | 0 |
+| eu_default | MH_04 | bimono | dataset_id="eth" | 1 | 0.154 | 0.066 | 0.163 | 0.40 | 1.000 | 0.96 | 0 |
+| eu_default | MH_04 | bimonovio | dataset_id="eth" | 1 | 0.213 | 0.045 | 0.132 | 0.15 | 1.000 | 0.96 | 0 |
+| eu_default | MH_05 | bimono | dataset_id="eth" | 1 | 0.144 | 0.045 | 0.098 | 0.31 | 1.000 | 0.99 | 0 |
+| eu_default | MH_05 | bimonovio | dataset_id="eth" | 1 | 0.127 | 0.034 | 0.087 | 0.13 | 1.000 | 0.96 | 0 |
+| eu_default | V1_01 | bimono | dataset_id="eth" | 1 | 0.069 | 0.056 | 0.185 | 0.62 | 1.000 | 0.94 | 0 |
+| eu_default | V1_01 | bimonovio | dataset_id="eth" | 1 | 0.050 | 0.053 | 0.171 | 0.57 | 1.000 | 0.95 | 0 |
+| eu_default | V1_01 | mono | dataset_id="eth" | 1 | 0.344 | 0.110 | 0.356 | 0.69 | 0.554 | 0.93 | 0 |
+| eu_default | V1_01 | monovio | dataset_id="eth" | 1 | 0.171 | 0.054 | 0.173 | 0.59 | 1.018 | 0.96 | 0 |
+| eu_default | V1_02 | bimono | dataset_id="eth" | 1 | 0.103 | 0.045 | 0.098 | 0.49 | 1.000 | 0.96 | 0 |
+| eu_default | V1_02 | bimonovio | dataset_id="eth" | 1 | 0.077 | 0.039 | 0.096 | 0.29 | 1.000 | 0.95 | 0 |
+| eu_default | V1_02 | mono | dataset_id="eth" | 1 | 1.263 | 0.986 | 1.547 | 1.62 | 1.497 | 0.80 | 1 |
+| eu_default | V1_02 | monovio | dataset_id="eth" | 1 | 0.191 | 0.066 | 0.142 | 0.38 | 1.014 | 0.93 | 0 |
+| eu_default | V1_03 | bimono | dataset_id="eth" | 1 | 0.346 | 0.103 | 0.236 | 1.71 | 1.000 | 0.97 | 0 |
+| eu_default | V1_03 | bimonovio | dataset_id="eth" | 1 | 0.319 | 0.048 | 0.133 | 0.51 | 1.000 | 0.97 | 0 |
+| eu_default | V1_03 | mono | dataset_id="eth" | 1 | 0.012 | — | — | — | 2.168 | 0.01 | 11 |
+| eu_default | V1_03 | monovio | dataset_id="eth" | 1 | 1.189 | 0.636 | 1.333 | 0.94 | 0.327 | 0.85 | 2 |
+| eu_default | V2_01 | bimono | dataset_id="eth" | 1 | 0.064 | 0.016 | 0.036 | 0.40 | 1.000 | 0.95 | 0 |
+| eu_default | V2_01 | bimonovio | dataset_id="eth" | 1 | 0.045 | 0.010 | 0.028 | 0.19 | 1.000 | 0.95 | 0 |
+| eu_default | V2_01 | mono | dataset_id="eth" | 1 | — | — | — | — | — | 0.00 | 1 |
+| eu_default | V2_01 | monovio | dataset_id="eth" | 1 | 0.081 | 0.019 | 0.048 | 0.26 | 0.997 | 0.95 | 0 |
+| eu_default | V2_02 | bimono | dataset_id="eth" | 1 | 0.126 | 0.030 | 0.072 | 0.55 | 1.000 | 0.97 | 0 |
+| eu_default | V2_02 | bimonovio | dataset_id="eth" | 1 | 0.208 | 0.034 | 0.096 | 0.39 | 1.000 | 0.97 | 0 |
+| eu_default | V2_02 | mono | dataset_id="eth" | 1 | 2.004 | 0.762 | 2.223 | 1.36 | 0.571 | 0.95 | 0 |
+| eu_default | V2_02 | monovio | dataset_id="eth" | 1 | 0.477 | 0.088 | 0.238 | 0.57 | 0.937 | 0.96 | 0 |
+| eu_default | V2_03 | bimono | dataset_id="eth" | 1 | 0.163 | 0.180 | 0.531 | 3.85 | 1.000 | 0.05 | 17 |
+| eu_default | V2_03 | bimonovio | dataset_id="eth" | 1 | 0.123 | 0.054 | 0.141 | 0.59 | 1.000 | 0.33 | 1 |
+| eu_default | V2_03 | mono | dataset_id="eth" | 1 | 0.289 | 0.451 | — | 15.23 | 3.809 | 0.04 | 13 |
+| eu_default | V2_03 | monovio | dataset_id="eth" | 1 | 0.195 | 0.113 | 0.313 | 0.65 | 0.982 | 0.25 | 2 |
+| eu_sadvio | MH_01 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.078 ± 0.001 | 0.013 ± 0.000 | 0.039 ± 0.001 | 0.27 ± 0.14 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| eu_sadvio | MH_02 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.070 ± 0.021 | 0.012 ± 0.000 | 0.031 ± 0.004 | 0.30 ± 0.16 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| eu_sadvio | MH_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.204 ± 0.009 | 0.040 ± 0.000 | 0.108 ± 0.001 | 0.18 ± 0.02 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| eu_sadvio | MH_04 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.248 ± 0.040 | 0.047 ± 0.005 | 0.145 ± 0.018 | 0.33 ± 0.00 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| eu_sadvio | MH_05 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.179 ± 0.030 | 0.039 ± 0.010 | 0.117 ± 0.046 | 0.33 ± 0.02 | 1.000 ± 0.000 | 0.96 ± 0.00 | 0 |
+| eu_sadvio | V1_01 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.071 ± 0.020 | 0.053 ± 0.001 | 0.172 ± 0.000 | 0.57 ± 0.00 | 1.000 ± 0.000 | 0.96 ± 0.00 | 0 |
+| eu_sadvio | V1_02 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.042 ± 0.002 | 0.040 ± 0.000 | 0.095 ± 0.002 | 0.20 ± 0.00 | 1.000 ± 0.000 | 0.95 ± 0.00 | 0 |
+| eu_sadvio | V1_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.128 ± 0.007 | 0.037 ± 0.001 | 0.102 ± 0.004 | 0.47 ± 0.05 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| eu_sadvio | V2_01 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.041 ± 0.006 | 0.009 ± 0.000 | 0.025 ± 0.000 | 0.17 ± 0.00 | 1.000 ± 0.000 | 0.95 ± 0.00 | 0 |
+| eu_sadvio | V2_02 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.057 ± 0.017 | 0.017 ± 0.001 | 0.043 ± 0.002 | 0.33 ± 0.00 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| eu_sadvio | V2_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.064 ± 0.002 | 0.026 ± 0.000 | 0.065 ± 0.002 | 0.45 ± 0.00 | 1.000 ± 0.000 | 0.33 ± 0.00 | 2 |
+| eu_sadvo | MH_01 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.089 ± 0.008 | 0.018 ± 0.001 | 0.052 ± 0.001 | 0.16 ± 0.00 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| eu_sadvo | MH_02 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.055 ± 0.011 | 0.013 ± 0.000 | 0.034 ± 0.001 | 0.18 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| eu_sadvo | MH_03 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.119 ± 0.028 | 0.043 ± 0.001 | 0.114 ± 0.001 | 0.26 ± 0.01 | 1.000 ± 0.000 | 0.96 ± 0.01 | 0 |
+| eu_sadvo | MH_04 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.421 ± 0.024 | 0.069 ± 0.011 | 0.177 ± 0.025 | 0.45 ± 0.07 | 1.000 ± 0.000 | 0.96 ± 0.00 | 0 |
+| eu_sadvo | MH_05 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.218 ± 0.017 | 0.038 ± 0.000 | 0.096 ± 0.005 | 0.24 ± 0.00 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| eu_sadvo | V1_01 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.071 ± 0.018 | 0.057 ± 0.001 | 0.182 ± 0.002 | 0.68 ± 0.02 | 1.000 ± 0.000 | 0.95 ± 0.01 | 0 |
+| eu_sadvo | V1_02 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.108 ± 0.010 | 0.044 ± 0.000 | 0.103 ± 0.000 | 0.48 ± 0.02 | 1.000 ± 0.000 | 0.95 ± 0.00 | 0 |
+| eu_sadvo | V1_03 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.299 ± 0.058 | 0.081 ± 0.006 | 0.198 ± 0.026 | 1.31 ± 0.11 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| eu_sadvo | V2_01 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.091 ± 0.016 | 0.016 ± 0.001 | 0.036 ± 0.005 | 0.40 ± 0.02 | 1.000 ± 0.000 | 0.95 ± 0.00 | 0 |
+| eu_sadvo | V2_02 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.134 ± 0.015 | 0.031 ± 0.001 | 0.069 ± 0.002 | 0.57 ± 0.00 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| eu_sadvo | V2_03 | bimono | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.324 | 0.317 | 0.837 | 6.24 | 1.000 | 0.03 ± 0.03 | 29 |
+| eu_viomarg | MH_01 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.095 | 0.014 | 0.040 | 0.25 | 1.000 | 0.99 | 0 |
+| eu_viomarg | MH_02 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.051 | 0.012 | 0.021 | 0.51 | 1.000 | 0.98 | 0 |
+| eu_viomarg | MH_03 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.156 | 0.037 | 0.104 | 0.16 | 1.000 | 0.97 | 0 |
+| eu_viomarg | MH_04 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.207 | 0.041 | 0.119 | 0.20 | 1.000 | 0.96 | 0 |
+| eu_viomarg | MH_05 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.276 | 0.060 | 0.142 | 0.59 | 1.000 | 0.99 | 0 |
+| eu_viomarg | V1_01 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.068 | 0.053 | 0.175 | 0.56 | 1.000 | 0.95 | 0 |
+| eu_viomarg | V1_02 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.031 | 0.040 | 0.094 | 0.18 | 1.000 | 0.94 | 0 |
+| eu_viomarg | V1_03 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.095 | 0.034 | 0.090 | 0.29 | 1.000 | 0.97 | 0 |
+| eu_viomarg | V2_01 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.053 | 0.009 | 0.026 | 0.22 | 1.000 | 0.95 | 0 |
+| eu_viomarg | V2_02 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.089 | 0.017 | 0.045 | 0.33 | 1.000 | 0.97 | 0 |
+| eu_viomarg | V2_03 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.068 | 0.025 | 0.079 | 0.48 | 1.000 | 0.19 | 2 |
 | f10_vio | room1 | bimonovio | default | 2 | 0.291 ± 0.030 | 0.029 ± 0.000 | 0.086 ± 0.004 | 0.91 ± 0.01 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | f10_viomargtd | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 2 | 1.812 ± 0.130 | 0.015 ± 0.001 | 0.043 ± 0.009 | 0.75 ± 0.01 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
 | f10_viomargtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 3 | 0.084 ± 0.012 | 0.014 ± 0.000 | 0.038 ± 0.002 | 0.66 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
@@ -50,6 +162,33 @@ the segment after its last re-initialization (see coverage).
 | f10_vomarg | room1 | bimono | marginalization=1 | 6 | 0.175 ± 0.036 | 0.025 ± 0.001 | 0.060 ± 0.003 | 0.93 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | f10_vomargsparse | magistrale2 | bimono | marginalization=1 sparsification=1 | 3 | 6.416 ± 0.966 | 0.044 ± 0.007 | 0.099 ± 0.017 | 1.51 ± 0.17 | 1.000 ± 0.000 | 1.00 ± 0.00 | 0 |
 | f10_vomargsparse | room1 | bimono | marginalization=1 sparsification=1 | 3 | 0.174 ± 0.032 | 0.025 ± 0.001 | 0.062 ± 0.003 | 0.92 ± 0.01 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| f6_default | MH_01 | mono | dataset_id="eth" | 1 | 0.214 | 0.037 | 0.100 | 0.28 | 0.949 | 0.98 | 0 |
+| f6_default | MH_01 | monovio | dataset_id="eth" | 1 | 1.590 | 0.175 | 0.693 | 0.12 | 1.184 | 0.97 | 0 |
+| f6_default | MH_02 | mono | dataset_id="eth" | 1 | 0.327 | 0.083 | 0.273 | 0.36 | 0.704 | 0.95 | 0 |
+| f6_default | MH_02 | monovio | dataset_id="eth" | 1 | 0.305 | 0.048 | 0.153 | 0.13 | 1.024 | 0.93 | 3 |
+| f6_default | MH_03 | mono | dataset_id="eth" | 1 | 0.426 | 0.116 | 0.315 | 0.83 | 0.858 | 0.90 | 0 |
+| f6_default | MH_03 | monovio | dataset_id="eth" | 1 | 0.348 | 0.068 | 0.183 | 0.18 | 1.004 | 0.93 | 1 |
+| f6_default | MH_04 | mono | dataset_id="eth" | 1 | 0.665 | 0.147 | 0.404 | 0.76 | 1.229 | 0.89 | 0 |
+| f6_default | MH_04 | monovio | dataset_id="eth" | 1 | 0.349 | 0.081 | 0.246 | 0.14 | 0.998 | 0.93 | 1 |
+| f6_default | MH_05 | mono | dataset_id="eth" | 1 | 1.188 | 0.168 | 0.556 | 0.39 | 1.514 | 0.95 | 0 |
+| f6_default | MH_05 | monovio | dataset_id="eth" | 1 | 0.301 | 0.064 | 0.175 | 0.15 | 0.996 | 0.94 | 0 |
+| f6_default | room1 | bimono | default | 1 | 0.164 | 0.024 | 0.061 | 0.91 | 1.000 | 0.98 | 0 |
+| f6_default | room1 | bimonovio | default | 1 | 0.259 | 0.024 | 0.070 | 0.89 | 1.000 | 0.98 | 0 |
+| f6_default | room1 | monovio | default | 1 | 0.242 | 0.062 | 0.135 | 0.95 | 0.957 | 0.98 | 0 |
+| f6_sadvio | MH_01 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.093 ± 0.009 | 0.014 ± 0.000 | 0.042 ± 0.002 | 0.50 ± 0.06 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
+| f6_sadvio | MH_02 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.056 ± 0.003 | 0.012 ± 0.000 | 0.026 ± 0.001 | 0.15 ± 0.01 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| f6_sadvio | MH_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.136 ± 0.040 | 0.039 ± 0.001 | 0.104 ± 0.002 | 0.16 ± 0.00 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| f6_sadvio | MH_04 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.132 ± 0.019 | 0.041 ± 0.003 | 0.127 ± 0.016 | 0.23 ± 0.01 | 1.000 ± 0.000 | 0.97 ± 0.00 | 0 |
+| f6_sadvio | MH_05 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.213 ± 0.002 | 0.032 ± 0.000 | 0.081 ± 0.002 | 0.16 ± 0.01 | 1.000 ± 0.000 | 0.96 ± 0.00 | 0 |
+| f6_sadvio | V2_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 1 | 0.239 | 0.028 | 0.099 | 0.31 | 1.000 | 0.97 | 0 |
+| f6_viomarg | V2_03 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.242 | 0.033 | 0.103 | 0.31 | 1.000 | 0.97 | 0 |
+| f6_viomargsp | room1 | bimonovio | marginalization=1 sparsification=1 | 2 | 0.179 ± 0.003 | 0.020 ± 0.000 | 0.063 ± 0.000 | 0.79 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
+| f6_viomargtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.099 | 0.014 | 0.037 | 0.67 | 1.000 | 0.98 | 0 |
+| f6r_default | room1 | bimono | default | 1 | 0.137 | 0.025 | 0.058 | 0.94 | 1.000 | 0.98 | 0 |
+| f6r_default | room1 | bimonovio | default | 1 | 0.233 | 0.025 | 0.074 | 0.88 | 1.000 | 0.98 | 0 |
+| f6r_default | room1 | monovio | default | 1 | 0.236 | 0.066 | 0.148 | 0.90 | 0.967 | 0.98 | 0 |
+| f6r_viomargtd | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 1 | 1.324 | 0.017 | 0.059 | 0.69 | 1.000 | 0.99 | 0 |
+| f6r_viomargtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.060 | 0.013 | 0.033 | 0.68 | 1.000 | 0.98 | 0 |
 | final | magistrale2 | bimono | default | 3 | 4.632 ± 3.171 | 0.040 ± 0.004 | 0.088 ± 0.023 | 1.42 ± 0.08 | 1.000 ± 0.000 | 0.75 ± 0.34 | 0 |
 | final | magistrale2 | bimonovio | default | 3 | 7.284 ± 0.144 | 0.028 ± 0.001 | 0.084 ± 0.002 | 0.90 ± 0.02 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |
 | final | magistrale2 | mono | default | 3 | 0.284 ± 0.077 | 0.409 ± 0.061 | 1.165 | 15.05 ± 9.76 | 1.228 ± 0.851 | 0.01 ± 0.00 | 0 |
@@ -79,8 +218,23 @@ the segment after its last re-initialization (see coverage).
 | final4_mt_margtd | room1 | bimonovio | estimate_td=1 marginalization=1 multithreading=1 | 3 | 0.088 ± 0.009 | 0.014 ± 0.000 | 0.040 ± 0.001 | 0.68 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | fix10 | room1 | mono | default | 2 | 0.430 ± 0.102 | 0.335 ± 0.100 | 0.561 ± 0.111 | 5.33 ± 0.72 | 0.419 ± 0.115 | 0.63 ± 0.16 | 0 |
 | fix10 | room1 | monovio | default | 2 | 0.304 ± 0.034 | 0.091 ± 0.018 | 0.181 ± 0.025 | 0.96 ± 0.01 | 0.924 ± 0.019 | 0.98 ± 0.00 | 0 |
+| gi_default | V1_03 | monovio | dataset_id="eth" | 1 | 1.440 | 0.747 | 1.679 | 1.40 | 0.194 | 0.97 | 0 |
+| gi_default | V2_03 | bimonovio | dataset_id="eth" | 1 | 0.232 | 0.069 | 0.228 | 0.87 | 1.000 | 0.33 | 1 |
+| gi_default | V2_03 | monovio | dataset_id="eth" | 1 | 1.362 | 0.432 | 1.342 | 1.29 | 0.556 | 0.97 | 0 |
+| gi_default | room1 | bimonovio | default | 1 | 0.246 | 0.026 | 0.073 | 0.89 | 1.000 | 0.98 | 0 |
+| gi_sadvio | V1_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 1 | 0.119 | 0.037 | 0.092 | 0.27 | 1.000 | 0.97 | 0 |
+| gi_sadvio | V2_02 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 1 | 0.061 | 0.016 | 0.043 | 0.32 | 1.000 | 0.97 | 0 |
+| gi_sadvio | V2_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 2 | 0.083 ± 0.012 | 0.030 ± 0.003 | 0.077 ± 0.012 | 0.58 ± 0.01 | 1.000 ± 0.000 | 0.33 ± 0.00 | 2 |
+| gi_viomarg | V2_03 | bimonovio | dataset_id="eth" marginalization=1 | 1 | 0.056 | 0.028 | 0.063 | 0.48 | 1.000 | 0.19 | 2 |
 | hyb | rs_hyb_realacc | bimonovio | dataset_id="realsense_d455_vio" | 2 | 8.054 ± 7.482 | 2.418 ± 2.057 | 10.978 ± 10.376 | — | 0.584 ± 0.518 | 0.48 ± 0.03 | 2 |
 | hyb | rs_hyb_realgyro | bimonovio | dataset_id="realsense_d455_vio" | 2 | 126.961 | 133.459 | 155.709 | — | 0.003 | 0.18 ± 0.18 | 2 |
+| initgate | magistrale2 | monovio | default | 1 | 0.941 | 0.746 | 1.566 | 1.23 | 0.002 | 0.99 | 0 |
+| initgate | room1 | monovio | default | 1 | 0.309 | 0.085 | 0.181 | 0.93 | 0.930 | 0.98 | 0 |
+| initgate | room2 | monovio | default | 1 | 0.769 | 0.355 | 0.742 | 1.02 | 0.645 | 0.99 | 0 |
+| initgate | room3 | monovio | default | 1 | 0.414 | 0.105 | 0.226 | 1.09 | 0.917 | 0.97 | 0 |
+| initgate | room4 | monovio | default | 1 | 0.156 | 0.051 | 0.128 | 0.87 | 0.950 | 0.98 | 0 |
+| initgate | room5 | monovio | default | 1 | 0.415 | 0.206 | 0.378 | 1.12 | 0.773 | 0.97 | 0 |
+| initgate | room6 | monovio | default | 1 | 0.144 | 0.032 | 0.090 | 0.70 | 0.992 | 0.96 | 0 |
 | issue01 | room1 | bimonovio | default | 3 | 21.731 ± 26.983 | 20.539 ± 28.536 | 21.527 ± 28.621 | 3.72 ± 0.55 | 1.000 ± 0.000 | 0.86 ± 0.17 | 1 |
 | issue01 | room1 | monovio | default | 3 | 0.563 ± 0.330 | 0.404 ± 0.410 | 0.740 ± 0.734 | 2.72 ± 2.36 | 0.631 ± 0.380 | 0.87 ± 0.14 | 0 |
 | issue07 | room1 | bimonovio | default | 3 | 0.224 ± 0.077 | 0.027 ± 0.003 | 0.071 ± 0.004 | 0.93 ± 0.03 | 1.000 ± 0.000 | 0.81 ± 0.24 | 0 |
@@ -97,6 +251,12 @@ the segment after its last re-initialization (see coverage).
 | issue19b_td10 | room1 | monovio | dataset_id="tumvi_512_ds_dt10ms" estimate_td=1 | 3 | 0.225 ± 0.044 | 0.068 ± 0.019 | 0.146 ± 0.028 | 0.77 ± 0.02 | 0.945 ± 0.022 | 0.98 ± 0.00 | 0 |
 | kfv | rs_13_18_29 | bimonovio | dataset_id="realsense_d455_vio_noise5" | 1 | 0.035 | 0.018 | 0.039 | — | 1.007 | 0.84 | 0 |
 | kfv | rs_13_18_29_synthimu | bimonovio | dataset_id="realsense_d455_vio" | 1 | 7.449 | 3.424 | 11.035 | — | 0.064 | 0.38 | 1 |
+| lc_5 | V2_03 | bimonovio | dataset_id="eth" marginalization=1 max_lost_frames=5 sparsification=1 | 1 | 0.112 | 0.036 | 0.113 | 0.55 | 1.000 | 0.33 | 1 |
+| lc_default | V2_03 | bimonovio | dataset_id="eth" marginalization=1 sparsification=1 | 1 | 0.105 | 0.026 | 0.070 | 0.30 | 1.000 | 0.97 | 0 |
+| live_vio | magistrale2 | bimonovio | enable_visu=1 estimate_td=1 marginalization=1 | 1 | 1.968 | 0.014 | 0.041 | 0.72 | 1.000 | 0.99 | 0 |
+| live_vio | room1 | bimonovio | enable_visu=1 estimate_td=1 marginalization=1 | 1 | 0.108 | 0.015 | 0.043 | 0.67 | 1.000 | 0.98 | 0 |
+| live_vo | magistrale2 | bimono | enable_visu=1 | 1 | 5.883 | 0.035 | 0.071 | 1.33 | 1.000 | 1.00 | 0 |
+| live_vo | room1 | bimono | enable_visu=1 | 1 | 0.165 | 0.024 | 0.059 | 0.91 | 1.000 | 0.98 | 0 |
 | main_build_check | room1 | bimonovio | default | 1 | 0.311 | 0.026 | 0.076 | 0.88 | 1.000 | 0.98 | 0 |
 | mdiag | room1 | bimonovio | marginalization=1 | 1 | 4.960 | 0.398 | 1.793 | 0.79 | 1.000 | 0.98 | 0 |
 | mdiag_fix0 | room1 | bimonovio | fixed_frame_number=0 marginalization=1 | 1 | 0.187 | 0.027 | 0.070 | 0.78 | 1.000 | 0.98 | 0 |
@@ -142,6 +302,42 @@ the segment after its last re-initialization (see coverage).
 | mf_margsparsetd | room1 | bimonovio | estimate_td=1 marginalization=1 sparsification=1 | 3 | 0.078 ± 0.029 | 0.014 ± 0.002 | 0.032 ± 0.005 | 0.67 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | mf_margtd | room1 | bimonovio | estimate_td=1 marginalization=1 | 3 | 3.053 ± 2.113 | 0.261 ± 0.184 | 1.177 ± 0.879 | 0.71 ± 0.03 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | mf_margtd | room1 | monovio | estimate_td=1 marginalization=1 | 3 | 0.132 ± 0.017 | 0.038 ± 0.007 | 0.100 ± 0.021 | 0.79 ± 0.04 | 0.988 ± 0.003 | 0.98 ± 0.00 | 0 |
+| mk_gyroinit | V1_01 | monovio | dataset_id="eth" | 1 | 1.520 | 0.273 | 0.903 | 1.42 | 0.455 | 0.90 | 0 |
+| mk_gyroinit | V1_02 | monovio | dataset_id="eth" | 1 | 0.161 | 0.064 | 0.152 | 0.38 | 1.023 | 0.88 | 1 |
+| mk_gyroinit | V1_03 | monovio | dataset_id="eth" | 1 | 1.069 | 0.550 | 1.177 | 1.02 | 0.458 | 0.85 | 1 |
+| mk_gyroinit | V2_01 | monovio | dataset_id="eth" | 1 | 0.086 | 0.021 | 0.053 | 0.26 | 1.007 | 0.95 | 0 |
+| mk_gyroinit | V2_02 | monovio | dataset_id="eth" | 1 | 0.359 | 0.082 | 0.211 | 0.52 | 0.933 | 0.96 | 0 |
+| mk_gyroinit | V2_03 | monovio | dataset_id="eth" | 1 | 1.376 | 0.422 | 1.203 | 0.99 | 0.621 | 0.90 | 1 |
+| mk_gyroinit | room1 | monovio | default | 1 | 0.238 | 0.059 | 0.132 | 0.94 | 0.960 | 0.98 | 0 |
+| mk_gyroinit | room2 | monovio | default | 1 | 0.693 | 0.268 | 0.553 | 1.01 | 0.734 | 0.99 | 0 |
+| mk_gyroinit | room3 | monovio | default | 1 | 0.292 | 0.064 | 0.140 | 1.06 | 0.966 | 0.98 | 0 |
+| mk_gyroinit | room4 | monovio | default | 1 | 0.139 | 0.056 | 0.124 | 0.96 | 0.946 | 0.98 | 0 |
+| mk_gyroinit | room5 | monovio | default | 1 | 0.434 | 0.236 | 0.436 | 1.06 | 0.741 | 0.97 | 0 |
+| mk_gyroinit | room6 | monovio | default | 1 | 0.130 | 0.029 | 0.084 | 0.70 | 0.997 | 0.96 | 0 |
+| mk_monokf | V1_01 | mono | dataset_id="eth" | 1 | 0.903 | 0.231 | 0.678 | 0.92 | 0.587 | 0.93 | 0 |
+| mk_monokf | V1_01 | monovio | dataset_id="eth" | 1 | 0.344 | 0.072 | 0.239 | 0.53 | 0.977 | 0.90 | 0 |
+| mk_monokf | V1_02 | mono | dataset_id="eth" | 1 | 1.383 | 0.770 | 1.883 | 3.11 | 0.229 | 0.93 | 0 |
+| mk_monokf | V1_02 | monovio | dataset_id="eth" | 1 | 0.268 | 0.083 | 0.209 | 0.34 | 0.993 | 0.88 | 1 |
+| mk_monokf | V1_03 | mono | dataset_id="eth" | 1 | 0.077 | 0.115 | — | 4.08 | 0.861 | 0.03 | 5 |
+| mk_monokf | V1_03 | monovio | dataset_id="eth" | 1 | 1.316 | 0.620 | 1.380 | 0.84 | 0.296 | 0.86 | 2 |
+| mk_monokf | V2_01 | mono | dataset_id="eth" | 1 | 0.678 | 0.129 | 0.393 | 0.95 | 3.824 | 0.95 | 0 |
+| mk_monokf | V2_01 | monovio | dataset_id="eth" | 1 | 0.550 | 0.602 | 1.797 | 24.17 | 0.000 | 0.05 | 1 |
+| mk_monokf | V2_02 | mono | dataset_id="eth" | 1 | 0.783 | 0.333 | 0.887 | 3.75 | 0.396 | 0.83 | 1 |
+| mk_monokf | V2_02 | monovio | dataset_id="eth" | 1 | 0.542 | 0.131 | 0.373 | 0.53 | 0.890 | 0.97 | 0 |
+| mk_monokf | V2_03 | mono | dataset_id="eth" | 1 | 0.348 | 0.665 | — | 16.24 | 0.720 | 0.04 | 17 |
+| mk_monokf | V2_03 | monovio | dataset_id="eth" | 1 | 0.012 | 0.025 | — | 0.52 | 1.093 | 0.02 | 4 |
+| mk_monokf | room1 | mono | default | 1 | 0.446 | 0.375 | 0.705 | 5.69 | 0.435 | 0.79 | 2 |
+| mk_monokf | room1 | monovio | default | 1 | 0.380 | 0.143 | 0.281 | 0.94 | 0.863 | 0.98 | 0 |
+| mk_monokf | room2 | mono | default | 1 | 0.138 | 0.200 | 0.156 | 13.15 | 0.554 | 0.04 | 3 |
+| mk_monokf | room2 | monovio | default | 1 | 0.705 | 0.293 | 0.616 | 1.00 | 0.704 | 0.99 | 0 |
+| mk_monokf | room3 | mono | default | 1 | 0.029 | 0.077 | — | 11.26 | 0.266 | 0.01 | 6 |
+| mk_monokf | room3 | monovio | default | 1 | 0.476 | 0.114 | 0.236 | 1.08 | 0.911 | 0.98 | 0 |
+| mk_monokf | room4 | mono | default | 1 | 0.067 | 0.100 | — | 24.17 | 0.514 | 0.04 | 7 |
+| mk_monokf | room4 | monovio | default | 1 | 0.214 | 0.049 | 0.125 | 0.88 | 0.946 | 0.98 | 0 |
+| mk_monokf | room5 | mono | default | 1 | 0.096 | 0.175 | 0.196 | 12.60 | 0.541 | 0.06 | 3 |
+| mk_monokf | room5 | monovio | default | 1 | 0.420 | 0.214 | 0.415 | 1.03 | 0.776 | 0.97 | 0 |
+| mk_monokf | room6 | mono | default | 1 | 0.311 | 0.173 | 0.398 | 0.89 | 0.284 | 0.92 | 0 |
+| mk_monokf | room6 | monovio | default | 1 | 0.163 | 0.037 | 0.119 | 0.72 | 0.967 | 0.95 | 0 |
 | mtfix | room1 | bimono | multithreading=1 | 2 | 0.224 ± 0.021 | 0.024 ± 0.001 | 0.059 ± 0.001 | 0.91 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | mtfix | room1 | bimonovio | multithreading=1 | 3 | 0.276 ± 0.019 | 0.027 ± 0.001 | 0.082 ± 0.001 | 0.90 ± 0.01 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | mtfix | room1 | mono | multithreading=1 | 2 | 0.495 ± 0.014 | 0.403 ± 0.018 | 0.711 ± 0.005 | 5.51 ± 0.21 | 0.335 ± 0.040 | 0.79 ± 0.00 | 3 |
@@ -441,6 +637,8 @@ the segment after its last re-initialization (see coverage).
 | rs_vo | rs_13_45_18 | bimono | dataset_id="realsense_d455_vio" | 3 | 0.058 ± 0.008 | 0.035 ± 0.001 | 0.072 ± 0.003 | — | 1.002 ± 0.001 | 0.91 ± 0.00 | 0 |
 | rss_fix10 | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 1 | 1.646 | 0.016 | 0.055 | 0.72 | 1.000 | 0.99 | 0 |
 | rss_mem | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 1 | 4.664 | 0.018 | 0.052 | 0.71 | 1.000 | 0.99 | 0 |
+| rsssp_final5 | magistrale2 | bimonovio | marginalization=1 sparsification=1 | 1 | 3.271 | 0.020 | 0.060 | 0.70 | 1.000 | 0.99 | 0 |
+| rsssp_mem2 | magistrale2 | bimonovio | marginalization=1 sparsification=1 | 1 | 4.102 | 0.020 | 0.066 | 0.67 | 1.000 | 0.99 | 0 |
 | syn_d | rs_13_18_29_synthimu | bimonovio | dataset_id="realsense_d455_vio" | 1 | 2.039 | 1.540 | 3.762 | — | 0.350 | 0.35 | 1 |
 | syn_diag | rs_13_18_29_synthimu | bimonovio | dataset_id="realsense_d455_vio" | 1 | 5.783 | 3.635 | 5.834 | — | 0.194 | 0.88 | 0 |
 | syn_mt | rs_13_18_29_synthimu | bimonovio | dataset_id="realsense_d455_vio" estimate_td=1 marginalization=1 | 1 | 5.525 | 3.447 | 9.624 | — | 0.108 | 0.36 | 1 |
@@ -449,6 +647,20 @@ the segment after its last re-initialization (see coverage).
 | syn_sh | rs_synth_sh15 | bimonovio | dataset_id="realsense_d455_vio" | 1 | — | — | — | — | — | 0.00 | 2 |
 | syn_sh | rs_synth_sh30 | bimonovio | dataset_id="realsense_d455_vio" | 1 | — | — | — | — | — | 0.00 | 3 |
 | tdiag | magistrale2 | bimonovio | dataset_id="tumvi_512_ds_dt2p5ms" marginalization=1 | 2 | 1.027 ± 0.956 | 0.019 ± 0.006 | 0.048 ± 0.013 | 0.90 ± 0.15 | 1.000 ± 0.000 | 0.61 ± 0.39 | 1 |
+| viewer_vio | magistrale2 | bimonovio | estimate_td=1 marginalization=1 | 1 | 2.806 | 0.015 | 0.046 | 0.74 | 1.000 | 0.99 | 0 |
+| viewer_vio | room1 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.089 | 0.013 | 0.037 | 0.70 | 1.000 | 0.98 | 0 |
+| viewer_vio | room2 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.089 | 0.013 | 0.034 | 0.81 | 1.000 | 0.99 | 0 |
+| viewer_vio | room3 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.104 | 0.016 | 0.056 | 0.93 | 1.000 | 0.98 | 0 |
+| viewer_vio | room4 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.063 | 0.012 | 0.033 | 0.64 | 1.000 | 0.98 | 0 |
+| viewer_vio | room5 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.084 | 0.017 | 0.051 | 0.75 | 1.000 | 0.98 | 0 |
+| viewer_vio | room6 | bimonovio | estimate_td=1 marginalization=1 | 1 | 0.059 | 0.009 | 0.030 | 0.60 | 1.000 | 0.93 | 0 |
+| viewer_vo | magistrale2 | bimono | default | 1 | 6.937 | 0.036 | 0.070 | 1.31 | 1.000 | 1.00 | 0 |
+| viewer_vo | room1 | bimono | default | 1 | 0.139 | 0.025 | 0.062 | 0.91 | 1.000 | 0.98 | 0 |
+| viewer_vo | room2 | bimono | default | 1 | 0.215 | 0.032 | 0.084 | 1.22 | 1.000 | 0.99 | 0 |
+| viewer_vo | room3 | bimono | default | 1 | 0.154 | 0.027 | 0.078 | 1.34 | 1.000 | 0.98 | 0 |
+| viewer_vo | room4 | bimono | default | 1 | 0.120 | 0.029 | 0.055 | 1.47 | 1.000 | 0.98 | 0 |
+| viewer_vo | room5 | bimono | default | 1 | 0.161 | 0.027 | 0.054 | 1.11 | 1.000 | 0.98 | 0 |
+| viewer_vo | room6 | bimono | default | 1 | 0.071 | 0.018 | 0.042 | 0.73 | 1.000 | 0.93 | 0 |
 | vo_marg | magistrale2 | bimono | marginalization=1 | 3 | 59.837 ± 74.119 | 62.505 ± 88.343 | 0.084 ± 0.016 | 4.33 ± 4.24 | 1.000 ± 0.000 | 0.67 ± 0.47 | 0 |
 | vo_marg | room1 | bimono | marginalization=1 | 3 | 0.196 ± 0.021 | 0.025 ± 0.000 | 0.060 ± 0.002 | 0.93 ± 0.02 | 1.000 ± 0.000 | 0.98 ± 0.00 | 0 |
 | vo_marg | room2 | bimono | marginalization=1 | 3 | 0.168 ± 0.014 | 0.031 ± 0.003 | 0.072 ± 0.012 | 1.21 ± 0.06 | 1.000 ± 0.000 | 0.99 ± 0.00 | 0 |

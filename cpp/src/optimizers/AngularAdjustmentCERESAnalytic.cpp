@@ -143,6 +143,8 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
     ceres::Solve(options, &problem, &summary);
     recordVIStats(summary, n_imu_factors, n_prior_factors, problem.NumResidualBlocks());
     recordCostsPerType(problem);
+    if (!summary.IsSolutionUsable())
+        return discardFailedSolve(summary);
 
     // Update state
     for (auto &frame_posepar : _map_frame_posepar) {
@@ -528,10 +530,12 @@ uint AngularAdjustmentCERESAnalytic::addMarginalizationResiduals(ceres::Problem 
                                                                  ceres::ParameterBlockOrdering *ordering) {
 
     // Add marginalization factor, dense case
-    if (!_marginalization->_lmk_to_keep.empty() && !_enable_sparsif) {
+    if (_marginalization->_has_prior && !_enable_sparsif) {
 
-        // Ignore if the frame to keep is not in the pb
-        if (_map_frame_posepar.find(_marginalization->_frame_to_keep) == _map_frame_posepar.end()) {
+        // Ignore if the frame to keep is not in the pb (VO keeps no frame: its prior was never added, since
+        // find(nullptr) always failed)
+        if (_marginalization->_frame_to_keep &&
+            _map_frame_posepar.find(_marginalization->_frame_to_keep) == _map_frame_posepar.end()) {
             return 0;
         }
 
@@ -738,7 +742,7 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
     }
 
     // Create a marginalization block with previous prior
-    if (!_marginalization_last->_lmk_to_keep.empty()) {
+    if (_marginalization_last->_has_prior) {
 
         // Compute index and block vectors for marginalization factor
         std::vector<double *> parameter_blocks;
@@ -794,6 +798,8 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
         _marginalization->_lmk_to_keep.clear();
         _marginalization->_marginalization_blocks.clear();
         _marginalization_last->_lmk_to_keep.clear();
+        _marginalization->_has_prior      = false;
+        _marginalization_last->_has_prior = false;
         return false;
     }
 
@@ -836,6 +842,8 @@ bool AngularAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
     _marginalization_last->_ba_lin                   = _marginalization->_ba_lin;
     _marginalization_last->_bg_lin                   = _marginalization->_bg_lin;
     _marginalization_last->_map_lmk_lin              = _marginalization->_map_lmk_lin;
+    _marginalization->_has_prior                     = true;
+    _marginalization_last->_has_prior                = true;
 
     return true;
 }

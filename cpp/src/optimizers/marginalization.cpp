@@ -48,12 +48,14 @@ void Marginalization::preMarginalize(std::shared_ptr<Frame> &frame0,
     // Reset variables
     _frame_to_marg = frame0;
     _frame_to_keep = nullptr;
+    _has_prior     = false;
     _lmk_to_keep.clear();
     _lmk_to_marg.clear();
     _map_frame_idx.clear();
     _map_lmk_idx.clear();
     _map_lmk_inf.clear();
     _map_lmk_prior.clear();
+    _map_frame_inf.clear(); // keyed by the kept frame: never cleared, it held every kept KF (and its images) alive
     _n = 0;
     _m = 0;
 
@@ -176,8 +178,10 @@ void Marginalization::preMarginalize(std::shared_ptr<Frame> &frame0,
         }
     }
 
-    if (discard_prior)
+    if (discard_prior) {
         marginalization_last->_lmk_to_keep.clear();
+        marginalization_last->_has_prior = false;
+    }
 }
 
 void Marginalization::computeInformationAndGradient(std::vector<std::shared_ptr<MarginalizationBlockInfo>> blocks,
@@ -402,6 +406,20 @@ Eigen::Matrix<double, 15, 15> Marginalization::absolutePriorJacobian(const Eigen
     return J;
 }
 
+// Square root of the information of a sparse factor from its covariance. A prior without landmarks leaves the gauge
+// (position, yaw) unobserved: the covariance is rank-deficient and a plain inverse gave NaN. Those directions get no
+// information; as before, directions with less than _eps information get none either.
+static Eigen::MatrixXd sqrtInformation(const Eigen::MatrixXd &cov, double eps) {
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(cov);
+    const Eigen::VectorXd l = saes.eigenvalues();
+    const double tol        = 1e-12 * std::max(l.maxCoeff(), 0.0);
+    Eigen::VectorXd s       = Eigen::VectorXd::Zero(l.size());
+    for (int i = 0; i < l.size(); i++)
+        if (l(i) > tol && 1 / l(i) > eps)
+            s(i) = 1 / std::sqrt(l(i));
+    return saes.eigenvectors() * s.asDiagonal() * saes.eigenvectors().transpose();
+}
+
 bool Marginalization::sparsifyVIO() {
 
     if (_n == 0)
@@ -417,12 +435,8 @@ bool Marginalization::sparsifyVIO() {
             J.block(0, _map_frame_idx.at(_frame_to_keep), 3, 6) = J_lmk.block(0, 0, 3, 6);
             Eigen::MatrixXd J_tilde                             = J * _U;
 
-            Eigen::Matrix3d inf = (J_tilde * _Sigma.asDiagonal() * J_tilde.transpose()).inverse();
-            Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(inf);
-            Eigen::Vector3d S =
-                Eigen::Vector3d((saes.eigenvalues().array() > _eps).select(saes.eigenvalues().array(), 0));
-            Eigen::Vector3d S_sqrt   = S.cwiseSqrt();
-            Eigen::Matrix3d inf_sqrt = saes.eigenvectors() * S_sqrt.asDiagonal() * saes.eigenvectors().transpose();
+            const Eigen::Matrix3d inf_sqrt =
+                sqrtInformation(J_tilde * _Sigma.asDiagonal() * J_tilde.transpose(), _eps);
 
             _map_lmk_inf.emplace(lmk, inf_sqrt);
             Eigen::Vector3d t_f_lmk = T_f_w * lmk->getPose().translation();
@@ -435,12 +449,7 @@ bool Marginalization::sparsifyVIO() {
     J.block(0, _map_frame_idx.at(_frame_to_keep), 15, 15) = absolutePriorJacobian(T_f_w);
     Eigen::MatrixXd J_tilde                               = J * _U;
 
-    Eigen::MatrixXd inf = (J_tilde * _Sigma.asDiagonal() * J_tilde.transpose()).inverse();
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(inf);
-    Eigen::VectorXd S      = Eigen::VectorXd((saes.eigenvalues().array() > _eps).select(saes.eigenvalues().array(), 0));
-    Eigen::VectorXd S_sqrt = S.cwiseSqrt();
-    Eigen::MatrixXd inf_sqrt = saes.eigenvectors() * S_sqrt.asDiagonal() * saes.eigenvectors().transpose();
-    _map_frame_inf.emplace(_frame_to_keep, inf_sqrt);
+    _map_frame_inf.emplace(_frame_to_keep, sqrtInformation(J_tilde * _Sigma.asDiagonal() * J_tilde.transpose(), _eps));
 
     return true;
 }
@@ -617,12 +626,14 @@ void Marginalization::preMarginalizeRelative(std::shared_ptr<Frame> &frame0, std
     // Reset variables
     _frame_to_marg = nullptr;
     _frame_to_keep = nullptr;
+    _has_prior     = false;
     _lmk_to_keep.clear();
     _lmk_to_marg.clear();
     _map_frame_idx.clear();
     _map_lmk_idx.clear();
     _map_lmk_inf.clear();
     _map_lmk_prior.clear();
+    _map_frame_inf.clear(); // keyed by the kept frame: never cleared, it held every kept KF (and its images) alive
     int last_idx = 0;
     _m           = 0;
     _n           = 0;

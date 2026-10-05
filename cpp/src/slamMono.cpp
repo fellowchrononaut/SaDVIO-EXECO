@@ -85,7 +85,15 @@ bool SLAMMono::init() {
         // Essential matrix filtering
         Eigen::Affine3d T_last_curr;
         Eigen::MatrixXd cov;
-        essential_ransac.estimateTransformBetween(kf_init, _frame, _matches_in_time["pointxd"], T_last_curr, cov);
+        const bool essential_ok =
+            essential_ransac.estimateTransformBetween(kf_init, _frame, _matches_in_time["pointxd"], T_last_curr, cov);
+
+        // A failed or degenerate essential matrix (its unit translation normalizes a zero vector: NaN) gives no pose:
+        // the frame cannot be the second KF
+        if (!essential_ok || !T_last_curr.matrix().allFinite() || T_last_curr.translation().norm() < 1e-6) {
+            _frame_to_display = _frame;
+            continue;
+        }
 
         // Set the scale to 10cm (arbitrary)
         T_last_curr.translation() /= 10;
@@ -138,8 +146,9 @@ bool SLAMMono::init() {
 
     // Send frame to optimizer
     profiling();
-    _frame_to_optim = _frame;
-    _is_init        = true;
+    _frame_to_optim   = _frame;
+    _is_init          = true;
+    _successive_fails = 0; // as in the other modes: the count went on, and one failure re-initialized again
     _nkeyframes++;
 
     return true;
@@ -291,9 +300,11 @@ bool SLAMMono::frontEndStep() {
 
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
     if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
-        (_successive_fails > 5)) {
+        (_successive_fails > maxLostFrames())) {
         std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
                   << std::endl;
+        waitBackEnd(); // the window is read below
+        logWindowBeforeReset();
         _is_init = false;
 
         return true;

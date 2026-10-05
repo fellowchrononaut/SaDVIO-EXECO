@@ -117,25 +117,95 @@ bool IMU::processIMU() {
     const Eigen::Vector3d acc = _last_IMU->getAcc(), gyr = _last_IMU->getGyr();
 
     // Dead reckoning of the frame pose and velocity (prediction)
-    const double dt22      = 0.5 * dt * dt;
-    Eigen::Vector3d dv     = (acc - _ba_lin) * dt;
-    Eigen::Vector3d dp     = (acc - _ba_lin) * dt22;
-    Eigen::Matrix3d dR     = geometry::exp_so3((gyr - _bg_lin) * dt);
-    Eigen::Matrix3d R_w_fp = _last_IMU->_T_w_f_imu.rotation();
-    _v                     = _last_IMU->getVelocity() + R_w_fp * dv + g * dt;
-
-    Eigen::Affine3d T_w_f            = _last_IMU->_T_w_f_imu;
-    T_w_f.affine().block(0, 0, 3, 3) = R_w_fp * dR;
-    T_w_f.affine().block(0, 3, 3, 1) += _last_IMU->getVelocity() * dt + R_w_fp * dp + g * dt22;
+    Eigen::Affine3d T_w_f = _last_IMU->_T_w_f_imu;
+    _v                    = _last_IMU->getVelocity();
+    deadReckon(T_w_f, _v, acc, gyr, _ba_lin, _bg_lin, dt);
     _frame.lock()->setWorld2FrameTransform(T_w_f.inverse());
     _T_w_f_imu = _frame.lock()->getFrame2WorldTransform();
 
     // Preintegration
     Preint s = restart ? Preint() : _last_IMU->getPreint();
-    preintegrate(s, acc, gyr, dt, _ba_lin, _bg_lin, _eta, maxStepDt());
+    preintegrate(s, acc, gyr, dt, _ba_lin, _bg_lin, _eta, stepLimit(_last_IMU.get()));
     setPreint(s);
 
     return true;
+}
+
+void IMU::deadReckon(Eigen::Affine3d &T_w_f,
+                     Eigen::Vector3d &v,
+                     const Eigen::Vector3d &acc,
+                     const Eigen::Vector3d &gyr,
+                     const Eigen::Vector3d &ba,
+                     const Eigen::Vector3d &bg,
+                     double dt) {
+    const double dt22      = 0.5 * dt * dt;
+    const Eigen::Matrix3d R_w_fp = T_w_f.rotation();
+    T_w_f.affine().block(0, 3, 3, 1) += v * dt + R_w_fp * (acc - ba) * dt22 + g * dt22;
+    T_w_f.affine().block(0, 0, 3, 3) = R_w_fp * geometry::exp_so3((gyr - bg) * dt);
+    v += R_w_fp * (acc - ba) * dt + g * dt;
+}
+
+bool CarriedImuState::capture(const Eigen::Affine3d &T_w_f_,
+                              const Eigen::Vector3d &v_,
+                              const Eigen::Vector3d &ba_,
+                              const Eigen::Vector3d &bg_,
+                              const Eigen::Vector3d &acc_,
+                              const Eigen::Vector3d &gyr_,
+                              unsigned long long ts_,
+                              unsigned long long ts_visual_,
+                              double max_step_,
+                              double max_age_) {
+    T_w_f     = T_w_f_;
+    v         = v_;
+    ba        = ba_;
+    bg        = bg_;
+    acc       = acc_;
+    gyr       = gyr_;
+    ts        = ts_;
+    ts_visual = ts_visual_;
+    max_step  = max_step_;
+    max_age   = max_age_;
+
+    // Same plausibility bounds as an inertial initialization (SLAMCore::inertialInitAccepted)
+    valid = T_w_f.matrix().allFinite() && v.allFinite() && ba.allFinite() && bg.allFinite() && acc.allFinite() &&
+            gyr.allFinite() && ba.norm() <= 2 && bg.norm() <= 0.5 && ts_visual > 0 && ts >= ts_visual &&
+            age(ts) <= max_age;
+    return valid;
+}
+
+void CarriedImuState::propagate(const Eigen::Vector3d &acc_,
+                                const Eigen::Vector3d &gyr_,
+                                unsigned long long ts_,
+                                bool raw_gap) {
+    if (!valid || ts_ <= ts)
+        return;
+    const double dt = (ts_ - ts) * 1e-9;
+    if (raw_gap || dt > max_step) { // missing IMU data: the pose is no longer carried
+        valid = false;
+        return;
+    }
+    IMU::deadReckon(T_w_f, v, acc, gyr, ba, bg, dt);
+    acc   = acc_;
+    gyr   = gyr_;
+    ts    = ts_;
+    valid = T_w_f.matrix().allFinite() && v.allFinite() && age(ts) <= max_age;
+}
+
+bool CarriedImuState::at(unsigned long long t, CarriedImuState &out) const {
+    out = *this;
+    if (!valid)
+        return false;
+    // An image a little before or after the last measurement (its IMU sample may be missing)
+    const double dt = (t >= ts ? (t - ts) : -(double)(ts - t)) * 1e-9;
+    if (std::abs(dt) > max_step) {
+        out.valid = false;
+        return false;
+    }
+    if (dt > 0)
+        IMU::deadReckon(out.T_w_f, out.v, acc, gyr, ba, bg, dt);
+    out.ts    = t;
+    out.valid = out.T_w_f.matrix().allFinite() && out.v.allFinite() && out.age(t) <= max_age;
+    return out.valid;
 }
 
 bool IMU::repropagate(const Eigen::Vector3d &ba_lin, const Eigen::Vector3d &bg_lin) {
@@ -158,7 +228,7 @@ bool IMU::repropagate(const Eigen::Vector3d &ba_lin, const Eigen::Vector3d &bg_l
     const IMU *prev = kf_imu;
     for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
         double dt = ((*it)->_timestamp_imu - prev->_timestamp_imu) * 1e-9;
-        preintegrate(s, prev->getAcc(), prev->getGyr(), dt, ba_lin, bg_lin, _eta, maxStepDt());
+        preintegrate(s, prev->getAcc(), prev->getGyr(), dt, ba_lin, bg_lin, _eta, (*it)->stepLimit(prev));
         prev = *it;
     }
     setPreint(s);

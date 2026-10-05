@@ -66,12 +66,17 @@ class AOptimizer {
 
     /*!
      * @brief True if a preintegration factor can link fi to fj: fj's preintegration starts at fi, spans at
-     * most 1 s, has no missing IMU data and a usable covariance
+     * most 1 s, covers the interval between them (integrated time equal to it up to rounding), has no missing IMU data and a
+     * usable covariance
      */
     static bool imuFactorUsable(const std::shared_ptr<Frame> &fi, const std::shared_ptr<Frame> &fj);
 
     //! Longest preintegration interval [s] used as a factor between two KFs
     static constexpr double kMaxImuFactorDt = 1.0;
+
+    //! Largest standard deviation of the log scale accepted by the mono inertial initialization (10 % on the scale;
+    //! TUM-VI rooms 1-6 and magistrale2 initialize at 0.013-0.035, a scale-free motion cannot be computed)
+    static constexpr double kMaxInitScaleSigma = 0.1;
 
     /*!
      * @brief Robust loss of the visual factors of the visual-inertial window and of their marginalization (the
@@ -293,6 +298,12 @@ class AOptimizer {
      * bias correction (thresholds of VINS-Mono: 0.1 m/s^2, 0.01 rad/s)
      */
     void repropagateIfNeeded(std::vector<std::shared_ptr<Frame>> &frame_vector);
+
+    /*!
+     * @brief A window solve that failed (Ceres FAILURE, e.g. non-finite residuals) gives no usable increments: the
+     * states are left as they were and the parameter maps cleared. Returns false, for the caller to return.
+     */
+    bool discardFailedSolve(const ceres::Solver::Summary &summary);
 
     /*!
      * @brief Store the diagnostics of a visual-inertial window optimization.

@@ -225,6 +225,19 @@ class SLAMCore {
     static bool plausibleUpdate(const Eigen::Affine3d &T_ref, const Eigen::Affine3d &T_new);
 
     /*!
+     * @brief Consecutive frames without visual pose estimate after which the SLAM re-initializes: config
+     * max_lost_frames, or the mode default. VO: 5. Stereo VIO: 20 (~1 s at 20 Hz; the IMU carries the pose through
+     * short visual dropouts such as motion blur, where a reset threw the whole state away). Mono VIO: 10 (its velocity
+     * and scale are less certain; a longer IMU-only stretch gave no measured benefit).
+     */
+    int maxLostFrames() const {
+        if (_slam_param->_config.max_lost_frames > 0)
+            return _slam_param->_config.max_lost_frames;
+        const std::string &mode = _slam_param->_config.slam_mode;
+        return mode == "bimonovio" ? 20 : mode == "monovio" ? 10 : 5;
+    }
+
+    /*!
      * @brief Release the IMU measurements older than a KF leaving the window: every IMU sample holds the previous one,
      * so the whole history of the run stayed in memory. Nothing walks the chain past the oldest window KF.
      */
@@ -232,6 +245,19 @@ class SLAMCore {
         if (kf && kf->getIMU())
             kf->getIMU()->setLastIMU(nullptr);
     }
+
+    /*!
+     * @brief Before a re-initialization after a visual dropout (VIO): keep the state of imu's frame (pose, velocity,
+     * biases) for the next initialization, if reinit_carry_state is set and the state is usable (see
+     * CarriedImuState); otherwise the next initialization starts from scratch
+     */
+    void captureCarriedState(const std::shared_ptr<IMU> &imu);
+
+    /*!
+     * @brief Write the KFs of the window not written yet to log_slam/results.csv, before a re-initialization
+     * discards them (they belong to the segment that ends)
+     */
+    void logWindowBeforeReset();
 
     /*!
      * @brief Check the result of the inertial initialization: usable solution (scale > 0), finite states and
@@ -290,6 +316,21 @@ class SLAMCore {
     uint _n_rejected_imu   = 0;     //!< IMU samples rejected by processIMU() (e.g. out of order)
     bool _vio_diag_started = false; //!< Header of log_slam/vio_diag.csv written
     bool _kf_votes_started = false; //!< Header of log_slam/kf_votes.csv written
+    bool _results_started  = false; //!< log_slam/results.csv and cov_mat.csv created (once per run)
+    int _segment           = 0;     //!< Re-initializations so far: the segment column of results.csv (each segment has
+                                    //!< its own world frame after a re-initialization)
+    bool _segment_has_rows = false; //!< Rows of the current segment written (the init path calls profiling() twice)
+    unsigned long long _last_logged_ts = 0; //!< Last KF written to results.csv: each KF is written once
+    std::shared_ptr<Frame> _results_front;  //!< Oldest KF of the window, written when it leaves (final estimate)
+
+    /*!
+     * @brief Append the pose of KF f to log_slam/results.csv, unless it is not newer than the last KF written
+     */
+    void writeResultRow(const std::shared_ptr<Frame> &f);
+
+    // Re-initialization from the last state
+    CarriedImuState _carried;              //!< State kept for the next initialization (VIO), dead-reckoned meanwhile
+    unsigned long long _last_visual_ts = 0; //!< Last frame whose pose came from the camera(s) (VIO)
 
     /*!
      * @brief Append the KF vote of a tracked frame to log_slam/kf_votes.csv (diagnostics)
@@ -342,6 +383,14 @@ class SLAMBiMono : public SLAMCore {
     bool init() override;
     bool frontEndStep() override;
     bool backEndStep() override;
+
+  private:
+    // Re-initialization from the last pose (reinit_carry_state): without an IMU, the pose of the last tracked frame
+    // is extrapolated with its velocity (the constant-velocity model of the tracking) to the first frame of the new map
+    Eigen::Affine3d _last_tracked_T_w_f = Eigen::Affine3d::Identity(); //!< Pose of the last tracked frame
+    Vector6d _last_tracked_velocity     = Vector6d::Zero();            //!< Its velocity (twist per second)
+    unsigned long long _last_tracked_ts = 0;                           //!< Its time (0: none)
+    bool _carry_pose                    = false; //!< The next initialization starts from the extrapolated pose
 };
 
 /*!
@@ -407,6 +456,7 @@ class SLAMMono : public SLAMCore {
     bool init() override;
     bool frontEndStep() override;
     bool backEndStep() override;
+
 };
 
 /*!

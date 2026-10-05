@@ -69,6 +69,13 @@ struct Config {
     bool multithreading;         //!< Allow to run front-end and back-end on different threads (unstable...)
     bool enable_visu;            //!< Allow visualization
     bool estimate_td;            //!< Estimate time delay between IMU and cameras
+    int max_lost_frames = 0;     //!< Consecutive frames without visual pose estimate before re-initializing (0: mode
+                                 //!< default, see SLAMCore::maxLostFrames)
+    int reinit_carry_state = 1;  //!< 1: a re-initialization after a visual dropout starts from the last state (VIO:
+                                 //!< pose, velocity, biases; stereo VO: extrapolated pose); 0: at the origin
+    double reinit_carry_max_age_vio = 2.0; //!< VIO: longest time since the last visual pose for which the carried state
+                                           //!< (IMU dead reckoning) is used (s)
+    double reinit_carry_max_age_vo  = 2.0; //!< Stereo VO: the same for the constant-velocity extrapolation (s)
     std::string optimizer;       //!< Optimizer type (ReprojectionError, AngularError...)
     int contrast_enhancer;       //!< integer to choose the contrast enhancement algorithm
     float clahe_clip;            //!< Clip of CLAHE (useful only if it is chosen for contrast enhancement)

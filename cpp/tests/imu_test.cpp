@@ -1149,6 +1149,16 @@ TEST_F(ImuTest, imuDataGapsAreIntegratedAndNotTurnedIntoFactors) {
     EXPECT_FALSE(std::make_shared<IMU>(_imu_cfg, _acc, _gyr)->hasValidCovariance()) << "zero covariance";
     EXPECT_NEAR(gap.imu_j->getIntegratedDt(), 40 * dt + 2.0, 1e-9);
 
+    // The factor needs a preintegration covering exactly the KF interval: a preintegration that does not start
+    // at fi (here, fj stamped 10 ms later than its integrated measurements) is not used
+    EXPECT_TRUE(AOptimizer::imuFactorUsable(ok.frames.front(), ok.frames.back()));
+    {
+        ImuChain shifted          = integrateChain(_imu_cfg, ba, bg, 40);
+        std::shared_ptr<Frame> fj = std::make_shared<Frame>();
+        fj->init(shifted.imu_j, shifted.frames.back()->getTimestamp() + 10'000'000ULL);
+        EXPECT_FALSE(AOptimizer::imuFactorUsable(shifted.frames.front(), fj));
+    }
+
     // No preintegration factor across the gap, one otherwise
     for (ImuChain *c : {&ok, &gap}) {
         std::shared_ptr<Frame> kf_i = c->frames.front(), kf_j = c->frames.back();
@@ -1185,12 +1195,21 @@ static Eigen::Matrix3d simR(double t) {
     return geometry::exp_so3(Eigen::Vector3d(0.3 * std::sin(0.5 * t), 0.2 * std::cos(0.7 * t) - 0.2, 0.4 * t));
 }
 
+// Constant velocity along a straight line, no rotation: the IMU only measures gravity
+static Eigen::Vector3d straightP(double t) { return Eigen::Vector3d(0.4 * t, 0.1 * t, 0); }
+static Eigen::Vector3d straightV(double) { return Eigen::Vector3d(0.4, 0.1, 0); }
+static Eigen::Matrix3d straightR(double) { return Eigen::Matrix3d::Identity(); }
+
 static SimKFs simulateKFs(const std::shared_ptr<imu_config> &cfg,
                           const Eigen::Vector3d &ba_true,
                           const Eigen::Vector3d &bg_true,
-                          int n_kf     = 10,
-                          int kf_every = 60) {
+                          int n_kf      = 10,
+                          int kf_every  = 60,
+                          bool straight = false) {
     const double dt = 1.0 / cfg->rate_hz;
+    auto simP       = straight ? straightP : ::isae::simP;
+    auto simV       = straight ? straightV : ::isae::simV;
+    auto simR       = straight ? straightR : ::isae::simR;
     auto meas       = [&](int k, Eigen::Vector3d &acc, Eigen::Vector3d &gyr) {
         double t = k * dt;
         gyr      = geometry::log_so3(simR(t).transpose() * simR(t + dt)) / dt + bg_true;
@@ -1276,7 +1295,7 @@ TEST_F(ImuTest, viInitModelMatchesTiltedScaledWorld) {
     const Eigen::Vector3d bg_true(0.01, -0.02, 0.005), w_true(0.08, -0.05, 0);
     const double s_true        = 2.5;
     const Eigen::Matrix3d R_wi = geometry::exp_so3(w_true);
-    SimKFs sim                 = simulateKFs(_imu_cfg, Eigen::Vector3d::Zero(), bg_true);
+    SimKFs sim                 = simulateKFs(_imu_cfg, Eigen::Vector3d::Zero(), bg_true, 20); // scale well determined
 
     // Visual world: p_w = R_wi p_I / s, R_w_f = R_wi R_I_f (VIInit maps it back with p_I = s R_wi^T p_w)
     std::vector<Eigen::Vector3d> p_true;
@@ -1308,6 +1327,28 @@ TEST_F(ImuTest, viInitModelMatchesTiltedScaledWorld) {
     EXPECT_LT(geometry::log_so3(R_w_i.transpose() * R_wi).norm(), 1e-2);
     for (size_t i = 0; i < sim.kfs.size(); i++)
         EXPECT_LT((sim.kfs[i]->getFrame2WorldTransform().translation() - p_true[i]).norm(), 1e-2) << "KF " << i;
+}
+
+TEST_F(ImuTest, viInitRefusesAnUnobservableScale) {
+
+    // Mono inertial initialization: at constant velocity without rotation, any scale fits the visual positions with
+    // a matching velocity. Only a positive scale was required, so whatever scale the solver stopped at was accepted.
+    const double s_true = 2.5;
+    for (bool straight : {true, false}) {
+        SimKFs sim = simulateKFs(_imu_cfg, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), 20, 60, straight);
+        for (auto &kf : sim.kfs) { // visual world at an unknown scale
+            Eigen::Affine3d T_w_f = kf->getFrame2WorldTransform();
+            T_w_f.translation() /= s_true;
+            kf->setWorld2FrameTransform(T_w_f.inverse());
+        }
+        isae::AngularAdjustmentCERESAnalytic ceres_ba;
+        Eigen::Matrix3d R_w_i;
+        const double s = ceres_ba.VIInit(sim.map, R_w_i, true);
+        if (straight)
+            EXPECT_LE(s, 0) << "unobservable scale accepted: " << s;
+        else
+            EXPECT_NEAR(s, s_true, 0.01 * s_true) << "an exciting motion must still initialize";
+    }
 }
 
 TEST(ImuInitTest, staticInitializationAlignsGravityAndGuessesBiases) {
@@ -1342,6 +1383,84 @@ TEST(ImuInitTest, staticInitializationAlignsGravityAndGuessesBiases) {
     EXPECT_FALSE(staticImuInitialization(accs, gyrs, R, ba, bg));
     EXPECT_EQ(ba.norm(), 0);
     EXPECT_EQ(bg.norm(), 0);
+}
+
+// Constant world acceleration and constant body rate, measured with biases: held measurements integrate them exactly
+struct ConstantMotion {
+    Eigen::Matrix3d R0 = geometry::exp_so3(Eigen::Vector3d(0.1, -0.2, 0.7));
+    Eigen::Vector3d p0{1, -2, 0.5}, v0{0.8, 0.3, -0.1}, a_w{0.4, -0.6, 0.2}, w_b{0.2, -0.1, 0.5};
+    Eigen::Vector3d ba{0.05, -0.02, 0.08}, bg{0.004, -0.003, 0.002};
+    Eigen::Affine3d pose(double t) const {
+        Eigen::Affine3d T = Eigen::Affine3d::Identity();
+        T.linear()        = R0 * geometry::exp_so3(w_b * t);
+        T.translation()   = p0 + v0 * t + 0.5 * a_w * t * t;
+        return T;
+    }
+    Eigen::Vector3d acc(double t) const { return pose(t).linear().transpose() * (a_w - g) + ba; }
+    Eigen::Vector3d gyr() const { return w_b + bg; }
+};
+
+TEST(ImuDeadReckoningTest, deadReckoningIntegratesConstantMotionExactly) {
+    const ConstantMotion m;
+    Eigen::Affine3d T = m.pose(0);
+    Eigen::Vector3d v = m.v0;
+    const double dt   = 0.005;
+    for (int i = 0; i < 400; i++)
+        IMU::deadReckon(T, v, m.acc(i * dt), m.gyr(), m.ba, m.bg, dt);
+    EXPECT_NEAR((T.translation() - m.pose(2.0).translation()).norm(), 0, 1e-9);
+    EXPECT_NEAR(geometry::log_so3(T.linear().transpose() * m.pose(2.0).linear()).norm(), 0, 1e-9);
+    EXPECT_NEAR((v - (m.v0 + m.a_w * 2.0)).norm(), 0, 1e-9);
+}
+
+TEST(ImuDeadReckoningTest, carriedStateFollowsTheImuUntilItIsStale) {
+    const ConstantMotion m;
+    const unsigned long long t0 = 1000000000ULL, step = 5000000ULL; // 1 s, 5 ms (200 Hz)
+    const double max_step       = IMU::maxStepDtForRate(200);
+    auto at                     = [&](int i) { return t0 + i * step; };
+
+    // The last visual pose 0.5 s before the dropout ended in a re-initialization
+    CarriedImuState c;
+    ASSERT_TRUE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(0), t0 - 500000000ULL, max_step, 2.0));
+
+    // It follows the measurements; at() extrapolates within a step without moving the state
+    for (int i = 1; i <= 200; i++)
+        c.propagate(m.acc(i * 0.005), m.gyr(), at(i), false);
+    ASSERT_TRUE(c.valid);
+    EXPECT_NEAR((c.T_w_f.translation() - m.pose(1.0).translation()).norm(), 0, 1e-9);
+    EXPECT_NEAR((c.v - (m.v0 + m.a_w)).norm(), 0, 1e-9);
+    CarriedImuState c_img;
+    ASSERT_TRUE(c.at(at(200) + 2000000ULL, c_img));
+    EXPECT_NEAR((c_img.T_w_f.translation() - m.pose(1.002).translation()).norm(), 0, 1e-9);
+    EXPECT_EQ(c.ts, at(200));
+    EXPECT_FALSE(c.at(at(200) + 2 * (unsigned long long)(max_step * 1e9), c_img)); // too far from a measurement
+
+    // Stale 2 s after the last visual pose (here 1.5 s of dead reckoning after the capture)
+    for (int i = 201; i <= 299; i++)
+        c.propagate(m.acc(i * 0.005), m.gyr(), at(i), false);
+    EXPECT_TRUE(c.valid);
+    for (int i = 300; i <= 302; i++)
+        c.propagate(m.acc(i * 0.005), m.gyr(), at(i), false);
+    EXPECT_FALSE(c.valid);
+    EXPECT_FALSE(c.at(at(302), c_img));
+
+    // Missing IMU data: a long step, or a sample interpolated across a raw gap
+    ASSERT_TRUE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(0), at(0), max_step, 2.0));
+    c.propagate(m.acc(0.1), m.gyr(), at(20), false); // 100 ms > max_step (50 ms)
+    EXPECT_FALSE(c.valid);
+    ASSERT_TRUE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(0), at(0), max_step, 2.0));
+    c.propagate(m.acc(0.005), m.gyr(), at(1), true);
+    EXPECT_FALSE(c.valid);
+
+    // Not captured: implausible biases, non-finite state, already stale, no visual pose yet
+    EXPECT_FALSE(c.capture(m.pose(0), m.v0, Eigen::Vector3d(3, 0, 0), m.bg, m.acc(0), m.gyr(), at(0), at(0), max_step, 2.0));
+    EXPECT_FALSE(c.capture(m.pose(0), m.v0, m.ba, Eigen::Vector3d(0, 0.6, 0), m.acc(0), m.gyr(), at(0), at(0), max_step, 2.0));
+    EXPECT_FALSE(c.capture(m.pose(0), Eigen::Vector3d(NAN, 0, 0), m.ba, m.bg, m.acc(0), m.gyr(), at(0), at(0), max_step, 2.0));
+    EXPECT_FALSE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(500), at(0), max_step, 2.0));
+    EXPECT_FALSE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(0), 0, max_step, 2.0));
+
+    // The limit is the configured one (reinit_carry_max_age_vio): 0.5 s since the last visual pose
+    EXPECT_TRUE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(100), at(0), max_step, 1.0));
+    EXPECT_FALSE(c.capture(m.pose(0), m.v0, m.ba, m.bg, m.acc(0), m.gyr(), at(100), at(0), max_step, 0.4));
 }
 
 TEST_F(ImuTest, imuFactorAccountsForBiasChangesAfterIntegration) {
@@ -1631,6 +1750,79 @@ TEST_F(ImuTest, marginalizationPriorKeepsItsLinearizationPoint) {
         optim.localMapVIOptimization(sc.map, 1);
         EXPECT_LT(maxPoseError(sc, 2), 3e-3) << label;
         EXPECT_LT(maxVelocityError(sc, 2), 1e-2) << label;
+    }
+}
+
+// Gives the test access to the dense prior built by marginalize()
+struct MarginalizationAccess : public AngularAdjustmentCERESAnalytic {
+    std::shared_ptr<Marginalization> prior() const { return _marginalization; }
+};
+
+TEST_F(ImuTest, marginalizationFactorJacobiansAwayFromZero) {
+    // The parameter blocks of the dense prior are additive increments: its rotation Jacobian
+    // d Log(A Exp(x)) / dx = Jr^-1(Log(A Exp(x))) Jr(x) was exact only at x = 0 (missing Jr(x)).
+    VIScene sc = buildVIScene(_imu_cfg, true, 8);
+    MarginalizationAccess optim;
+    ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), false));
+    sc.map->discardLastFrame();
+    optim.localMapVIOptimization(sc.map, 1); // the kept states move away from the linearization point
+
+    MarginalizationFactor f(optim.prior());
+    ASSERT_GT(f.parameter_block_sizes().size(), 4u) << "frame blocks and landmarks";
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<double> u(-1, 1);
+    std::vector<std::vector<double>> blocks;
+    for (size_t i = 0; i < f.parameter_block_sizes().size(); i++) {
+        std::vector<double> b(f.parameter_block_sizes()[i]);
+        for (double &x : b)
+            x = (i == 0 ? 0.15 : 0.05) * u(rng); // pose increment up to 0.15 rad / 0.15 m
+        blocks.push_back(b);
+    }
+    std::vector<double *> params;
+    for (auto &b : blocks)
+        params.push_back(b.data());
+    EXPECT_TRUE(isae_test::JacobiansMatch(f, params, 1e-5));
+}
+
+TEST_F(ImuTest, inertialPriorWithoutKeptLandmarks) {
+    // A VIO marginalization that keeps no landmark (here all are outliers, as when vision fails) still gives a
+    // prior on the kept frame's pose, velocity and biases. It was dropped: the window, the next marginalization and
+    // the sparse path all required kept landmarks to consider that a prior existed.
+    for (bool sparse : {false, true}) {
+        VIScene sc = buildVIScene(_imu_cfg, true, 8);
+        for (auto &f : sc.map->getFrames())
+            for (auto &tl : f->getLandmarks())
+                for (auto &lmk : tl.second)
+                    lmk->setOutlier();
+        MarginalizationAccess optim;
+        ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), sparse));
+        EXPECT_TRUE(optim.prior()->_lmk_to_keep.empty());
+        EXPECT_TRUE(optim.prior()->_frame_to_keep);
+        EXPECT_TRUE(optim.prior()->_has_prior);
+        if (sparse) {
+            // The kept frame's prior leaves the gauge unobserved: its sparse factor came from a plain inverse of a
+            // rank-deficient covariance (NaN on EuRoC, absurd weights here). It must not claim more information
+            // than the dense prior has on those states.
+            std::shared_ptr<Marginalization> m = optim.prior();
+            const Eigen::MatrixXd S            = m->_map_frame_inf.at(m->_frame_to_keep);
+            const Eigen::MatrixXd Jf =
+                m->_marginalization_jacobian.middleCols(m->_map_frame_idx.at(m->_frame_to_keep), 15);
+            const double dense_max  = Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>(Jf.transpose() * Jf).eigenvalues().maxCoeff();
+            const double sparse_max = Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>(S.transpose() * S).eigenvalues().maxCoeff();
+            ASSERT_TRUE(S.allFinite());
+            EXPECT_LT(sparse_max, 10 * dense_max) << "sparse " << sparse_max << " vs dense " << dense_max;
+        }
+        sc.map->discardLastFrame();
+        optim.localMapVIOptimization(sc.map, 1);
+        EXPECT_GT(optim.getLastVIStats().n_prior_factors, 0u) << (sparse ? "sparse" : "dense");
+        // Without landmarks the kept frame's prior leaves the gauge unobserved: the sparse factor's information
+        // came from a plain inverse of a rank-deficient covariance (NaN, every window solve failed)
+        EXPECT_TRUE(optim.getLastVIStats().usable) << (sparse ? "sparse" : "dense") << ": "
+                                                   << optim.getLastVIStats().termination;
+
+        // The next marginalization folds it in and still has a prior
+        ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), sparse));
+        EXPECT_TRUE(optim.prior()->_has_prior);
     }
 }
 

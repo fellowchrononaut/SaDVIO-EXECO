@@ -27,9 +27,15 @@ BIN        = '/root/SaDVIO-Dense/SaDVIO-EXECO-dense_devel/cpp/build/isaeslam'
 SEQUENCES  = {'room1': 'tumvi/dataset-room1_512_16/mav0',
               'magistrale2': 'tumvi/dataset-magistrale2_512_16/mav0'}
 SEQUENCES.update({f'room{i}': f'tumvi/dataset-room{i}_512_16/mav0' for i in range(2, 7)})
+EUROC_SEQS = {'V1_01': 'V1_01_easy', 'V1_02': 'V1_02_medium', 'V1_03': 'V1_03_difficult',
+              'V2_01': 'V2_01_easy', 'V2_02': 'V2_02_medium', 'V2_03': 'V2_03_difficult',  # EuRoC Vicon rooms
+              'MH_01': 'MH_01_easy', 'MH_02': 'MH_02_easy', 'MH_03': 'MH_03_medium',      # EuRoC Machine Hall
+              'MH_04': 'MH_04_difficult', 'MH_05': 'MH_05_difficult'}
+SEQUENCES.update({k: f'euroc/{v}/mav0' for k, v in EUROC_SEQS.items()})
 RS_TRAJS   = ['13_18_29', '13_21_59', '13_30_22', '13_31_26', '13_34_21', '13_36_44', '13_41_28', '13_42_11', '13_45_18']
 SEQUENCES.update({f'rs_{t}': f'realsense/{t}/mav0' for t in RS_TRAJS})   # real RealSense D455 (prepare_realsense.py)
 SEQ_DATASET = {f'rs_{t}': '"realsense_d455_vio"' for t in RS_TRAJS}        # default dataset_id per sequence
+SEQ_DATASET.update({k: '"eth"' for k in EUROC_SEQS})                       # EuRoC: the paper's config
 SEQUENCES['rs_13_18_29_synthimu'] = 'realsense/13_18_29_synthimu/mav0'   # diagnostic: IMU synthesised from GT
 SEQUENCES['rs_hyb_realgyro'] = 'realsense/13_18_29_hyb_realgyro/mav0'
 SEQ_DATASET['rs_hyb_realgyro'] = '"realsense_d455_vio"'
@@ -46,6 +52,10 @@ SEQ_DATASET['rs_synth_sh15'] = '"realsense_d455_vio"'
 SEQUENCES['rs_synth_sh30'] = 'realsense/13_18_29_synth_sh30/mav0'
 SEQ_DATASET['rs_synth_sh30'] = '"realsense_d455_vio"'
 SEQ_DATASET['rs_13_18_29_synthimu'] = '"realsense_d455_vio"'
+# Forced visual dropouts (make_dropout_seq.py): black images in three windows, IMU unchanged
+SEQUENCES['MH_01_drop'] = 'euroc/MH_01_easy_drop/mav0'        # 65 s and 100 s for 1.5 s, 140 s for 3 s
+SEQ_DATASET['MH_01_drop'] = '"eth"'
+SEQUENCES['room1_drop'] = 'tumvi/dataset-room1_512_16_drop/mav0'  # 45 s and 85 s for 1.5 s, 115 s for 3 s
 MODES      = ('bimono', 'bimonovio', 'mono', 'monovio')
 
 

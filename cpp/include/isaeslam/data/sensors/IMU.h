@@ -127,7 +127,15 @@ class IMU : public ASensor {
     /*!
      * @brief Longest integration step considered as continuous IMU data (10 nominal periods, >= 50 ms)
      */
-    double maxStepDt() const { return std::max(0.05, 10.0 / _rate_hz); }
+    static double maxStepDtForRate(double rate_hz) { return std::max(0.05, 10.0 / rate_hz); }
+    double maxStepDt() const { return maxStepDtForRate(_rate_hz); }
+
+    /*!
+     * @brief Mark a measurement interpolated across missing raw IMU data (set by the reader): every integration
+     * step that starts or ends at it counts as a gap, however short it is
+     */
+    void markRawGap() { _raw_gap = true; }
+    bool rawGap() const { return _raw_gap; }
     double getGyrNoise() const { return _gyr_noise; }
     double getAccNoise() const { return _acc_noise; }
     double getbGyrNoise() const { return _bgyr_noise; }
@@ -161,6 +169,18 @@ class IMU : public ASensor {
      * Source: https://arxiv.org/abs/1512.02363
      */
     bool processIMU();
+
+    /*!
+     * @brief Dead reckoning over one step of dt: the measurement of the step start (acc, gyr, in the frame) is
+     * held over the step and corrected with the biases. Moves the pose T_w_f and the velocity v (world frame).
+     */
+    static void deadReckon(Eigen::Affine3d &T_w_f,
+                           Eigen::Vector3d &v,
+                           const Eigen::Vector3d &acc,
+                           const Eigen::Vector3d &gyr,
+                           const Eigen::Vector3d &ba,
+                           const Eigen::Vector3d &bg,
+                           double dt);
 
     /*!
      * @brief Estimate the transformation between the Last KF and the current frame with pre integration deltas.
@@ -261,12 +281,68 @@ class IMU : public ASensor {
     // Diagnostics
     double _integrated_dt = 0; //!< Time integrated since the last KF (sum of the integration steps)
     int _n_gap_steps      = 0; //!< Steps since the last KF longer than maxStepDt() (missing IMU data)
+    bool _raw_gap         = false; //!< Interpolated across missing raw IMU data (see markRawGap)
+
+    /*!
+     * @brief Longest step from prev to this measurement counted as continuous data (0: always a gap)
+     */
+    double stepLimit(const IMU *prev) const { return (_raw_gap || prev->_raw_gap) ? 0.0 : maxStepDt(); }
 
     std::shared_ptr<IMU> _last_IMU; //!< Last IMU measurement used for pre integration
     std::weak_ptr<Frame> _last_kf;  //!< Last keyframe used for pre integration
 
     // Mutex
     mutable std::mutex _imu_mtx;
+};
+
+/*!
+ * @brief Inertial state carried across a re-initialization.
+ *
+ * After a visual dropout the IMU has carried the pose, so the next initialization can start from the last state
+ * (pose, velocity, biases) instead of the origin with a static bias guess. The state is dead-reckoned with every
+ * IMU measurement that arrives until the initialization uses it, and dropped when it is not plausible, when IMU
+ * data is missing, or when the last visual pose is older than max_age (config reinit_carry_max_age_vio; dead
+ * reckoning drifts quadratically).
+ */
+struct CarriedImuState {
+    bool valid            = false;
+    Eigen::Affine3d T_w_f = Eigen::Affine3d::Identity(); //!< Pose of the frame
+    Eigen::Vector3d v     = Eigen::Vector3d::Zero();     //!< Velocity in the world frame
+    Eigen::Vector3d ba    = Eigen::Vector3d::Zero();     //!< Accelerometer bias
+    Eigen::Vector3d bg    = Eigen::Vector3d::Zero();     //!< Gyroscope bias
+    Eigen::Vector3d acc   = Eigen::Vector3d::Zero();     //!< Last measurement, held over the next step
+    Eigen::Vector3d gyr   = Eigen::Vector3d::Zero();
+    unsigned long long ts        = 0; //!< Time of the state (ns)
+    unsigned long long ts_visual = 0; //!< Time of the last visual pose (ns)
+    double max_step              = 0; //!< Longest step counted as continuous IMU data (s)
+    double max_age               = 0; //!< Longest time since the last visual pose (s)
+
+    /*!
+     * @brief Start from a state; false (and invalid) if it is not finite, its biases are implausible or the last
+     * visual pose is too old
+     */
+    bool capture(const Eigen::Affine3d &T_w_f,
+                 const Eigen::Vector3d &v,
+                 const Eigen::Vector3d &ba,
+                 const Eigen::Vector3d &bg,
+                 const Eigen::Vector3d &acc,
+                 const Eigen::Vector3d &gyr,
+                 unsigned long long ts,
+                 unsigned long long ts_visual,
+                 double max_step,
+                 double max_age);
+
+    /*!
+     * @brief Move the state to a new IMU measurement at ts (raw_gap: interpolated across missing raw data)
+     */
+    void propagate(const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr, unsigned long long ts, bool raw_gap);
+
+    /*!
+     * @brief The state at ts (up to one step after the last measurement); false if there is none
+     */
+    bool at(unsigned long long ts, CarriedImuState &out) const;
+
+    double age(unsigned long long t) const { return t > ts_visual ? (t - ts_visual) * 1e-9 : 0.0; }
 };
 
 /*!

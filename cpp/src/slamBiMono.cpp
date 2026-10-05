@@ -40,9 +40,20 @@ bool SLAMBiMono::init() {
         _frame = nextFrame();
     }
 
-    // Prior on the first frame, it is set as the origin
-    _frame->setWorld2FrameTransform(Eigen::Affine3d::Identity());
-    _frame->setPrior(Eigen::Affine3d::Identity(), 100 * Vector6d::Ones());
+    // Prior on the first frame, it is set as the origin, or after a visual dropout at the pose of the last tracked
+    // frame extrapolated at its velocity over the gap (up to reinit_carry_max_age_vo)
+    Eigen::Affine3d T_w_f0 = Eigen::Affine3d::Identity();
+    if (_carry_pose) {
+        const double gap = ((double)_frame->getTimestamp() - (double)_last_tracked_ts) * 1e-9;
+        if (gap >= 0 && gap <= _slam_param->_config.reinit_carry_max_age_vo) {
+            T_w_f0 = _last_tracked_T_w_f * geometry::se3_Vec6dtoRT(_last_tracked_velocity * gap);
+            std::cout << "Re-initialization from the last pose, extrapolated over " << gap << " s" << std::endl;
+        } else {
+            std::cout << "Re-initialization from scratch: last tracked pose " << gap << " s old" << std::endl;
+        }
+    }
+    _frame->setWorld2FrameTransform(T_w_f0.inverse());
+    _frame->setPrior(T_w_f0.inverse(), 100 * Vector6d::Ones());
 
     // detect all features on all sensors
     detectFeatures(_frame->getSensors().at(0));
@@ -272,6 +283,9 @@ bool SLAMBiMono::frontEndStep() {
         // Compute velocity and motion model
         _6d_velocity =
             (geometry::se3_RTtoVec6d(getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform())) / dt;
+        _last_tracked_T_w_f    = _frame->getFrame2WorldTransform();
+        _last_tracked_velocity = _6d_velocity;
+        _last_tracked_ts       = _frame->getTimestamp();
     } else {
 
         // If the prediction is wrong, we reinitialize the odometry from the last KF:
@@ -345,11 +359,16 @@ bool SLAMBiMono::frontEndStep() {
     }
 
     // Init the SLAM again in case of successive failures or if the frame is too far from the last KF
-    if ((getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10 ||
-        (_successive_fails > 5)) {
+    const bool too_far =
+        (getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform()).translation().norm() > 10;
+    if (too_far || (_successive_fails > maxLostFrames())) {
         std::cout << "Reinitializing SLAM after " << _successive_fails << " successive fails or too far from last KF"
                   << std::endl;
         waitBackEnd(); // the back end must not add a pending KF to the reset map
+
+        // After a dropout the next map starts where the camera should be; not after a jump (diverged estimate)
+        _carry_pose = !too_far && _slam_param->_config.reinit_carry_state && _last_tracked_ts > 0;
+        logWindowBeforeReset();
         _is_init = false;
         _local_map->reset();
         _slam_param->getOptimizerBack()->resetMarginalization();

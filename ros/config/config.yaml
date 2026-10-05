@@ -32,6 +32,21 @@ tracker: "klt"
 ## estimate the delay between camera and IMU or not
 estimate_td: 1
 
+## consecutive frames without visual pose estimate before re-initializing (0: mode default: VO 5, mono VIO 10,
+## stereo VIO 20 ~ 1 s at 20 Hz, where the IMU carries the pose through short visual dropouts)
+max_lost_frames: 0
+
+## after a visual dropout, re-initialize from the last state (1: VIO keeps pose, velocity and biases, dead-reckoned
+## with the IMU; stereo VO the last tracked pose extrapolated at its velocity) or from scratch at the origin (0). Mono
+## VO always restarts at its last KF, with a new scale
+reinit_carry_state: 1
+## longest time since the last visual pose for which that state is used, in s (then from scratch). VIO dead reckoning
+## (median / 90 % position error): with marginalization ~0.07 / 0.15 m at 2 s, 0.3 / 0.6 m at 5 s; default VIO up to
+## 0.3 / 0.7 m at 2 s, 1.8 / 4 m at 5 s (better biases, longer carry). Stereo VO: constant velocity, 0.5-1.3 m and up
+## to 80 deg at 1.4 s
+reinit_carry_max_age_vio: 2.0
+reinit_carry_max_age_vo: 2.0
+
 ## LocalMap parameters
 min_kf_number: 1                # number of keyframes that are added by default when the map starts
 max_kf_number: 12               # size of the sliding window

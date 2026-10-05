@@ -4,13 +4,41 @@ Started 2026-10-02. This file is the loop's state: read it first in every iterat
 Checklist source: `/home/deos/s.jois/EXECO/SaDVIO-Dense/SaDVIO-EXECO/doc/VIO_fix_+_LIO_Prospects.md`
 (Part 2, Issues 1-20 + Minor). Tick items there as they are done.
 
+## Current status and open items (kept up to date; last update 2026-10-05)
+
+Done: Issues 1–20 and the minor items, the fixes found while running (marginalization prior, threading, memory),
+the follow-up of the commit review (`COMMITS_ASSESSMENT.md` findings A–E and the bugs they uncovered), and EuRoC
+(all 11 sequences: SaDVIO at or below the paper's ATE on 9 of 11, completes V2_03). Details below, by date.
+
+Open:
+1. **Mono VO** fails on several sequences (rooms 2–5, V1_03, V2_01, V2_03): tracked landmarks run out between KFs
+   (half of them lost in the frame after a KF) and PnP has no 3D point left. Tried and reverted: a KF rule on
+   the landmark count, and seeding the tracks from the previous frame (both mixed). Next: an essential-matrix
+   (2D-2D) motion estimate when PnP has too few points. Also a candidate: scale the re-init translation by the last
+   known speed instead of the fixed 1/10, so the segments keep one scale (not implemented).
+2. **Mono VIO accuracy:** MH_01 1.59 m, V1_03 1.19–1.49 m, V2_03 fails; elsewhere 0.08–0.8 m (stereo VIO
+   0.03–0.28 m).
+3. **magistrale2, ~1 run in 3–4 ends at ATE ~4.6 m:** a gyroscope z-bias jump during a KF flood in a gallery with
+   a repetitive glass-roof grid (aliased tracks), then 15–21° of heading drift. Needs visual outlier rejection
+   against the IMU-predicted motion.
+4. **RealSense:** waits for the user's camera-IMU calibration (Kalibr) and IMU noise (Allan variance); then
+   replace the inflated `noise5` values and redo marginalization on it (deferred item 2 of 2026-10-03).
+5. **ExECoSim** sequences not run.
+6. **`LineFeatureTest.LineFeatureMatching`** fails (its pass threshold is a coin flip on a random detector;
+   8 of 20 seeds pass) — outside the IMU work, reported, not loosened.
+7. **Freeze SaDVIO** (tag) once items 1–2 are resolved, before starting SaDLIO. VIO re-initialization now starts from
+   the last state (2026-10-05, last section); stereo VO still restarts at the origin. IMU core milestone: pre-freeze
+   checks done 2026-10-05 (rebuilds, tests, main-binary smoke runs; see the last section); tag after the commit.
+8. **Commit** the work since `a3fab2b` (code under `cpp/` and `ros/config/config.yaml`; tools, configs and this
+   ledger under `doc/`) — the user commits.
+
 ## Rules (set by the user)
 
 - Goal: every config option works correctly for any user, not just the checked-in config.
 - Code: host checkout `/home/deos/s.jois/EXECO/SaDVIO-Dense/SaDVIO-EXECO`, branch `dense_devel`.
-  **Do not stage or commit.** The user verifies everything at the end.
-- Builds: `cpp/build/isaeslam` is the **frozen pre-fix binary** (baseline; do not rebuild until the
-  end). Development binary and tests: `cpp/build_tests/` (FFS off, VDB-GPDF on); runs use
+  **Do not stage or commit.** The user verifies and commits (first commits: `6d8cb3c`, `a3fab2b`).
+- Builds: `cpp/build/isaeslam` was the frozen pre-fix binary during the loop; since 2026-10-03 it is rebuilt
+  with the final code at each milestone, with the ROS colcon build. Development binary and tests: `cpp/build_tests/` (FFS off, VDB-GPDF on); runs use
   `run_sadvio.py --bin /root/SaDVIO-Dense/SaDVIO-EXECO-dense_devel/cpp/build_tests/isaeslam`.
   At the end, rebuild `cpp/build` and the ROS colcon build with all fixes.
 - Build/run: container `sad_vio_dense`, folder `/root/SaDVIO-Dense/SaDVIO-EXECO-dense_devel`
@@ -21,8 +49,8 @@ Checklist source: `/home/deos/s.jois/EXECO/SaDVIO-Dense/SaDVIO-EXECO/doc/VIO_fix
   and `scratch/`, the working folder of a running binary (removed when empty). Everything else lives in
   the repo under `doc/vio_imu_fix/`: this ledger, `tools/`, `configs/`, `runs/` (results; `run_sadvio.py`
   moves each run here when it ends, with the container's root-owned files handed back to the host user)
-  and `logs/` (driver logs). `sync_to_container.sh` does not copy `doc/` into the container. EuRoC could not be downloaded (ETH server down, Research
-  Collection rate-limits scripts); TUM-VI is used instead (see Data). RealSense data: leave alone
+  and `logs/` (driver logs). `sync_to_container.sh` does not copy `doc/` into the container. EuRoC (all 11 sequences, downloaded by the
+  user 2026-10-04) is in `SaD_VIO_data/euroc/`; TUM-VI in `SaD_VIO_data/tumvi/`. RealSense data: leave alone
   (no camera-IMU calibration yet).
 - Evaluation tooling and results live in `doc/vio_imu_fix/`; ground truth stays in the dataset folder and
   is read only by `tools/eval_traj.py`, never by SaDVIO code.
@@ -558,7 +586,8 @@ Candidate improvement: cut the chain when a KF leaves the window.
   covariance) used by `addIMUResiduals`, `VIInit` and the 4 marginalization sites
   (`marginalize` / `marginalizeRelative` of both analytic optimizers), which built `IMUFactor(frame0,
   frame1)` without checking that frame1's preintegration started at frame0. The bias random-walk
-  factor is kept in all cases.
+  factor is kept when the IMU factor is not usable — except, until 2026-10-04, for intervals over 1 s,
+  where an early `continue` skipped both (see "Assessment follow-up").
 
 **Evidence:** new `ImuTest.droppingAKeyframeKeepsItsImuInformation`: 3 KFs (0, 60, 120 samples),
 the last re-pointed to the first and re-integrated = the preintegration of a 2-KF chain (0, 120) to
@@ -1237,7 +1266,7 @@ by fix 10; the magistrale2 VIO margin since fix 8 (1.47 → ~1.7–1.9 m) remain
 
 ## Follow-up items (user request 2026-10-03: "do 1 3 4 and 5", item 2 = RealSense marginalization deferred)
 
-### Item 1 — magistrale2 VIO "regression" since fix 8: none, run-to-run variance
+### Item 1 — magistrale2 VIO "regression" since fix 8: no systematic regression shown
 A/B snapshots on top of `fix10`: `varA` (`canBridge` always true = the bridging of before fix 8), `varB`
 (`kMaxImuFactorDt = 10` s instead of 1 s). magistrale2, stereo VIO, marginalization + `estimate_td`:
 
@@ -1252,7 +1281,8 @@ A/B snapshots on top of `fix10`: `varA` (`canBridge` always true = the bridging 
 The 1.47 → 1.7–1.9 m difference was sampling noise: the same code spreads over 0.7–4.7 m. magistrale2 has ground
 truth only at the start and the end (mocap room), so its ATE is essentially one end-to-end drift per run. Both the
 old and the current bridging have the same failure mode, a run ending at ATE ≈ 4.6 m / drift ≈ 10 m (2 of 6 with
-A, 1 of 4 current). **No change**; fix 8 stays. The ≈ 4.6 m mode (~1 run in 3–4) is a separate open item.
+A, 1 of 4 current). With 3–6 runs per variant and this spread, a modest shift either way cannot be excluded:
+no systematic regression is shown, not proven absent. **No change**; fix 8 stays. The ≈ 4.6 m mode (~1 run in 3–4) is a separate open item.
 
 ### Item 4 — smaller items
 - **Unit tests (5 old failures):**
@@ -1357,3 +1387,390 @@ alignments: all KFs / first 20 s), errors, metrics and keypoints; the camera vid
 encoded separately. Published as the private artifact https://claude.ai/artifact/RdSgwnB2HmxsG5BFB71ias.
 ATE VO / VIO: room1 0.139 / 0.089, room2 0.215 / 0.089, room3 0.154 / 0.104, room4 0.120 / 0.063,
 room5 0.161 / 0.084, room6 0.071 / 0.059, magistrale2 6.94 / 2.81 m.
+
+## Assessment follow-up (2026-10-04, COMMITS_ASSESSMENT.md, groups 1 and 2)
+
+Findings A–E of the assessment were checked against the code before changing it; all hold.
+- **A, dense-prior rotation Jacobian** (`MarginalizationFactor::Evaluate`): the pose blocks are additive (no
+  manifold), so `d Log(A Exp(x)) / dx = Jr^-1(Log(A Exp(x))) Jr(x)`; `Jr(x)` was missing. Error of the committed
+  Jacobian 1e-3 / 5e-3 / 0.1 at increments of 0.002 / 0.014 / 0.27 rad (numerical check). Fixed. Same function:
+  a kept landmark with index -1 skipped `block_id++`, which would shift every later block (dead path today; the
+  index never takes that value), now advances and zeroes its Jacobian. The other residuals with
+  `Exp(increment)` already had `Jr(dw)`. Test `ImuTest.marginalizationFactorJacobiansAwayFromZero` (whole
+  factor, random non-zero increments up to 0.15 rad).
+- **B, interpolation hid raw IMU gaps** (`ImuImageMerger::emitImageFrame`): a measurement interpolated at an
+  image time across raw data further apart than `IMU::maxStepDtForRate` is marked (`IMU::markRawGap`); any
+  integration step starting or ending at a marked measurement counts as a gap (`IMU::stepLimit`, also in the
+  re-propagation), so no preintegration factor spans the outage; the bias random walk still applies. Offline and
+  ROS readers share the merger. Test `DataProviderTest.rawImuGapIsNotHiddenByImageInterpolation` (2 s outage,
+  images at 20 Hz, through merger + integrator: intervals touching the outage have gaps, the one after none).
+- **C, unusable window solves applied**: `AOptimizer::discardFailedSolve` — after a Ceres FAILURE the states are
+  kept (and the time offset of the `Td` variants is unchanged); in `localMapBA`, `localMapVIOptimization` and both
+  `localMapVIOptimizationTd`. Latent: 0 FAILURE in ~67k window solves of the final-code runs (all 6,457 recorded
+  failures are from old snapshots).
+- **D**: `inertialInitAccepted` rejects a non-finite pose (was `continue`). The early `continue` for intervals over
+  1 s skipped the bias random-walk factor too; it is now always added (weighted by the interval), the IMU factor
+  being refused by `imuFactorUsable`, which also requires the integrated time to equal the KF interval (the steps
+  telescope to it exactly when the chain is intact, whatever the dataset; measured 0.000 ms over 49,993 factors).
+  Covered in `ImuTest.imuDataGapsAreIntegratedAndNotTurnedIntoFactors`.
+- Wording: the bias-factor claim above and the magistrale2 item-1 conclusion ("no systematic regression shown").
+- `all_runs_metrics.csv` / `RESULTS_ALL_RUNS.md` regenerated (1,058 runs, now including the viewer runs).
+
+**Validation:** unit tests 72 / 73 (the 3 new or extended tests fail with the fixes reverted;
+`LineFeatureMatching` unchanged). Runs `asmt*` (main build), against the previous final-code ranges:
+
+| config | runs | ATE (m) | before |
+|---|---|---|---|
+| room1 stereo VIO marg + td | 3 | 0.096 0.093 0.055 | 0.06–0.10 |
+| room1 stereo VIO marg + td, multithreading | 2 | 0.073 0.086 (0 KF skips) | 0.072–0.100 |
+| room1 stereo VIO default | 2 | 0.259 0.249 | 0.24–0.33 |
+| room1 stereo VO | 1 | 0.138 | 0.14–0.17 |
+| room1 mono VIO | 2 | 0.286 0.216 | 0.24–0.34 |
+| magistrale2 stereo VIO marg + td | 3 | 0.88 2.43 2.25 (drift 1.9 / 5.4 / 5.0) | 0.7–4.7 |
+
+All 0 resets, coverage 0.98–0.99, no discarded solve, no KF interval flagged with a gap (20,952), IMU factors per
+window unchanged (10.99 vs 10.99).
+
+## Assessment follow-up, group 3 (2026-10-04): items 1 (E) and 2, and what they uncovered
+
+### Item 1 — a prior that keeps the frame and no landmark (finding E)
+"A prior exists" was encoded as "`_lmk_to_keep` is non-empty", so a VIO marginalization keeping no landmark (vision
+failing) computed an inertial prior on the kept frame that was then dropped everywhere: not added to the window
+(dense or sparse), not folded into the next marginalization, and the gauge fell back to fixing frames.
+**Fix:** explicit `Marginalization::_has_prior` (set by a successful marginalization, cleared by every reset and by
+`preMarginalize`), used by the window insertion (both analytic optimizers, dense and `addSparsePriorResiduals`),
+the folding of the previous prior and `fixedFramesGivenPrior`.
+**Found with it:**
+- **The dense VO prior was never used with the AngularAnalytic optimizer (default).** Its window insertion skipped
+  the prior when "the frame to keep is not in the problem", and VO keeps no frame: `find(nullptr)` always failed.
+  The VO prior was computed and folded into the next one but never constrained a window (the BundleAdjustment
+  optimizer did not have the check). Present in the original code; the earlier "VO + marginalization does not help"
+  results measured the robust loss and the landmark freezing, not the prior. Fixed (check only with a kept frame).
+- **Mono VIO kept a stale prior across a re-initialization** (the map was reset, the prior not; the next
+  marginalization would look up a frame that no longer exists): `resetMarginalization()` added, as stereo does.
+- **Sparse VIO information from a plain inverse** (`sparsifyVIO`): `(J Σ Jᵀ)⁻¹` of the kept frame's (and the
+  landmarks') covariance. A prior without landmarks leaves the gauge unobserved, the covariance is rank-deficient:
+  NaN on EuRoC (every window solve FAILED, caught by `discardFailedSolve`), absurd weights in the synthetic scene
+  (2.8e9 vs 1e-5 in the dense prior). Now `sqrtInformation`: eigenvalue-thresholded pseudo-inverse, the convention
+  `sparsifyVO` already used.
+- **Memory leak in sparse VIO:** `_map_frame_inf` (keyed by `shared_ptr<Frame>`) was never cleared: every kept KF
+  and its images stayed alive. Cleared in `preMarginalize`. magistrale2 VIO marg + sparse: 359 -> 460 MB over the
+  run before, flat 328-332 MB after.
+
+**Tests:** `ImuTest.inertialPriorWithoutKeptLandmarks` (all landmarks outliers, dense and sparse: the prior exists,
+reaches the window, the window solve is usable, the next marginalization folds it, and the sparse factor claims no
+more information than the dense prior), `MarginalizationTest.denseVOPriorIsAddedToTheWindow`. Both fail on the
+committed code (the sparse check fails with the old `sparsifyVIO` alone).
+**Real data** (`e_*`, TUM-VI): VO + marg room1 0.12 / 0.17 / 0.21 (before 0.12–0.24), magistrale2 6.2 / 7.6 (before
+6.8–7.7), VO + marg + sparse room1 0.15 / 0.18, VIO marg + td room1 0.074 / 0.078, magistrale2 4.07 / 1.44 (known
+spread), mono VIO marg + td room1 0.140 / 0.148, mono VO + marg unchanged (0.35 / 0.78, coverage 0.79). No
+discarded solve. VO + marg on magistrale2 now takes 292–348 s against 100 s for default VO (the dense prior is
+in the window).
+
+### Item 2 — mono VIO initialization
+**Evidence first:** mono VIO's metric scale is right. Local scale in 10 s segments 0.91–1.10 on rooms 1–6 (the
+first segment, with the initialization, 1.00), path length 0.98–1.02 of the ground truth, SE3 ATE only 0–16 %
+above Sim3 ATE. The "global scale" of 0.68–0.98 is how a Sim3 fit absorbs drift. Mono VIO's larger error is drift.
+**Gap found:** the initialization only required a positive scale. At constant velocity without rotation the scale
+is not observable and the solver stopped at 0.002, accepted (`ImuTest.viInitRefusesAnUnobservableScale`).
+**Fix:** `VIInit` (mono) computes the standard deviation of the log scale at the solution (Ceres covariance,
+DENSE_SVD) and rejects the initialization when it cannot be computed or exceeds `kMaxInitScaleSigma` = 0.1; every
+initialization logs it. Real data: TUM-VI rooms 1–6 and magistrale2 initialize at the first attempt with
+σ = 0.013–0.035 (ATE unchanged: 0.14–0.94); synthetic 20-KF exciting start 0.028; degenerate start: not computable.
+(`viInitModelMatchesTiltedScaledWorld` now uses 20 KFs: with 10, σ = 0.106.)
+
+### Item 4 — EuRoC (Vicon rooms, downloaded by the user 2026-10-04)
+Data: `SaD_VIO_data/euroc/V{1,2}_0{1,2,3}_*/mav0` (+ the ROS 1 bags), ground truth `state_groundtruth_estimate0`
+(IMU frame = SaDVIO body frame). Config: the repository's `ros/config/dataset/eth.yaml` (the paper's), copied to
+`configs/dataset/eth.yaml` with `stereo_sync_tolerance_ms: 1`; runner and evaluator know `V1_01`…`V2_03`. Snapshot
+`final5` (all fixes through item 2), base config otherwise. The paper's SaDVIO / SaDVO are the sparsified variants
+(marginalization + sparsification, no time offset: hardware-synchronized rig). ATE (m), SE3 (Sim3 for mono):
+
+| config | V1_01 | V1_02 | V1_03 | V2_01 | V2_02 | V2_03 |
+|---|---|---|---|---|---|---|
+| SaDVIO: VIO marg + sparse (2 runs) | 0.091 / 0.051 | 0.045 / 0.040 | 0.121 / 0.134 | 0.035 / 0.047 | 0.074 / 0.040 | fails (coverage 0.33, 1 reset) |
+| paper SaDVIO | 0.06 | 0.06 | 0.11 | 0.06 | 0.14 | 0.67 |
+| SaDVO: VO marg + sparse (2 runs) | 0.090 / 0.053 | 0.098 / 0.118 | 0.357 / 0.240 | 0.107 / 0.075 | 0.150 / 0.119 | fails |
+| paper SaDVO | 0.07 | 0.15 | 0.27 | 0.07 | 0.59 | × |
+| VIO marg (dense) | 0.068 | 0.031 | 0.095 | 0.053 | 0.089 | fails |
+| VIO default | 0.050 | 0.077 | 0.319 | 0.045 | 0.208 | fails |
+| VO default | 0.069 | 0.103 | 0.346 | 0.064 | 0.126 | fails |
+| mono VIO | 0.171 | 0.191 | 1.19 (cov 0.85, 2 resets) | 0.081 | 0.477 | fails |
+| mono VO | 0.344 | 1.26 (1 reset) | fails | fails | 2.00 | fails |
+
+SaDVIO is at or below the paper's ATE on V1_01–V2_02; dense marginalization is the most accurate VIO (0.03–0.10).
+V2_03_difficult (motion blur, 414 missing left images) fails in every mode here: a re-initialization leaves only
+the last third of the sequence; the paper's SaDVIO completed it (0.67). Mono VO fails on most Vicon sequences and
+mono VIO on V1_03 — open, as on TUM-VI. The mono initialization gate rejected 4 weakly determined initializations on
+EuRoC (σ 0.26–2.36) and accepted at σ 0.04–0.09. No window solve failed (the first EuRoC batch, before the
+`sqrtInformation` fix, failed every sparse VIO window solve once landmarks ran out).
+
+**Final regression** (main build, TUM-VI room1): VIO marg + sparse 0.176 / 0.182 (before 0.18–0.20), VIO marg + td
+0.099, VIO default 0.259, VO 0.164, mono VIO 0.242 (initialized at σ 0.036); no discarded solve. Unit tests 75/76.
+
+## Open points (2026-10-04, after EuRoC)
+
+### V2_03_difficult: a short visual dropout reset VIO (fixed)
+Not an initialization failure: stereo VIO tracked from 4.6 to 69.8 s, lost visual tracking for 6 consecutive frames
+(motion blur; 414 left images are missing in this sequence), re-initialized (4.6 s to succeed: 24–42 attempts, each
+lost at the first PnP failure) and ran to the end; the re-initialization truncates `results.csv`, hence coverage 0.33.
+VIO reset after 5 failed frames like VO, although the IMU carries the pose (the frames of the dropout become KFs
+linked by IMU factors). **Fix:** `SLAMCore::kMaxSuccessiveFailsVIO` = 20 (~1 s at 20 Hz) in stereo and mono VIO
+(mono VIO had 10, VO keeps 5). Snapshot `dropout`: V2_03 SaDVIO 0.147 / 0.191 m (paper 0.67), VIO dense marg 0.187,
+VIO default 1.07, all coverage 0.97, 0 resets; magistrale2 VIO marg + td 2.09 / 1.91 (in range).
+Also tried: the initialization predicts the rotation from the gyroscope (preintegrated since the last KF) instead of
+the constant-velocity guess (`step_init`, stereo and mono VIO). It did not change the stereo V2_03 behaviour (the
+PnP failures are blur, not prediction); for mono VIO see below.
+
+### Mono VO: the landmarks run out
+Every mono VO failure is 6 consecutive PnP failures with 0 tracked landmarks left while 44–70 features are still
+tracked (median 21–29 landmarks): the mono KF rule counts feature matches only, so no KF (no triangulation) is voted
+while the features last. A rule voting a KF also below 25 tracked landmarks (snapshot `monokf`) was mixed: mono VO
+better on V2_01 (completes, 0.68), V2_02 (2.00 -> 0.78), V1_03 (11 -> 5 resets), worse on V1_01 (0.34 -> 0.90) and
+V2_03 (13 -> 17 resets), rooms 2–5 still fail; mono VIO worse overall (V2_01 fails). **Reverted.** Mono VO needs a
+structural change (e.g. recovering the motion from the 2D-2D essential matrix when PnP has too few 3D points) —
+open.
+
+### magistrale2: the ~4.6 m runs
+Bad vs good runs of the same binary separate from ~120–135 s (1–2 m slip), then by heading: −15 to −21° at the end.
+The heading drift is a gyroscope z-bias jump (+0.16e-3 -> +2.64e-3 rad/s within 259–261 s, then a slow decay) in a
+KF flood (window spanning 0.6 s) with few landmarks; the good run stays at ~0. The images there: a long gallery,
+textureless wall on one side, the repetitive glass-roof grid and railing on the other — aliasing-prone tracks that
+are consistent with each other. A synthetic check shows the prior accumulating bias information as expected (no
+bias-information bug); its weakest bias direction stays at a few 1e-3 rad/s over short KF spacings, so consistent
+outlier tracks can pull the bias at ~1σ cost. A visual-robustness limit (outlier rejection against the IMU-predicted
+motion would address it) — open.
+
+### Decisions after the A/B runs (2026-10-04)
+- **Gyroscope rotation in the initialization prediction: reverted.** Mono VIO A/B (2 runs × 12 sequences, `final5` vs
+  `gi2`): median ATE 0.285 -> 0.326 over complete runs, consistently worse on V1_01 (0.10 -> 0.20–0.27), V1_02,
+  room2, V2_02, better on rooms 4–6, no gain in completion; no effect on stereo V2_03.
+- **Re-initialization threshold is a config option, `max_lost_frames`** (consecutive frames without a visual pose
+  estimate; 0 or absent = mode default: VO 5, mono VIO 10, stereo VIO 20). Stereo VIO's 20 is the V2_03 fix above;
+  mono VIO keeps 10: with 20 (dropout-only build `do2`) V1_01 / V1_02 each got a reset in one of two runs, V2_02
+  improved (0.51/0.43 -> 0.29/0.36) — no clear benefit. `SLAMCore::maxLostFrames()`, validated at config load
+  (< 0 refused), in `ros/config/config.yaml` and the evaluation base config. V2_03 SaDVIO with
+  `max_lost_frames: 5`: reset, coverage 0.33; default: 0.105 m, coverage 0.97.
+
+### EuRoC, all 11 sequences (Machine Hall downloaded 2026-10-04)
+SaDVIO = VIO marginalization + sparsification (the paper's), 2 runs; Vicon V1_01–V2_02 with `final5`, Machine Hall
+and V2_03 with `final6` (the final code; the two only differ in the re-initialization threshold and the reverted
+gyroscope prediction, neither of which acts on those Vicon runs: 0 resets). ATE (m):
+
+| | MH_01 | MH_02 | MH_03 | MH_04 | MH_05 | V1_01 | V1_02 | V1_03 | V2_01 | V2_02 | V2_03 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| SaDVIO | 0.085 / 0.102 | 0.054 / 0.059 | 0.095 / 0.176 | 0.113 / 0.151 | 0.212 / 0.215 | 0.091 / 0.051 | 0.045 / 0.040 | 0.121 / 0.134 | 0.035 / 0.047 | 0.074 / 0.040 | 0.239 |
+| paper SaDVIO | 0.09 | 0.11 | 0.24 | 0.17 | 0.24 | 0.06 | 0.06 | 0.11 | 0.06 | 0.14 | 0.67 |
+| SaDVO (`gi2` / `final5`) | 0.098 / 0.081 | 0.045 / 0.066 | 0.090 / 0.147 | 0.397 / 0.444 | 0.200 / 0.235 | 0.090 / 0.053 | 0.098 / 0.118 | 0.357 / 0.240 | 0.107 / 0.075 | 0.150 / 0.119 | fails |
+| paper SaDVO | 0.10 | 0.08 | 0.16 | 0.25 | 0.38 | 0.07 | 0.15 | 0.27 | 0.07 | 0.59 | × |
+| VIO dense marg | 0.095 | 0.051 | 0.156 | 0.207 | 0.276 | 0.068 | 0.031 | 0.095 | 0.053 | 0.089 | 0.242 |
+| VIO default | 0.058 | 0.315 | 0.149 | 0.213 | 0.127 | 0.050 | 0.077 | 0.319 | 0.045 | 0.208 | 1.07 |
+| VO default | 0.046 | 0.066 | 0.171 | 0.154 | 0.144 | 0.069 | 0.103 | 0.346 | 0.064 | 0.126 | fails |
+| mono VIO | 1.59 | 0.31 (3 resets) | 0.35 (1) | 0.35 (1) | 0.30 | 0.17 | 0.19 | 1.19 | 0.081 | 0.48 | fails |
+| mono VO | 0.21 | 0.33 | 0.43 | 0.67 | 1.19 | 0.34 | 1.26 | fails | fails | 2.00 | fails |
+
+SaDVIO is at or below the paper's ATE on 10 of 11 sequences (V1_01: 0.05 / 0.09 vs 0.06; V1_03: 0.12 / 0.13 vs 0.11)
+and completes V2_03 (0.24 vs 0.67). No window solve failed in any EuRoC run. Mono remains the weak spot
+(mono VO fails on 3 Vicon sequences, mono VIO is inaccurate on MH_01, V1_03, V2_03).
+
+**Final regression** (`final6`, TUM-VI): room1 VIO marg + td 0.060, VIO default 0.233, VO 0.137, mono VIO 0.236;
+magistrale2 VIO marg + td 1.32. Unit tests 75/76 (`LineFeatureMatching`).
+
+### Mono VO, second attempt: seeding the tracks from the previous frame (reverted, 2026-10-04)
+Per-KF logs (`mvo_diag`, kf_features + kf_votes): a mono KF starts with 36–42 landmarks (triangulation is not the
+bottleneck) but the next frame tracks only 10–20 of them, KFs then come every other frame and PnP starves. A landmark
+feature's track was seeded at the landmark projected through the predicted pose (poor in mono), the previous
+frame's position only being used for features without landmark. Tried: seed every track from its previous-frame
+position (landmark tracks included), projection as fallback (snapshot `trackprev` vs `base7`, 17 sequences mono VO
++ 4 sequences stereo VO / mono VIO / SaDVIO). Mono VO mixed (V2_01 completes but at 2.0 m, MH_04 4.15 -> 1.65,
+MH_02 1.08 -> 0.77; worse on V1_01 (coverage 0.93 -> 0.24), V1_02, V2_02, room1; rooms 2–5 still fail) and SaDVIO
+MH_01 0.06 -> 0.55. **Reverted.** Next for mono VO: an essential-matrix (2D-2D) motion estimate when PnP has too few
+3D points.
+
+### Run replay page: EuRoC added (2026-10-04, version 4 of the same artifact)
+All 11 EuRoC sequences next to the 7 TUM-VI ones (buttons grouped by dataset). EuRoC runs `viewer_vo` (stereo VO
+default) / `viewer_vio` (the paper's SaDVIO: marginalization + sparsification) with the keyframe-feature log,
+snapshot `base7` (the final code); videos 376x240. The builder now reads the image size from the data (EuRoC
+752x480) and each run's configuration from its `run.json`. ATE VO / VIO (single runs): MH 0.135/0.171, 0.054/0.064,
+0.252/0.166, 0.278/0.234, 0.174/0.113; V1 0.106/0.057, 0.124/0.046, 0.395/0.135; V2 0.074/0.062, 0.114/0.050,
+0.230/0.165.
+
+## Mono VO (2026-10-04, user request "let's work on the mono VO")
+
+**Logging fix (kept): `results.csv` / `cov_mat.csv` are truncated once per run.** `SLAMCore::profiling()` truncated
+them at every (re-)initialization, so the evaluation only saw the segment after the last re-initialization: a mono
+VO run with 14 resets scored ATE 0.01 m at coverage 0.01 (the assessment's point). Now every mode's metrics cover the
+whole run, failures included (first attempt wrote the per-KF rows during the re-initialization, where
+`_frame_to_optim` is null: segfault at the first reset, caught by the A/B; fixed by keeping the original `_is_init`
+structure). **Earlier mono VO numbers (coverage ≤ 0.1, tiny ATE) are not comparable**; runs with resets in other
+modes score the same way now.
+Whole-run mono VO (`sc_logfix`, 2 runs × 17 sequences): ATE 0.25–2.9 m, median 0.74, coverage 0.88–0.99, 113 resets
+(rooms 2–5, V1_03, V2_03: 3–19 per run; Machine Hall and V2_01/V2_02 0–2).
+
+**Diagnosis:** under fast motion KLT tracking from the last KF loses most features within ~100 ms (60 -> 11–22
+matches), KFs come every 2 frames, mono must triangulate across KFs 50–100 ms apart; the tracked landmarks run out
+(0 left while 44–70 features are tracked), PnP fails 6 times, the SLAM re-initializes at a new arbitrary scale.
+**Tried, all reverted (A/B 2 runs × 17 sequences each):**
+1. KF also below 25 tracked landmarks (`monokf`): mixed, mono VIO worse.
+2. Rejected triangulations (behind the camera / beyond the range cap) kept as uninitialized landmarks, re-triangulated
+   from all views later (`mvo1`): mono VO complete runs 15 -> 10 of 34, mono VIO median 0.28 -> 0.34.
+3. Scale-continuous re-initialization (essential-matrix baseline = last speed × dt instead of an arbitrary 0.1,
+   `mvo2`): median ATE 0.74 -> 0.83, resets 113 -> 159.
+Mono VO without an IMU loses track on the fast handheld / aggressive sequences with this front end; the remaining
+levers are structural (tracking against the local map rather than the last KF, relocalization, a 2D-2D fallback
+for the frame pose) — open.
+
+### Standstill: stereo VIO had no IMU factor at all (fixed, 2026-10-04)
+Seen on the replay page (MH_01 VIO jumps by 0.7 m at take-off, 34–38 s, while VO stays at 2 cm). Stereo VIO forced
+a KF once `dt > 1.0` s, so at 20 Hz the forced KF came at 1.05 s, and an IMU factor is only built up to
+`kMaxImuFactorDt` = 1.0 s: during a standstill every window had **no IMU factor** (`n_imu_factors` 0 in
+`vio_diag.csv`), the velocity drifted freely (0.24 -> 0.67 m/s while the drone stood still) and the first factor
+after take-off yanked the trajectory. In the original code (both thresholds). **Fix:** the KF is forced at
+`dt > 0.9 kMaxImuFactorDt` (`slamBiMonoVIO.cpp`; mono VIO and both initializations already forced at 0.5 s).
+A/B (`base7` -> `standfix`, SaDVIO, single runs): windows without IMU factor MH_01 13 -> 0, MH_02 3 -> 0; ATE MH_01
+0.101 -> 0.081, MH_02 0.073 -> 0.058, MH_03 0.181 -> 0.128, MH_04 0.184 -> 0.110, MH_05 0.220 -> 0.175, V1_01
+0.071 -> 0.045, V2_01 0.048 -> 0.043; VIO default MH_01 0.074 -> 0.119 (single run), room1 VIO marg + td 0.076 ->
+0.082.
+
+### Results log keeps every segment (2026-10-04, user request)
+A re-initialization truncated `log_slam/results.csv` (and `cov_mat.csv`): the evaluation and the replay page only saw
+the segment after the last one (EuRoC V2_03 VO: 17 re-initializations, "ATE 0.23 m, coverage 0.05" for the last
+6 s). Now the files are created once per run (`_results_started`) and every row carries a segment column (the
+re-initializations before it; `_segment`). `eval_traj.py` aligns each segment separately (SE3, Sim3 in mono),
+pools the ATE, keeps RPE pairs inside a segment, sums the segments' spans for the coverage, reports `segments`, and
+computes the magistrale2 end drift only for an unbroken run; older logs read as one segment. The replay page draws
+each segment with its own alignment, unconnected, and marks the re-initializations. V2_03 VO now: 22 segments,
+coverage 0.83, pooled ATE 0.22 m.
+Correction (2026-10-05): an earlier version of this entry said a mono VO re-initialization now scales the new
+essential-matrix translation by the last known speed (`_speed_before_reinit`) instead of the fixed 1/10. That change
+is **not in the tree** (lost with the revert of the other mono VO experiments): `slamMono.cpp` still divides by 10,
+and the `seglog` snapshot, the replay page v5 and the perf table below were all built without it (the dev build
+is byte-identical to `seglog`). Kept as a candidate under open item 1 (mono VO).
+
+### Computational load: pre-fix vs first commit vs current (2026-10-04)
+Same options (FFS + VDB-GPDF), built from `git archive` (`f157380` pre-fix, `6d8cb3c` first commit; snapshots
+`c_pre`, `c_c1`) and the current tree (`seglog`); one run at a time, idle machine. Profiler averages
+(`slam_profiler.txt`): front end per frame, back end (window optimization + marginalization) per KF, in ms.
+
+| case | pre-fix FE / BE / KFs / ATE | commit 1 | current |
+|---|---|---|---|
+| room1 VO | 2.91 / 2.55 / 1179 / 0.18 | 3.18 / 4.20 / 1201 / 0.17 | 3.19 / 4.23 / 1203 / 0.20 |
+| room1 VIO default | 3.64 / 8.62 / 1285 / 1.07 | 3.60 / 9.57 / 1244 / 0.31 | 3.57 / 9.49 / 1230 / 0.26 |
+| room1 VIO marg + td | 3.45 / 19.9 / 370 / 4.55 | 3.60 / 43.4 / 1221 / 0.07 | 3.60 / 37.7 / 1224 / 0.08 |
+| room1 mono VO | 2.05 / 2.60 / 663 / 0.33 | 2.19 / 2.98 / 856 / 0.10 | 2.26 / 3.18 / 847 / 0.57 |
+| room1 mono VIO | 3.01 / 2.77 / 1015 / 0.94 | 3.75 / 6.06 / 920 / 0.23 | 3.76 / 6.21 / 939 / 0.32 |
+| MH_01 VO | 2.31 / 2.27 / 335 / 0.14 | 2.63 / 5.47 / 338 / 0.09 | 2.66 / 5.54 / 342 / 0.11 |
+| MH_01 SaDVIO (marg + sparse) | 2.97 / 10.6 / 465 / 37.3 | 3.21 / 39.4 / 391 / 2.08 | 3.22 / 43.0 / 392 / 0.08 |
+
+Front end: +0 to +25 % per frame (mono VIO the most). Back end: the marginalization configurations were broken
+before the fixes (pre-fix room1 marg + td kept 370 KFs and ended at 4.55 m; MH_01 SaDVIO 37 m), so their pre-fix
+times are not a reference; against the first commit the current code is −13 % (marg + td) and +9 % (SaDVIO). Default
+VIO +10 %. VO +65 % (room1) and +140 % (MH_01) per KF, mono VIO +120 %: the cause is not isolated yet (candidates:
+the robust loss and gauge handling in the window, more landmarks kept). Wall time unchanged except where the
+behaviour changed (room1 VIO marg + td 26 s -> 60 s: 3.3x more KFs actually processed). Real-time margin, current
+code: VIO marg + td 37.7 ms per KF at ~8.7 KF/s ≈ 0.33 s of CPU per second of data (ROS live runs kept real time).
+
+### Pre-freeze checks for the IMU core milestone (2026-10-05)
+Proposed: tag the IMU core (preintegration, factors, inertial init, marginalization / sparsification, window back
+end) as a milestone now; keep the full SaDVIO freeze (Part 2 item 9) for after mono VO / mono VIO.
+- Rebuilt from the current tree: dev `cpp/build_tests` (byte-identical to the `seglog` snapshot, so the replay page
+  v5 and the perf table used exactly this code), main `cpp/build` (FFS + VDB-GPDF, no error), ROS colcon
+  (FFS + VDB-GPDF + LAS2, no error; only `-Wreorder` warnings from `marginalization.hpp`).
+- Unit tests: 75 / 76 pass; the one failure is `LineFeatureTest.LineFeatureMatching` (open item 6, coin flip).
+- Main binary smoke runs (`freeze_main_*`), 0 resets, no NaN: MH_01 SaDVIO (marg + sparse) 0.077 m (`seglog`
+  0.083), room1 mono VIO 0.336 (0.32), room1 VIO marg + td 0.061 / 0.076 / 0.097 vs `seglog` 0.075 / 0.076 / 0.101
+  run side by side under the same load (a first run at 0.113 shared the CPU with colcon and two other runs).
+- The mono VO re-init speed scaling is not in the tree (correction in "Results log keeps every segment"): nothing
+  untested is left in the code.
+
+### Re-initialization from the last state, results logging, whole-run scoring (2026-10-05, user request "do 1 2 and 3")
+**Before:** a re-initialization in stereo VO, stereo VIO and mono VIO restarted at the origin (VIO: identity yaw,
+static bias guess, velocity ~0, 10 KFs of visual-only BA, then VIInit); mono VO restarted at the last KF with a new
+arbitrary scale. History: stereo VIO once continued from the last KF; `3b943e8` ("reinitialization procedure",
+2025-03-28) removed that in the same change that added `_local_map->reset()` (after which there was no last KF to read;
+the removed code also copied the wrong translation). Not a considered design; the evaluation then truncated
+`results.csv` at each re-initialization, so continuity was never measured.
+
+**1. VIO restarts from the last state** (`reinit_carry_state`, default 1; 0 = original behaviour).
+- At a re-initialization after a dropout (not after the 10 m jump test, a diverged state), the state of the last IMU
+  (pose, velocity, biases; the window refined it during the dropout) is kept (`SLAMCore::captureCarriedState`).
+- `CarriedImuState` (IMU.h): dead-reckoned with every IMU sample that `nextFrame()` returns, with the same step as
+  `processIMU` (now the shared `IMU::deadReckon`). Dropped when not plausible (non-finite, |ba| > 2, |bg| > 0.5),
+  on missing IMU data (step > maxStepDt or a raw gap), or 2 s after the last visual pose (`kMaxAge`).
+- The init starts from it: carried pose (gravity-aligned), velocity and biases; no static bias guess, no
+  visual-only phase, no VIInit (all known; VIInit would also rotate / scale the map about the world origin, away from
+  the carried pose). Stereo: the first KF needs `min_lmk_number` landmarks, otherwise the next frame is tried (the
+  state keeps following the IMU). Mono VIO: the essential matrix gives the direction of the first baseline, the
+  carried state its metric length; then one VI solve of the two KFs.
+- Tests: `ImuDeadReckoningTest.deadReckoningIntegratesConstantMotionExactly`, `carriedStateFollowsTheImuUntilItIsStale`
+  (propagation, extrapolation to an image, staleness at 2 s, gaps, plausibility); ConfigTest (0 / 1 only).
+- Forced dropouts (`tools/make_dropout_seq.py`: black images, IMU untouched; `MH_01_drop` at 65 s and 100 s for 1.5 s,
+  140 s for 3 s; `room1_drop` at 45 s, 85 s (1.5 s), 115 s (3 s)). Jump at each re-initialization (`junction_err`: first
+  KF of a segment placed with the alignment of the segment before):
+
+| case | original (0) | from the last state (1) | whole-run ATE 0 -> 1 |
+|---|---|---|---|
+| MH_01_drop stereo VIO (2 runs) | 10.0, 2.6, 4.5 m | 0.19–0.24, 0.12, 7.4–7.6 (3 s: stale, from scratch) | 4.96 -> 2.50 |
+| room1_drop stereo VIO (2 runs) | 1.28, 2.25, 1.57 | 0.02–0.14, 0.54–0.58, 0.39–0.58 | 1.29 -> 0.54 |
+| MH_01_drop mono VIO (2 runs) | 9.99, 2.60, 4.57 | 0.37–1.07, 0.18–0.27, 7.2–7.6 (3 s: from scratch) | 4.31 -> 2.30 |
+| room1_drop mono VIO (2 runs) | 1.32, 1.83–1.96, 1.65–1.70 | 0.66–0.84, 0.29–2.07, 0.86–2.22 | 1.00 -> 0.54–0.79 |
+
+  Per-segment ATE unchanged (stereo VIO 0.04 / 0.08). No re-initialization in the unbroken runs (V2_03 stereo VIO 1.77
+  vs 1.82; it was never measured complete with the default config before: 1.8 m without marginalization, 0.14–0.24 with
+  the paper's SaDVIO configuration).
+- Found on the way (mono VIO, both settings): a failed or degenerate essential matrix in the init (a few ms of motion;
+  its unit translation normalized a zero vector) gave a NaN pose that the IMU chain took over (NaN velocities: 1–5
+  failed residual evaluations per run before, ~2,700 and a lost segment after a resumed init). Its return value was
+  ignored; such a frame now keeps its IMU prediction and cannot be the second KF (mono VO likewise). Also a mono VIO
+  init whose first KF has no tracks (e.g. in the dark) looped forever on a NaN parallax: it restarts below 20 matches,
+  as mono VO does. After the fix: 0 failed evaluations in all mono VIO runs.
+
+**2. Results logging and scoring.** `results.csv` writes each KF once, when it leaves the window (final estimate);
+the KFs still in the window are written before a re-initialization discards them (`logWindowBeforeReset`), with the
+segment they belong to. Before: the window front was written at every KF (the first KF ~12 times), the window at a
+reset was lost (~10 KFs per segment), and a leftover KF of the old window often opened the next segment (V2_03 VO: one
+timestamp written 12 times). The KFs of the last window at the end of a run are still not written (no end-of-run hook;
+as before). `eval_traj.py`: `ate_whole` (one alignment for the whole run, Sim3 in mono: what a user of the trajectory
+gets, jumps included), `junction_err` / `junction_err_mean`, and `ate_whole` in the summary table.
+
+**3. Mono VO scale across a re-initialization: tried, reverted.** Baseline of the new essential matrix = last speed x dt
+(first the last frame's velocity: the next map's scale swung 10x and more; then the window's average speed). Median
+whole-run ATE over 3 runs, original -> carried scale: V1_03 1.36 -> 1.13, V2_03 1.86 -> 1.83, room5 0.86 -> 0.88, room2
+0.60 -> 0.72, room3 0.35 -> 0.50, room4 0.59 -> 0.71: not an improvement; mono VO keeps the arbitrary 10 cm baseline.
+Kept from this work, both bugs of the original code: mono VO `init()` did not reset `_successive_fails` (the other
+modes do since `3b943e8`), so after one re-initialization a single failed frame re-initialized again (room3: up to 75
+re-initializations in a row); and the essential-matrix guard above.
+
+**Mono VIO variance (MH_01, no re-initialization, so the setting plays no part):** 12 runs per binary, alternated:
+pre-change 0.10–1.29 m (median 0.4), current 0.08–4.28 m (median 0.3); each has 2 runs above 1 m. Same distribution;
+mono VIO on MH_01 is not repeatable (multithreaded Ceres, timing) and its accuracy remains open item 2.
+
+Builds: dev, main `cpp/build` and ROS colcon rebuilt; unit tests 77 / 78 (LineFeatureMatching). Main binary check
+(`final_carry`, MH_01_drop stereo VIO): jumps 0.12, 0.20, 7.7 (3 s, from scratch), per-segment ATE 0.045.
+Stereo VO (added after review, same day): the next map starts at the pose of the last tracked frame extrapolated at its
+velocity (the constant-velocity model of the tracking) over the gap, same 2 s limit, not after the 10 m jump; the first
+KF's prior moves with it. Jump across each dropout, last segment of >= 10 KFs before -> first after (position m /
+heading deg; 2 runs): MH_01_drop 1.5 s dropouts origin 9.8 / 4, 2.8 / 37–40 -> 0.46–0.47 / 7–16, 0.54–0.59 / 19–21;
+room1_drop 1.5 s 1.5 / 102–106, 2.2–2.3 / 169–172 -> 0.9–1.0 / 18–19, 1.2–1.3 / 81 (fast hand-held rotation: constant
+velocity over 1.4 s); the 3 s dropouts restart from scratch in both settings (arbitrary place of the origin: 4.4 / 23 vs
+9.9 / 46 on MH_01, 1.5 / 46 vs 4.2 / 161 on room1). Whole-run ATE MH_01_drop 4.70 -> 2.96, room1_drop 1.30 -> 1.59 (its
+3 s restart), V2_03 (natural, 17–25 re-initializations) 1.45 / 2.41 vs 2.40 / 1.67 (noise). Unbroken runs unchanged
+(room1 0.11, MH_01 0.16). `junction_err` is unreliable in a cascade of re-initializations on black frames (segments of
+3 KFs at nearly one place): use the jump between substantial segments, as above. `kMaxAge` (2 s) is a constant: with good biases the jump stayed 0.1–0.6 m at 1.5 s; a longer carry
+would likely still beat a restart at the origin, not measured.
+
+### Carry limit: decision (2026-10-05, user: "A+C, D as a checklist item")
+The 2 s limit stays the default for both families and is now configurable: `reinit_carry_max_age_vio` (carried IMU
+state, `CarriedImuState::max_age`, set at capture) and `reinit_carry_max_age_vo` (stereo VO extrapolation); validated
+> 0; test `carriedStateFollowsTheImuUntilItIsStale` checks a configured limit, ConfigTest the validation. Runtime check
+on MH_01_drop: VIO limit 1 s -> the 1.5 s dropouts restart from scratch (whole-run 4.97, as with the option off),
+default 2.53; stereo VO limit 0.5 s -> 13 of 16 re-initializations from scratch (4.75).
+Evidence for choosing a value (dead reckoning of the VIO state at KFs of complete runs, raw IMU, vs the VIO estimate;
+median / 90th percentile position error in m, gaps 1 / 2 / 3 / 5 / 8 s):
+- MH_01 default VIO: 0.03/0.08, 0.09/0.15, 0.16/0.30, 0.44/0.72, 1.1/2.0
+- room1 default VIO: 0.09/0.19, 0.31/0.69, 0.67/1.45, 1.8/4.0, 4.8/10
+- MH_01 SaDVIO (marg + sparse): 0.03/0.07, 0.07/0.15, 0.14/0.26, 0.32/0.59, 0.80/1.33
+- room1 SaDVIO: 0.02/0.04, 0.06/0.11, 0.10/0.21, 0.26/0.56, 0.61/1.41
+An origin restart costs 3–10 m on MH_01 and 1.5–2.3 m (up to 170 deg) in room1. The limit that pays off depends on the
+bias quality (configuration, sensor): the uncertainty-based limit (D) is a checklist item in
+`doc/VIO_fix_+_LIO_Prospects.md`.

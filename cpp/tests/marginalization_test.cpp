@@ -597,6 +597,22 @@ struct SparsePriorProbe : public BundleAdjustmentCERESAnalytic {
     using AOptimizer::addSparsePriorResiduals;
 };
 
+// The dense VO prior was never added to the window by the AngularAnalytic optimizer: it skipped the prior when the
+// frame to keep was not in the problem, and VO keeps no frame (find(nullptr) never succeeds)
+struct DensePriorProbe : public AngularAdjustmentCERESAnalytic {
+    using AngularAdjustmentCERESAnalytic::addMarginalizationResiduals;
+};
+
+TEST_F(MarginalizationTest, denseVOPriorIsAddedToTheWindow) {
+    DensePriorProbe optim;
+    ASSERT_TRUE(optim.marginalize(_frame0, _frame1, false));
+    ceres::Problem problem;
+    ceres::ParameterBlockOrdering *ordering = new ceres::ParameterBlockOrdering;
+    optim.addMarginalizationResiduals(problem, nullptr, ordering);
+    EXPECT_EQ(problem.NumResidualBlocks(), 1) << "the dense prior factor";
+    delete ordering;
+}
+
 TEST_F(MarginalizationTest, sparsePriorForPointOnlyMap) {
     SparsePriorProbe ba;
     ASSERT_TRUE(ba.marginalize(_frame0, _frame1, true));

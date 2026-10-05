@@ -106,7 +106,9 @@ class ImuImageMerger {
 
     /*!
      * @brief Emit the IMU measurements before t_img, then the image frame. Returns false (nothing
-     * emitted for the image) if t_img is not after the last emitted IMU measurement.
+     * emitted for the image) if t_img is not after the last emitted IMU measurement. The image frame carries an
+     * IMU measurement interpolated at t_img; if the raw measurements around it are further apart than
+     * IMU::maxStepDtForRate, it is marked as bridging missing data (IMU::markRawGap).
      */
     bool emitImageFrame(long long t_img, const std::vector<std::shared_ptr<ImageSensor>> &images);
 
@@ -122,6 +124,7 @@ class ImuImageMerger {
     std::deque<ImuSample> _pending; //!< IMU measurements not yet emitted
     ImuSample _last;                //!< Last IMU measurement emitted (for interpolation)
     bool _has_last  = false;
+    long long _last_raw_ts = 0;     //!< Stamp of the last raw (not interpolated) IMU measurement emitted
     int _n_dropped  = 0;
 };
 

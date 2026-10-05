@@ -1,6 +1,8 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <map>
+#include <set>
 #include <opencv2/imgcodecs.hpp>
 #include <unistd.h>
 
@@ -154,6 +156,51 @@ TEST_F(DataProviderTest, mergerRejectsOutOfOrderData) {
     ASSERT_TRUE(f1->getIMU());
 }
 
+TEST_F(DataProviderTest, rawImuGapIsNotHiddenByImageInterpolation) {
+
+    // A 2 s outage of the raw IMU stream while images keep coming at 20 Hz: the measurements interpolated at the
+    // image times are one image period apart, so the integrator saw no gap and the factors trusted invented
+    // motion. The merger marks them; every KF interval touching the outage must report a gap, the others none.
+    std::shared_ptr<ADataProvider> prov = makeProvider("bimonovio");
+    ImuImageMerger merger(prov);
+    const long long T0 = 1'000'000'000LL;
+    const Eigen::Vector3d a(0.1, 0.2, 9.81), w(0.01, -0.02, 0.03);
+    for (long long t = 0; t <= 100; t += 5) // raw IMU at 200 Hz: 0-100 ms, then 2100-2300 ms
+        merger.addImu(T0 + t * _ms, a, w);
+    for (long long t = 2100; t <= 2300; t += 5)
+        merger.addImu(T0 + t * _ms, a, w);
+    for (long long t = 50; t <= 2250; t += 50)
+        ASSERT_TRUE(merger.emitImageFrame(T0 + t * _ms, {}));
+
+    // Chain the measurements as the pipelines do, with KFs at 50 ms, 1000 ms (in the outage), 2150 ms and 2200 ms
+    const std::set<long long> kf_ms = {50, 1000, 2150, 2200};
+    std::map<long long, int> gaps_at_kf; // KF -> gap steps of the interval ending there
+    std::shared_ptr<Frame> kf;
+    std::shared_ptr<IMU> last;
+    while (prov->queueSize() > 0) {
+        std::shared_ptr<Frame> f = prov->next();
+        const long long t_ms     = ((long long)f->getTimestamp() - T0) / _ms;
+        std::shared_ptr<IMU> imu = f->getIMU();
+        ASSERT_TRUE(imu);
+        if (kf) {
+            imu->setLastIMU(last);
+            imu->setLastKF(kf);
+            ASSERT_TRUE(imu->processIMU());
+        }
+        last = imu;
+        if ((long long)f->getTimestamp() == T0 + t_ms * _ms && kf_ms.count(t_ms)) { // KF at these image times
+            if (kf)
+                gaps_at_kf[t_ms] = imu->getGapSteps();
+            f->setKeyFrame();
+            kf = f;
+        }
+    }
+    ASSERT_EQ(gaps_at_kf.size(), 3u);
+    EXPECT_GT(gaps_at_kf[1000], 0) << "interval 50-1000 ms covers the start of the outage";
+    EXPECT_GT(gaps_at_kf[2150], 0) << "interval 1000-2150 ms covers its end";
+    EXPECT_EQ(gaps_at_kf[2200], 0) << "interval 2150-2200 ms has only raw data";
+}
+
 TEST(ConfigTest, unsupportedOptionCombinationsAreReported) {
 
     // Issue 20: option combinations that cannot work are refused instead of silently doing nothing.
@@ -200,6 +247,24 @@ TEST(ConfigTest, unsupportedOptionCombinationsAreReported) {
     c           = cfg;
     c.slam_mode = "monovio";
     check(c, 1, true, 0, 0); // mono VIO marginalizes too (Issue 16)
+
+    c                 = cfg;
+    c.max_lost_frames = -1;
+    check(c, 2, true, 1, 0); // re-initialization threshold: >= 1, or 0 for the mode default
+    c.max_lost_frames = 10;
+    check(c, 2, true, 0, 0);
+
+    c                    = cfg;
+    c.reinit_carry_state = 2;
+    check(c, 2, true, 1, 0); // re-initialization from the last state: 0 or 1
+    c.reinit_carry_state = 0;
+    check(c, 2, true, 0, 0);
+    c                          = cfg;
+    c.reinit_carry_max_age_vio = 0;
+    check(c, 2, true, 1, 0); // carry limits: > 0 s
+    c.reinit_carry_max_age_vio = 5;
+    c.reinit_carry_max_age_vo  = -1;
+    check(c, 2, true, 1, 0);
 }
 
 TEST_F(DataProviderTest, onlineTimeOffsetAppliesToLaterImu) {
