@@ -4,11 +4,12 @@ Started 2026-10-02. This file is the loop's state: read it first in every iterat
 Checklist source: `/home/deos/s.jois/EXECO/SaDVIO-Dense/SaDVIO-EXECO/doc/VIO_fix_+_LIO_Prospects.md`
 (Part 2, Issues 1-20 + Minor). Tick items there as they are done.
 
-## Current status and open items (kept up to date; last update 2026-10-05)
+## Current status and open items (kept up to date; last update 2026-10-06)
 
 Done: Issues 1–20 and the minor items, the fixes found while running (marginalization prior, threading, memory),
 the follow-up of the commit review (`COMMITS_ASSESSMENT.md` findings A–E and the bugs they uncovered), and EuRoC
-(all 11 sequences: SaDVIO at or below the paper's ATE on 9 of 11, completes V2_03). Details below, by date.
+(all 11 sequences: SaDVIO at or below the paper's ATE on 9 of 11, completes V2_03), and the sparse prior's
+information loss found by SaDLIO (2026-10-06, last section). Details below, by date.
 
 Open:
 1. **Mono VO** fails on several sequences (rooms 2–5, V1_03, V2_01, V2_03): tracked landmarks run out between KFs
@@ -55,6 +56,9 @@ Open:
 - Evaluation tooling and results live in `doc/vio_imu_fix/`; ground truth stays in the dataset folder and
   is read only by `tools/eval_traj.py`, never by SaDVIO code.
 - Run the whole loop without stopping per phase; at the end, report a summary per fix.
+- Runs share the machine (2026-10-06): never saturate it. Pin each run (`run_sadvio.py --cpus`, `--nice 10`), at most
+  two at a time on the efficiency cores 8–15 and 16–23, and keep the performance cores 0–7 free. Pair before/after
+  runs in time so they see the same load.
 - Quick checks (`tools/run_quick.sh <label>`) run from a snapshot of the dev binary + library
   (`/root/SaDVIO-Dense/bin_snapshots/<label>/`), so rebuilding during a check cannot leak into it.
 
@@ -1774,3 +1778,68 @@ median / 90th percentile position error in m, gaps 1 / 2 / 3 / 5 / 8 s):
 An origin restart costs 3–10 m on MH_01 and 1.5–2.3 m (up to 170 deg) in room1. The limit that pays off depends on the
 bias quality (configuration, sensor): the uncertainty-based limit (D) is a checklist item in
 `doc/VIO_fix_+_LIO_Prospects.md`.
+
+## Sparse prior: pseudo-inverse in factor coordinates (2026-10-06, from SaDLIO's note)
+Origin: `SaDVIO_marginalization_note.md`, written by the SaDLIO port. Both flaws it reports are confirmed on `e035ccc`,
+and its two tests fail with its numbers:
+1. `sparsifyVIO`'s absolute factor kept almost no information (largest 22.9 instead of 1e7, KLD NaN). The 15×15
+   covariance spanned 1e10 (gauge) to 1e-7, and `sqrtInformation`'s relative cutoff (added with the NaN fix of the
+   first EuRoC batch, see above) dropped every precise direction: rotation, velocity, biases.
+2. `rankReveallingDecomposition` kept rounding noise (absolute 1e-12 threshold next to eigenvalues of 1e7).
+
+Affected: every `sparsification: 1` run, i.e. the EuRoC "SaDVIO" comparison with the paper, `eu_sadvo` and room1
+`margsparsetd` / `vomargsp`. The default (dense) configuration is not affected by flaw 1.
+
+Changes (`cpp/src/optimizers/marginalization.cpp`):
+- `nullEigenvalueThreshold`: an eigenvalue counts as zero below max(1e-12, 1e-12 × the largest). Used by
+  `rankReveallingDecomposition` and the Schur complement's `Amm_inv` (SaDLIO's fix 2, extended to the Schur
+  complement).
+- `sparsifyVIO`: the KLD-optimal closed form needs the dense prior's covariance in factor coordinates y = J x. For a
+  rank-deficient prior that is pinv(J^-T A J^-1), not J pinv(A) J^T: a pseudo-inverse does not carry over through a
+  non-orthogonal J. The latter is what left SaDLIO's fixes at KLD 0.61 with kept landmarks. With an orthogonal J the
+  two forms agree to 6e-9; with the real block-triangular J they differ by 1e-2.
+- Computed as Σ_y = H H^T, H = W (W^T W)^-1 Λ^-1/2, W = J^-T U, with W from a block back-substitution (J never
+  formed). A first version formed A_y and took a second eigendecomposition: exact, but 3.4–3.7× slower. A Cholesky
+  shortcut through null(A) was exact on paper but lost the precise directions in double precision (error 1e3).
+- A kept line has no sparse factor (only points are used): it now gets identity rows, i.e. it is marginalized out of
+  the sparse prior. Before, it got a 3×3 factor computed as if it were a point, which was never used.
+
+Tests:
+- `marginalization_test.cpp`: `rankDeficientPriorWithoutLandmarksIsRecoveredExactly`,
+  `rankDeficientPriorWithLandmarksIsRecoveredExactly` (KLD 2e-12, was NaN), `keptLineIsMarginalizedFromTheSparsePrior`.
+- `imu_test.cpp`: `inertialPriorWithoutKeptLandmarks` now also checks that the sparse factor equals the dense prior.
+  It had only an upper bound, which is how flaw 1 went through.
+- Suite: 80/81 (`LineFeatureMatching`, coin flip).
+
+Cost of `sparsifyVIO` (synthetic, 4 efficiency cores; first version → current): n = 75: 0.6 → 0.3 ms; n = 315:
+24 → 7 ms; n = 615: 152 → 44 ms; n = 915: 510 → 137 ms.
+
+Runs, `e035ccc` (snapshot `base_e035`, built from `git archive`) vs the fix (`sparsefix2`), labels `sp2_base_*` /
+`sp2_fix_*`. Two runs per cell; each pair run at the same time on its own 8 efficiency cores (8–15, 16–23), nice 10,
+lanes swapped per cell (`tools/run_sparsefix.sh`, `tools/compare_labels.py`).
+- Marginalization time per KF: unchanged or lower everywhere (SaDVIO EuRoC 11–55 ms before, 10–51 after).
+- An earlier batch, 4 runs in parallel unpinned (load ~65), had inflated it to ~150 ms and was discarded.
+- ATE (m):
+
+| cell | before | after |
+|---|---|---|
+| SaDVIO MH_01 | 0.079 / 0.098 | 0.060 / 0.058 |
+| SaDVIO MH_02 | 0.058 / 0.051 | 0.046 / 0.040 |
+| SaDVIO MH_03 / MH_04 / MH_05 | 0.15 0.12 / 0.07 0.13 / 0.21 0.17 | 0.15 0.13 / 0.11 0.09 / 0.25 0.18 |
+| SaDVIO V1_01 / V1_02 / V1_03 | 0.05 0.06 / 0.04 0.05 / 0.09 0.12 | 0.05 0.04 / 0.04 0.05 / 0.10 0.14 |
+| SaDVIO V2_01 / V2_02 / V2_03 | 0.05 0.04 / 0.05 0.06 / 0.21 0.18 | 0.05 0.06 / 0.06 0.05 / 0.17 0.18 |
+| SaDVO, 11 sequences | within the run spread | within the run spread |
+| SaDVO V1_03, 6 runs | 0.35 ± 0.14 | 0.40 ± 0.07 (noise) |
+| room1 VIO marg + sparse + td | 0.049 / 0.061 | 0.049 / 0.044 |
+| room1 stereo VO marg + sparse | 0.27 / 0.22 | 0.16 / 0.15 |
+| room1 mono VIO marg + sparse, 6 runs | 0.21 ± 0.05 | 0.24 ± 0.04 (noise) |
+
+Stereo VO uses `sparsifyVO` (unchanged); it only gets the new rank threshold.
+
+Also fixed: mono VIO timed its marginalization but never accumulated it (profiler "Marginalization dt: 0", back-end
+time without it). This changes the profiler only.
+
+Handed back to SaDLIO: `SaDLIO_sparsification_note.md` (the method, its cost, what the patch-landmark mode M4 needs,
+tests for it).
+
+Builds: `cpp/build`, `cpp/build_tests` and the ROS colcon build rebuilt with all of the above.

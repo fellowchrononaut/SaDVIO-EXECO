@@ -92,7 +92,7 @@ def output_size(run_dir: Path) -> int:
 
 
 def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: float, timeout: float, binary: str = BIN,
-             env: tuple = ()):
+             env: tuple = (), cpus: str = '', nice: int = 0):
     run_dir = SCRATCH / result_dir.relative_to(EVAL / 'runs')
     if run_dir.exists():
         subprocess.run(['docker', 'exec', CONTAINER, 'rm', '-rf', to_container(run_dir)], check=True)
@@ -101,8 +101,10 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
     cfg_dir = run_dir / 'config'
     write_config(cfg_dir, mode, overrides)
     mav0 = to_container(DATA / SEQUENCES[seq])
+    # Optional CPU limits: pin to a core list (OpenMP then uses that many threads) and lower the priority
+    limit = (f'nice -n {nice} ' if nice else '') + (f'taskset -c {cpus} ' if cpus else '')
     cmd = ['docker', 'exec', '-e', 'EXECO_PERFRAME_LOG=1', *env, '-w', to_container(run_dir), CONTAINER,
-           'bash', '-c', f'exec {binary} {to_container(cfg_dir)} {mav0} > stdout.log 2>&1']
+           'bash', '-c', f'exec {limit}{binary} {to_container(cfg_dir)} {mav0} > stdout.log 2>&1']
     t0 = time.time()
     proc = subprocess.Popen(cmd)
     last_size, last_change, reason = -1, time.time(), 'stall'
@@ -124,6 +126,7 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
         proc.wait(timeout=30)
     wall = time.time() - t0 - (stall if reason == 'stall' else 0)
     meta = dict(seq=seq, mode=mode, overrides=overrides, end_reason=reason, wall_s=round(wall, 1), binary=binary,
+                cpus=cpus, nice=nice,
                 started=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(t0)))
     (run_dir / 'run.json').write_text(json.dumps(meta, indent=1))
 
@@ -151,6 +154,8 @@ def main():
     ap.add_argument('--stall', type=float, default=30)
     ap.add_argument('--timeout', type=float, default=3600)
     ap.add_argument('--bin', default=BIN, help='isaeslam binary inside the container')
+    ap.add_argument('--cpus', default='', help='pin the binary to these cores (taskset list, e.g. 8-15)')
+    ap.add_argument('--nice', type=int, default=0, help='run the binary at this nice level')
     ap.add_argument('--kf-features', action='store_true', help='log the KF features (log_slam/kf_features.csv)')
     a = ap.parse_args()
     overrides = dict(kv.split('=', 1) for kv in a.set)
@@ -158,7 +163,7 @@ def main():
         overrides.setdefault('dataset_id', SEQ_DATASET[a.seq])
     for i in range(a.first, a.first + a.runs):
         run_once(EVAL / 'runs' / a.label / a.seq / a.mode / f'run_{i:02d}', a.seq, a.mode, overrides,
-                 a.stall, a.timeout, a.bin, ('-e', 'EXECO_KF_FEATURES_LOG=1') if a.kf_features else ())
+                 a.stall, a.timeout, a.bin, ('-e', 'EXECO_KF_FEATURES_LOG=1') if a.kf_features else (), a.cpus, a.nice)
 
 
 if __name__ == '__main__':
