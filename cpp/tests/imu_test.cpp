@@ -1811,6 +1811,13 @@ TEST_F(ImuTest, inertialPriorWithoutKeptLandmarks) {
             const double sparse_max = Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>(S.transpose() * S).eigenvalues().maxCoeff();
             ASSERT_TRUE(S.allFinite());
             EXPECT_LT(sparse_max, 10 * dense_max) << "sparse " << sparse_max << " vs dense " << dense_max;
+            // Nor less: with no kept landmark the absolute factor is the whole prior, so it must represent it
+            // exactly. The covariance route lost the precise directions (rotation, velocity, biases) next to the
+            // unobserved ones
+            const Eigen::Matrix<double, 15, 15> Ja =
+                Marginalization::absolutePriorJacobian(m->_frame_to_keep->getWorld2FrameTransform());
+            const Eigen::MatrixXd A_sparse = Ja.transpose() * S.transpose() * S * Ja;
+            EXPECT_LT((A_sparse - Jf.transpose() * Jf).norm() / (Jf.transpose() * Jf).norm(), 1e-6);
         }
         sc.map->discardLastFrame();
         optim.localMapVIOptimization(sc.map, 1);

@@ -705,6 +705,8 @@ bool SLAMMonoVIO::backEndStep() {
                 _local_map->discardLastFrame();
                 _map_mutex.unlock();
             }
+            // Was timed but never accumulated: the profiler reported 0 and the back-end time left it out
+            _avg_marg_t = (_avg_marg_t * (_nkeyframes - 1) + isae::timer::silentToc()) / _nkeyframes;
         }
 
         // Optimize Local Map

@@ -7,6 +7,13 @@
 
 namespace isae {
 
+// Threshold below which an eigenvalue of an information matrix is treated as zero. The eigen solver's error is about
+// 1e-16 of the largest eigenvalue, so an absolute threshold alone kept rounding noise: the unobservable directions of
+// a VIO prior (position, yaw) came out at ~1e-10 next to 1e7, and their inverse amplified that noise
+static double nullEigenvalueThreshold(const Eigen::VectorXd &eigenvalues, double eps) {
+    return eigenvalues.size() > 0 ? std::max(eps, 1e-12 * eigenvalues.maxCoeff()) : eps;
+}
+
 void MarginalizationBlockInfo::Evaluate() {
 
     _residuals.resize(_cost_function->num_residuals());
@@ -269,9 +276,10 @@ bool Marginalization::computeSchurComplement() {
     // Schur Complement computation
     Eigen::MatrixXd Amm = 0.5 * (A.block(0, 0, _m, _m) + A.block(0, 0, _m, _m).transpose());
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(Amm);
+    const double tol_mm = nullEigenvalueThreshold(saes.eigenvalues(), _eps);
     Eigen::MatrixXd Amm_inv =
         saes.eigenvectors() *
-        Eigen::VectorXd((saes.eigenvalues().array() > _eps).select(saes.eigenvalues().array().inverse(), 0))
+        Eigen::VectorXd((saes.eigenvalues().array() > tol_mm).select(saes.eigenvalues().array().inverse(), 0))
             .asDiagonal() *
         saes.eigenvectors().transpose();
 
@@ -348,11 +356,12 @@ void Marginalization::rankReveallingDecomposition(Eigen::MatrixXd A, Eigen::Matr
 
     int n = A.rows();
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(A);
-    Eigen::VectorXd d_full = Eigen::VectorXd((saes.eigenvalues().array() > _eps).select(saes.eigenvalues().array(), 0));
+    const double tol       = nullEigenvalueThreshold(saes.eigenvalues(), _eps);
+    Eigen::VectorXd d_full = Eigen::VectorXd((saes.eigenvalues().array() > tol).select(saes.eigenvalues().array(), 0));
 
     int j = 0;
     for (int i = 0; i < n; i++) {
-        if (d_full(i) > _eps)
+        if (d_full(i) > tol)
             j++;
     }
 
@@ -362,7 +371,7 @@ void Marginalization::rankReveallingDecomposition(Eigen::MatrixXd A, Eigen::Matr
     int k = 0;
     for (int i = 0; i < n; i++) {
 
-        if (d_full(i) > _eps) {
+        if (d_full(i) > tol) {
             U.col(k) = saes.eigenvectors().col(i);
             d(k)     = d_full(i);
             k++;
@@ -406,50 +415,101 @@ Eigen::Matrix<double, 15, 15> Marginalization::absolutePriorJacobian(const Eigen
     return J;
 }
 
-// Square root of the information of a sparse factor from its covariance. A prior without landmarks leaves the gauge
-// (position, yaw) unobserved: the covariance is rank-deficient and a plain inverse gave NaN. Those directions get no
-// information; as before, directions with less than _eps information get none either.
-static Eigen::MatrixXd sqrtInformation(const Eigen::MatrixXd &cov, double eps) {
+// Square root of the information of a factor from its covariance block, zero in the directions it does not observe
+static Eigen::MatrixXd sqrtInformation(const Eigen::MatrixXd &cov) {
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(cov);
     const Eigen::VectorXd l = saes.eigenvalues();
     const double tol        = 1e-12 * std::max(l.maxCoeff(), 0.0);
     Eigen::VectorXd s       = Eigen::VectorXd::Zero(l.size());
     for (int i = 0; i < l.size(); i++)
-        if (l(i) > tol && 1 / l(i) > eps)
+        if (l(i) > tol)
             s(i) = 1 / std::sqrt(l(i));
     return saes.eigenvectors() * s.asDiagonal() * saes.eigenvectors().transpose();
 }
 
+// Sparse topology: an absolute factor on the kept frame and a pose-to-landmark factor per kept landmark. Their stacked
+// Jacobian J (factor coordinates y = J x) is square and block triangular with invertible diagonal blocks. The closed
+// form (Mazuran et al.) gives factor i the information (Sigma_y,ii)^-1, the inverse of its block of the dense prior's
+// covariance in y. The prior is rank-deficient (position, yaw), so that covariance is a pseudo-inverse, and a
+// pseudo-inverse does not carry over through a non-orthogonal J: it must be taken in y, Sigma_y = pinv(J^-T A J^-1),
+// not as J pinv(A) J^T. The latter also spanned ~16 orders of magnitude (1e10 next to 1e-7) and lost the precise
+// directions of the absolute factor (rotation, velocity, biases). This form is exact when the dense prior has the
+// sparse structure, and is the KLD minimum otherwise.
+// With A = U Lambda U^T (rank r) and W = J^-T U (n x r, full column rank): Sigma_y = H H^T, H = W (W^T W)^-1
+// Lambda^-1/2. Lambda stays apart (relative accuracy in the well-observed directions); W^T W only carries the
+// conditioning of J; and J^-T U is a block back-substitution, so the cost is that of W^T W, O(n r^2)
 bool Marginalization::sparsifyVIO() {
 
     if (_n == 0)
         return false;
 
-    // For pose to landmark factors (Jacobians of the factors actually used, at the current state)
-    Eigen::Affine3d T_f_w = _frame_to_keep->getWorld2FrameTransform();
+    // Blocks of the factors' Jacobians (those of the factors actually used, at the current state). Every kept
+    // variable other than the frame belongs to exactly one factor block: J has the frame block J_f (15 x 15) and, per
+    // landmark, a diagonal block D (sz x sz) and a block on the frame's first 6 columns
+    struct FactorBlock {
+        std::shared_ptr<ALandmark> lmk;
+        int row, col, sz;
+        Eigen::MatrixXd D, F; // diagonal block, block on the frame (sz x 6; empty for a line)
+    };
+    Eigen::Affine3d T_f_w                 = _frame_to_keep->getWorld2FrameTransform();
+    const int i_frame                     = _map_frame_idx.at(_frame_to_keep);
+    const Eigen::Matrix<double, 15, 15> Jf = absolutePriorJacobian(T_f_w);
+    std::vector<FactorBlock> blocks;
+    int row = 15;
     for (auto tlmk : _lmk_to_keep) {
         for (auto lmk : tlmk.second) {
-            Eigen::Matrix<double, 3, 9> J_lmk = poseToLandmarkJacobian(T_f_w, lmk->getPose().translation());
-            Eigen::MatrixXd J                 = Eigen::MatrixXd::Zero(3, _n);
-            J.block(0, _map_lmk_idx.at(lmk), 3, 3)              = J_lmk.block(0, 6, 3, 3);
-            J.block(0, _map_frame_idx.at(_frame_to_keep), 3, 6) = J_lmk.block(0, 0, 3, 6);
-            Eigen::MatrixXd J_tilde                             = J * _U;
-
-            const Eigen::Matrix3d inf_sqrt =
-                sqrtInformation(J_tilde * _Sigma.asDiagonal() * J_tilde.transpose(), _eps);
-
-            _map_lmk_inf.emplace(lmk, inf_sqrt);
-            Eigen::Vector3d t_f_lmk = T_f_w * lmk->getPose().translation();
-            _map_lmk_prior.emplace(lmk, t_f_lmk);
+            FactorBlock b;
+            b.lmk = lmk;
+            b.row = row;
+            b.col = _map_lmk_idx.at(lmk);
+            if (tlmk.first != "pointxd") {
+                // No sparse factor for a line (addSparsePriorResiduals uses points only): identity rows keep J
+                // invertible and leave the other factors' blocks of Sigma_y unchanged, i.e. the line is marginalized
+                b.sz = 6;
+                b.D  = Eigen::MatrixXd::Identity(6, 6);
+            } else {
+                const Eigen::Matrix<double, 3, 9> J_lmk = poseToLandmarkJacobian(T_f_w, lmk->getPose().translation());
+                b.sz                                    = 3;
+                b.D                                     = J_lmk.block(0, 6, 3, 3);
+                b.F                                     = J_lmk.block(0, 0, 3, 6);
+            }
+            row += b.sz;
+            blocks.push_back(b);
         }
     }
+    if (row != _n)
+        return false; // a kept variable the sparse topology does not cover
 
-    // For absolute frame factor
-    Eigen::MatrixXd J                                     = Eigen::MatrixXd::Zero(15, _n);
-    J.block(0, _map_frame_idx.at(_frame_to_keep), 15, 15) = absolutePriorJacobian(T_f_w);
-    Eigen::MatrixXd J_tilde                               = J * _U;
+    // W = J^-T U by block back-substitution: the landmark rows first, then the frame rows
+    const int r = static_cast<int>(_U.cols());
+    Eigen::MatrixXd W(_n, r);
+    Eigen::MatrixXd rhs_f = _U.middleRows(i_frame, 15);
+    for (const auto &b : blocks) {
+        W.middleRows(b.row, b.sz) = b.D.transpose().partialPivLu().solve(_U.middleRows(b.col, b.sz));
+        if (b.F.size() > 0)
+            rhs_f.topRows(6) -= b.F.transpose() * W.middleRows(b.row, b.sz);
+    }
+    W.topRows(15) = Jf.transpose().partialPivLu().solve(rhs_f);
 
-    _map_frame_inf.emplace(_frame_to_keep, sqrtInformation(J_tilde * _Sigma.asDiagonal() * J_tilde.transpose(), _eps));
+    // H^T = Lambda^-1/2 (W^T W)^-1 W^T
+    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(r, r);
+    G.selfadjointView<Eigen::Lower>().rankUpdate(W.transpose());
+    Eigen::LLT<Eigen::MatrixXd> llt(G.selfadjointView<Eigen::Lower>());
+    if (llt.info() != Eigen::Success)
+        return false;
+    Eigen::MatrixXd Ht = llt.solve(W.transpose());
+    Ht                 = _Lambda.cwiseSqrt().cwiseInverse().asDiagonal() * Ht;
+    auto sigmaBlock    = [&](int i0, int sz) -> Eigen::MatrixXd {
+        return Ht.middleCols(i0, sz).transpose() * Ht.middleCols(i0, sz);
+    };
+
+    for (const auto &b : blocks) {
+        if (b.sz != 3)
+            continue;
+        _map_lmk_inf[b.lmk]   = sqrtInformation(sigmaBlock(b.row, 3));
+        _map_lmk_prior[b.lmk] = T_f_w * b.lmk->getPose().translation();
+    }
+    _map_frame_inf[_frame_to_keep] = sqrtInformation(sigmaBlock(0, 15));
 
     return true;
 }

@@ -7,6 +7,7 @@
 
 #include "isaeslam/data/features/Point2D.h"
 #include "isaeslam/data/frame.h"
+#include "isaeslam/data/landmarks/Line3D.h"
 #include "isaeslam/data/landmarks/Point3D.h"
 #include "isaeslam/data/sensors/Camera.h"
 #include "isaeslam/optimizers/BundleAdjustmentCERESAnalytic.h"
@@ -519,6 +520,99 @@ TEST(MarginalizationSparseKLDTest, sparsePriorIsTheKLDMinimum) {
             EXPECT_GT(setup.marg.computeKLD(A_dense, setup.sparseInformation(factor, s)), kld)
                 << "factor " << factor << " scaled by " << s;
         }
+    }
+}
+
+// Kept-frame block of a VIO prior: 11 observed directions (information 0.1 ... 1e7) and the gauge (position, yaw)
+// at 1e-10, i.e. rounding noise next to 1e7
+static Eigen::MatrixXd gaugeDeficientFrameInformation() {
+    const std::vector<int> observed = {0, 1, 6, 7, 8, 9, 10, 11, 12, 13, 14}, gauge = {2, 3, 4, 5};
+    Eigen::MatrixXd E = Eigen::MatrixXd::Zero(15, 11), G = Eigen::MatrixXd::Zero(15, 4);
+    for (int k = 0; k < 11; k++)
+        E(observed[k], k) = 1;
+    for (int k = 0; k < 4; k++)
+        G(gauge[k], k) = 1;
+    const Eigen::MatrixXd Q = Eigen::HouseholderQR<Eigen::MatrixXd>(Eigen::MatrixXd::Random(11, 11)).householderQ();
+    Eigen::VectorXd scales(11);
+    for (int k = 0; k < 11; k++)
+        scales(k) = std::pow(10.0, -1 + 0.8 * k);
+    return E * Q * scales.asDiagonal() * Q.transpose() * E.transpose() + 1e-10 * G * G.transpose();
+}
+
+// The rank revelation drops the gauge, and without kept landmarks the sparse prior is the dense one exactly. Before:
+// rank 15 (the 1e-10 eigenvalues passed the absolute 1e-12 threshold)
+TEST(MarginalizationSparseKLDTest, rankDeficientPriorWithoutLandmarksIsRecoveredExactly) {
+    std::srand(4321u);
+    SparseVIOSetup setup(0);
+    const Eigen::MatrixXd A_dense = setup.J.transpose() * gaugeDeficientFrameInformation() * setup.J;
+    setup.setDensePrior(A_dense);
+    ASSERT_EQ(setup.marg._n_full, 11) << "the 1e-10 eigenvalues are rounding noise next to 1e7";
+    ASSERT_TRUE(setup.marg.sparsifyVIO());
+
+    const Eigen::MatrixXd A_sparse = setup.sparseInformation();
+    EXPECT_LT((A_sparse - A_dense).norm() / A_dense.norm(), 1e-8);
+    EXPECT_NEAR(setup.marg.computeKLD(A_dense, A_sparse), 0, 1e-6);
+}
+
+// With kept landmarks too: the absolute factor keeps the information of the observed directions, and a dense prior
+// with the sparse structure is recovered exactly. Before: largest information 22.9 instead of 1e7, KLD NaN; with the
+// rank fix alone (pseudo-inverse in state coordinates) KLD 0.61
+TEST(MarginalizationSparseKLDTest, rankDeficientPriorWithLandmarksIsRecoveredExactly) {
+    std::srand(4321u);
+    SparseVIOSetup setup(4);
+    const int n           = setup.marg._n;
+    Eigen::MatrixXd D     = Eigen::MatrixXd::Zero(n, n);
+    D.block(0, 0, 15, 15) = gaugeDeficientFrameInformation();
+    for (int k = 0; k < 4; k++) {
+        Eigen::Matrix3d B                     = Eigen::Matrix3d::Random();
+        D.block(15 + 3 * k, 15 + 3 * k, 3, 3) = 100 * (B * B.transpose() + 0.5 * Eigen::Matrix3d::Identity());
+    }
+    const Eigen::MatrixXd A_dense = setup.J.transpose() * D * setup.J;
+    setup.setDensePrior(A_dense);
+    ASSERT_TRUE(setup.marg.sparsifyVIO());
+
+    const Eigen::MatrixXd S       = setup.marg._map_frame_inf.at(setup.marg._frame_to_keep);
+    const Eigen::MatrixXd D_frame = D.block(0, 0, 15, 15);
+    const double largest          = Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>(S * S).eigenvalues().maxCoeff();
+    EXPECT_GT(largest, 0.99e7) << "information of the best-observed direction of the kept frame";
+    EXPECT_LT((S * S - D_frame).norm() / D_frame.norm(), 1e-6);
+
+    const Eigen::MatrixXd A_sparse = setup.sparseInformation();
+    EXPECT_LT((A_sparse - A_dense).norm() / A_dense.norm(), 1e-6);
+    EXPECT_NEAR(setup.marg.computeKLD(A_dense, A_sparse), 0, 1e-6);
+}
+
+// A kept line has no sparse factor (only points are used): the frame and point factors are those of the prior with
+// the line marginalized out
+TEST(MarginalizationSparseKLDTest, keptLineIsMarginalizedFromTheSparsePrior) {
+    std::srand(777u);
+    SparseVIOSetup ref(2), setup(2);
+    std::shared_ptr<ALandmark> line = std::make_shared<Line3D>();
+    setup.marg._lmk_to_keep["linexd"].push_back(line);
+    setup.marg._map_lmk_idx.emplace(line, setup.marg._n);
+    setup.marg._n += 6;
+    const int n = setup.marg._n;
+
+    Eigen::MatrixXd B       = Eigen::MatrixXd::Random(n, n);
+    Eigen::MatrixXd A_dense = B * B.transpose() + 0.1 * Eigen::MatrixXd::Identity(n, n);
+    setup.setDensePrior(A_dense);
+    ASSERT_TRUE(setup.marg.sparsifyVIO());
+
+    const int m               = n - 6;
+    const Eigen::MatrixXd A_m = A_dense.topLeftCorner(m, m) - A_dense.topRightCorner(m, 6) *
+                                                                  A_dense.bottomRightCorner(6, 6).inverse() *
+                                                                  A_dense.bottomLeftCorner(6, m);
+    ref.setDensePrior(A_m);
+    ASSERT_TRUE(ref.marg.sparsifyVIO());
+
+    EXPECT_FALSE(setup.marg._map_lmk_inf.count(line));
+    const Eigen::MatrixXd S = setup.marg._map_frame_inf.at(setup.marg._frame_to_keep);
+    const Eigen::MatrixXd R = ref.marg._map_frame_inf.at(ref.marg._frame_to_keep);
+    EXPECT_LT((S - R).norm() / R.norm(), 1e-6);
+    for (int k = 0; k < 2; k++) {
+        const Eigen::MatrixXd Sl = setup.marg._map_lmk_inf.at(setup.lmks[k]);
+        const Eigen::MatrixXd Rl = ref.marg._map_lmk_inf.at(ref.lmks[k]);
+        EXPECT_LT((Sl - Rl).norm() / Rl.norm(), 1e-6) << "landmark " << k;
     }
 }
 
