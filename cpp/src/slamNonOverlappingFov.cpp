@@ -311,6 +311,9 @@ bool SLAMNonOverlappingFov::frontEndStep() {
 }
 
 bool SLAMNonOverlappingFov::backEndStep() {
+
+    // A loop closed since the last KF: move the window into the corrected frame first (loop_correct_window)
+    applyLoopCorrection();
     
     if (_frame_to_optim) {
 

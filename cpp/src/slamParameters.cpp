@@ -1,6 +1,7 @@
 #include "isaeslam/slamParameters.h"
 
 #include <algorithm>
+#include <fstream>
 #include <stdexcept>
 
 #include "isaeslam/data/landmarks/BBox3d.h"
@@ -74,6 +75,33 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         errors.push_back("reinit_carry_state must be 0 or 1");
     if (!(cfg.reinit_carry_max_age_vio > 0) || !(cfg.reinit_carry_max_age_vo > 0))
         errors.push_back("reinit_carry_max_age_vio and reinit_carry_max_age_vo must be > 0 (s)");
+    if (cfg.loop_closure != 0 && cfg.loop_closure != 1)
+        errors.push_back("loop_closure must be 0 or 1");
+    if (cfg.loop_closure == 1) {
+        if (cfg.loop_detector != "bow" && cfg.loop_detector != "proximity" && cfg.loop_detector != "proximity_bow" &&
+            cfg.loop_detector != "learned")
+            errors.push_back("loop_detector must be bow, proximity, proximity_bow or learned");
+        if (cfg.loop_detector == "learned") {
+            if (!std::ifstream(cfg.loop_model).good())
+                errors.push_back("loop_model: cannot read '" + cfg.loop_model + "' (needed by loop_detector learned)");
+            if (cfg.loop_model_device != "CPU" && cfg.loop_model_device != "GPU")
+                errors.push_back("loop_model_device must be CPU or GPU");
+        }
+        if ((cfg.loop_detector == "bow" || cfg.loop_detector == "proximity_bow") &&
+            !std::ifstream(cfg.loop_vocabulary).good())
+            errors.push_back("loop_vocabulary: cannot read '" + cfg.loop_vocabulary + "' (needed by loop_detector " +
+                             cfg.loop_detector + ")");
+        if (cfg.slam_mode == "mono")
+            errors.push_back("loop_closure is not available in slam_mode mono (monocular VO needs a Sim3 pose graph)");
+        if (cfg.loop_graph_dof != 0 && cfg.loop_graph_dof != 4 && cfg.loop_graph_dof != 6)
+            errors.push_back("loop_graph_dof must be 0 (4 with an IMU, 6 without), 4 or 6");
+        if (cfg.loop_graph_dof == 4 && cfg.slam_mode != "monovio" && cfg.slam_mode != "bimonovio")
+            errors.push_back("loop_graph_dof 4 needs an IMU (roll and pitch observable)");
+        if (cfg.loop_correct_window != 0 && cfg.loop_correct_window != 1)
+            errors.push_back("loop_correct_window must be 0 or 1");
+        if (!(cfg.loop_min_gap >= 0) || cfg.loop_min_inliers < 6 || !(cfg.loop_gate_radius > 0))
+            errors.push_back("loop_min_gap must be >= 0, loop_min_inliers >= 6 and loop_gate_radius > 0");
+    }
 
     return errors;
 }
@@ -130,6 +158,19 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         yaml_file["reinit_carry_max_age_vio"] ? yaml_file["reinit_carry_max_age_vio"].as<double>() : 2.0;
     _config.reinit_carry_max_age_vo =
         yaml_file["reinit_carry_max_age_vo"] ? yaml_file["reinit_carry_max_age_vo"].as<double>() : 2.0;
+    _config.loop_closure     = yaml_file["loop_closure"] ? yaml_file["loop_closure"].as<int>() : 0;
+    _config.loop_detector    = yaml_file["loop_detector"] ? yaml_file["loop_detector"].as<std::string>() : "bow";
+    _config.loop_vocabulary  = yaml_file["loop_vocabulary"] ? yaml_file["loop_vocabulary"].as<std::string>() : "";
+    _config.loop_model       = yaml_file["loop_model"] ? yaml_file["loop_model"].as<std::string>() : "";
+    _config.loop_model_device =
+        yaml_file["loop_model_device"] ? yaml_file["loop_model_device"].as<std::string>() : "CPU";
+    _config.loop_model_threads = yaml_file["loop_model_threads"] ? yaml_file["loop_model_threads"].as<int>() : 8;
+    _config.loop_min_gap     = yaml_file["loop_min_gap"] ? yaml_file["loop_min_gap"].as<double>() : 20.0;
+    _config.loop_min_inliers = yaml_file["loop_min_inliers"] ? yaml_file["loop_min_inliers"].as<int>() : 12;
+    _config.loop_gate_radius = yaml_file["loop_gate_radius"] ? yaml_file["loop_gate_radius"].as<double>() : 2.0;
+    _config.loop_graph_dof   = yaml_file["loop_graph_dof"] ? yaml_file["loop_graph_dof"].as<int>() : 0;
+    _config.loop_correct_window =
+        yaml_file["loop_correct_window"] ? yaml_file["loop_correct_window"].as<int>() : 0;
     _config.min_kf_number         = yaml_file["min_kf_number"].as<int>();
     _config.max_kf_number         = yaml_file["max_kf_number"].as<int>();
     _config.fixed_frame_number    = yaml_file["fixed_frame_number"].as<int>();

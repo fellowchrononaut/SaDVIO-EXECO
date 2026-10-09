@@ -76,6 +76,19 @@ struct Config {
     double reinit_carry_max_age_vio = 2.0; //!< VIO: longest time since the last visual pose for which the carried state
                                            //!< (IMU dead reckoning) is used (s)
     double reinit_carry_max_age_vo  = 2.0; //!< Stereo VO: the same for the constant-velocity extrapolation (s)
+    int loop_closure = 0;                  //!< 1: loop closure over the KFs that left the window (doc/loop_closure)
+    std::string loop_detector = "bow";     //!< bow | proximity | proximity_bow | learned
+    std::string loop_model;                //!< learned: global descriptor model (.onnx for CPU, TensorRT engine for GPU)
+    std::string loop_model_device = "CPU"; //!< learned: CPU (OpenVINO) or GPU (TensorRT)
+    int loop_model_threads   = 8;          //!< learned, CPU: inference threads (0: OpenVINO's choice)
+    std::string loop_vocabulary;           //!< DBoW3 vocabulary (.dbow3, or ORB-SLAM's ORBvoc.txt) for bow detectors
+    double loop_min_gap      = 20.0;       //!< Loop candidates are at least this much older than the query (s)
+    int loop_min_inliers     = 12;         //!< PnP inliers to accept a loop (each direction)
+    double loop_gate_radius  = 2.0;        //!< Proximity gate radius (m)
+    int loop_graph_dof       = 0;          //!< Pose graph: 4 (position, yaw; roll and pitch kept from the odometry), 6, or
+                                           //!< 0: 4 with an IMU, 6 without
+    int loop_correct_window  = 0;          //!< 1: after a loop, move the sliding window by the pose graph's correction
+                                           //!< (the marginalization prior is dropped then); 0: correct the output only
     std::string optimizer;       //!< Optimizer type (ReprojectionError, AngularError...)
     int contrast_enhancer;       //!< integer to choose the contrast enhancement algorithm
     float clahe_clip;            //!< Clip of CLAHE (useful only if it is chosen for contrast enhancement)

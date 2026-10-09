@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
+#include <unordered_set>
 
 namespace isae {
 
@@ -20,6 +21,9 @@ SLAMCore::SLAMCore(std::shared_ptr<isae::SLAMParameters> slam_param) : _slam_par
                                             _slam_param->_config.max_kf_number,
                                             _slam_param->_config.fixed_frame_number);
     _global_map = std::make_shared<GlobalMap>();
+    // Each KF leaving the window goes to the loop closure with its final estimate, before its data is cleaned
+    if (_slam_param->_config.loop_closure == 1)
+        _local_map->setDiscardCallback([this](const std::shared_ptr<Frame> &f) { handToLoopClosure(f); });
     if (slam_param->_config.mesh3D)
         _mesher = std::make_shared<Mesher>(
             _slam_param->_config.slam_mode, _slam_param->_config.ZNCC_tsh, _slam_param->_config.max_length_tsh);
@@ -750,6 +754,16 @@ void SLAMCore::profiling() {
     fw << "Front end dt: " << frontend_dt << "\n";
     float backend_dt = _avg_wdw_opt_t + _avg_marg_t;
     fw << "Back end dt: " << backend_dt << "\n";
+    if (_loop_closure) {
+        const LoopClosure::Stats ls = _loop_closure->stats();
+        fw << "Loop closure dt: " << ls.avg_ms_keyframe << "\n";
+        fw << "Loop descriptor dt: " << ls.avg_ms_describe << "\n";
+        fw << "Loop closure KFs: " << ls.n_keyframes << "\n";
+        fw << "Loop candidates: " << ls.n_candidates << "\n";
+        fw << "Loops verified: " << ls.n_verified << "\n";
+        fw << "Loops rejected by the pose graph: " << ls.n_rejected_by_graph << "\n";
+        fw << "Pose graph dt: " << ls.avg_ms_optimize << "\n";
+    }
 }
 
 void SLAMCore::writeResultRow(const std::shared_ptr<Frame> &f) {
@@ -766,12 +780,73 @@ void SLAMCore::writeResultRow(const std::shared_ptr<Frame> &f) {
     _segment_has_rows = true;
 }
 
+void SLAMCore::applyLoopCorrection() {
+    Eigen::Affine3d C;
+    if (!_loop_closure || !_loop_closure->takeCorrection(_segment, C))
+        return;
+    std::unordered_set<Frame *> frames_done;
+    std::unordered_set<ALandmark *> lmks_done;
+    auto moveLandmark = [&](const std::shared_ptr<ALandmark> &l) {
+        if (l && lmks_done.insert(l.get()).second)
+            l->setPose(C * l->getPose());
+    };
+    auto moveFrame = [&](const std::shared_ptr<Frame> &f) {
+        if (!f || !frames_done.insert(f.get()).second)
+            return;
+        f->setWorld2FrameTransform((C * f->getFrame2WorldTransform()).inverse());
+        if (f->getIMU())
+            f->getIMU()->setVelocity(C.rotation() * f->getIMU()->getVelocity());
+        for (auto &tl : f->getLandmarks())
+            for (auto &l : tl.second)
+                moveLandmark(l);
+    };
+    _map_mutex.lock();
+    for (auto &tl : _local_map->getLandmarks())
+        for (auto &l : tl.second)
+            moveLandmark(l);
+    for (auto &f : _local_map->getFrames())
+        moveFrame(f);
+    moveFrame(_frame_to_optim);
+    moveFrame(_frame);
+    _map_mutex.unlock();
+    if (_slam_param->_config.marginalization == 1)
+        _slam_param->getOptimizerBack()->resetMarginalization();
+    std::cout << "Loop closure: window moved by " << C.translation().norm() << " m, "
+              << Eigen::AngleAxisd(C.rotation()).angle() * 180 / M_PI << " deg" << std::endl;
+}
+
+void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
+    const Config &cfg = _slam_param->_config;
+    if (cfg.loop_closure != 1 || !f || f->getTimestamp() <= _last_loop_ts)
+        return;
+    if (!_loop_closure) {
+        LoopClosure::Options opt;
+        opt.detector    = cfg.loop_detector;
+        opt.vocabulary  = cfg.loop_vocabulary;
+        opt.model         = cfg.loop_model;
+        opt.model_device  = cfg.loop_model_device;
+        opt.model_threads = cfg.loop_model_threads;
+        opt.min_gap     = cfg.loop_min_gap;
+        opt.min_inliers = cfg.loop_min_inliers;
+        opt.gate_radius = cfg.loop_gate_radius;
+        const bool imu  = cfg.slam_mode == "monovio" || cfg.slam_mode == "bimonovio";
+        opt.four_dof    = cfg.loop_graph_dof == 4 || (cfg.loop_graph_dof == 0 && imu);
+        opt.async       = cfg.multithreading;
+        opt.correct_window = cfg.loop_correct_window == 1;
+        std::atomic_store(&_loop_closure, std::make_shared<LoopClosure>(opt)); // read by viewer threads
+    }
+    _loop_closure->addKeyframe(f, _segment);
+    _last_loop_ts = f->getTimestamp();
+}
+
 void SLAMCore::logWindowBeforeReset() {
     if (!_results_started)
         return;
     writeResultRow(_results_front);
-    for (auto &f : _local_map->getFrames())
+    for (auto &f : _local_map->getFrames()) {
         writeResultRow(f);
+        handToLoopClosure(f); // the window's KFs are not discarded one by one before a reset
+    }
     _results_front = nullptr;
 }
 

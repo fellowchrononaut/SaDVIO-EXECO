@@ -57,6 +57,7 @@ include_directories(
   ${YAML_CPP_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../cpp/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../cpp/thirdparty/DBoW3/src
 )
 
 
@@ -65,7 +66,8 @@ include_directories(
 # -------------------------------------------------------------------
 
 file(GLOB_RECURSE LIB_SOURCES ../cpp/src/*.cpp ../cpp/include/*.cpp
-  ../cpp/thirdparty/ELSED/src/*.cpp)
+  ../cpp/thirdparty/ELSED/src/*.cpp
+  ../cpp/thirdparty/DBoW3/src/*.cpp ../cpp/thirdparty/DBoW3/src/*.c)
 file(GLOB_RECURSE LIB_HEADERS ../cpp/include/*.h ../cpp/include/*.hpp ../cpp/include/*.inl
   ../cpp/thirdparty/ELSED/src/*.h)
 add_library(${PROJECT_NAME} SHARED ${LIB_SOURCES} ${LIB_HEADERS})
@@ -78,6 +80,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_FFS.cmake)
 isaeslam_enable_ffs(${PROJECT_NAME})
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_LAS2.cmake)
 isaeslam_enable_las2(${PROJECT_NAME})
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_VPR.cmake)
+isaeslam_enable_vpr(${PROJECT_NAME})
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/ISAESLAM_VDBGPDF.cmake)
 isaeslam_enable_vdbgpdf(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/../cpp)
 

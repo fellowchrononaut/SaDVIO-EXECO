@@ -47,6 +47,9 @@ void LocalMap::removeFrame(std::shared_ptr<isae::Frame> &frame) {
 
 void LocalMap::discardLastFrame() {
 
+    if (_on_discard)
+        _on_discard(_frames.at(0));
+
     // Discard features from the marginalized frame
     _frames.at(0)->cleanLandmarks();
     _frames.at(0)->cleanSensors();

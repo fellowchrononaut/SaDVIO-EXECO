@@ -39,6 +39,7 @@ endif()
 
 include_directories(
   include
+  thirdparty/DBoW3/src
   ${OpenCV_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
   ${CERES_INCLUDE_DIRS}
@@ -49,7 +50,8 @@ include_directories(
 # Library
 # -------------------------------------------------------------------
 file(GLOB_RECURSE LIB_SOURCES src/*.cpp include/*.cpp
-  thirdparty/ELSED/src/*.cpp)
+  thirdparty/ELSED/src/*.cpp
+  thirdparty/DBoW3/src/*.cpp thirdparty/DBoW3/src/*.c)
 file(GLOB_RECURSE LIB_HEADERS include/*.h include/*.hpp include/*.inl
   thirdparty/ELSED/src/*.h)
 add_library(${PROJECT_NAME} SHARED ${LIB_SOURCES} ${LIB_HEADERS})
@@ -62,6 +64,8 @@ include(cmake/ISAESLAM_FFS.cmake)
 isaeslam_enable_ffs(${PROJECT_NAME})
 include(cmake/ISAESLAM_LAS2.cmake)
 isaeslam_enable_las2(${PROJECT_NAME})
+include(cmake/ISAESLAM_VPR.cmake)
+isaeslam_enable_vpr(${PROJECT_NAME})
 include(cmake/ISAESLAM_VDBGPDF.cmake)
 isaeslam_enable_vdbgpdf(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -126,6 +130,7 @@ if(ISAESLAM_BUILD_TESTS)
     ./tests/dataprovider_test.cpp
     ./tests/imu_test.cpp
     ./tests/linefeature_test.cpp
+    ./tests/loopclosure_test.cpp
     ./tests/marginalization_test.cpp
     ./tests/mesh_test.cpp
     ./tests/nofov_test.cpp

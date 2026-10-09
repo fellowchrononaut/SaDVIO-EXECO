@@ -105,6 +105,45 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
+      Name: Loop-closed trajectory
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /loop_traj
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Loops
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /loop_edges
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Latest loop
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /loop_new
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
       Name: Marker
       Namespaces:
         "": true

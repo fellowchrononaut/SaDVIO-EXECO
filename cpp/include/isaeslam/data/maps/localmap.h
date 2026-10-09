@@ -3,6 +3,8 @@
 
 #include "isaeslam/data/maps/amap.h"
 
+#include <functional>
+
 namespace isae {
 
 /*!
@@ -64,7 +66,15 @@ class LocalMap : public AMap {
      */
     void reset();
 
+    /*!
+     * @brief Called by discardLastFrame with the frame leaving the window, before its sensors and landmarks are
+     * cleaned (e.g. the loop closure takes its image and landmarks there)
+     */
+    void setDiscardCallback(std::function<void(const std::shared_ptr<Frame> &)> cb) { _on_discard = std::move(cb); }
+
   protected:
+    std::function<void(const std::shared_ptr<Frame> &)> _on_discard;
+
     /*!
      * @brief Remove landmarks from the local map that do not have any features.
      *

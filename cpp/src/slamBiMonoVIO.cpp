@@ -685,6 +685,9 @@ bool SLAMBiMonoVIO::frontEndStep() {
 
 bool SLAMBiMonoVIO::backEndStep() {
 
+    // A loop closed since the last KF: move the window into the corrected frame first (loop_correct_window)
+    applyLoopCorrection();
+
     if (_frame_to_optim) {
 
         // Add frame to local map

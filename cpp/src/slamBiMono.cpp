@@ -385,6 +385,9 @@ bool SLAMBiMono::frontEndStep() {
 
 bool SLAMBiMono::backEndStep() {
 
+    // A loop closed since the last KF: move the window into the corrected frame first (loop_correct_window)
+    applyLoopCorrection();
+
     // Optimize when a frame is declared as optimizable
     if (_frame_to_optim) {
 

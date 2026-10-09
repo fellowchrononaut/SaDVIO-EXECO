@@ -25,6 +25,7 @@
 #include "isaeslam/landmarkinitializer/Point3DlandmarkInitializer.h"
 #include "isaeslam/optimizers/AngularAdjustmentCERESAnalytic.h"
 #include "isaeslam/slamParameters.h"
+#include "isaeslam/loopclosure/LoopClosure.h"
 #include "isaeslam/stereo/MarginalDepthInjector.h"
 #include "isaeslam/typedefs.h"
 #include "utilities/timer.h"
@@ -87,6 +88,9 @@ class SLAMCore {
 
     // Dense stereo injector — null for non-stereo modes, initialised in BiMono/BiMonoVIO::init()
     std::shared_ptr<MarginalDepthInjector> _depth_injector;
+
+    //! Loop closure, null until the first KF leaves the window or when loop_closure is off (for viewers)
+    std::shared_ptr<LoopClosure> getLoopClosure() const { return std::atomic_load(&_loop_closure); }
 
     /*!
      * @brief Detect all types of features for a given sensor with bucketting
@@ -327,6 +331,21 @@ class SLAMCore {
      * @brief Append the pose of KF f to log_slam/results.csv, unless it is not newer than the last KF written
      */
     void writeResultRow(const std::shared_ptr<Frame> &f);
+
+    std::shared_ptr<LoopClosure> _loop_closure; //!< Loop closure over the KFs leaving the window (config loop_closure)
+    unsigned long long _last_loop_ts = 0;       //!< Last KF handed to the loop closure (each KF once)
+
+    /*!
+     * @brief Hand KF f (final estimate, data not cleaned yet) to the loop closure, created at the first KF
+     */
+    void handToLoopClosure(const std::shared_ptr<Frame> &f);
+
+    /*!
+     * @brief With loop_correct_window: move the sliding window (KF poses and velocities, landmarks, the KF being
+     * inserted) by the loop closure's correction, if one is pending. The marginalization prior, linearized in the
+     * old frame, is dropped. Called by the back ends before they insert a KF
+     */
+    void applyLoopCorrection();
 
     // Re-initialization from the last state
     CarriedImuState _carried;              //!< State kept for the next initialization (VIO), dead-reckoned meanwhile

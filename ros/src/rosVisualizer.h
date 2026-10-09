@@ -99,6 +99,9 @@ class RosVisualizer : public rclcpp::Node {
         _pub_dense_sgbm_right       = this->create_publisher<sensor_msgs::msg::Image>("dense_sgbm_right", 10);
         _pub_dense_mesh             = this->create_publisher<visualization_msgs::msg::Marker>("dense_mesh", 10);
         _pub_dense_cloud            = this->create_publisher<sensor_msgs::msg::PointCloud2>("dense_point_cloud", 10);
+        _pub_loop_traj              = this->create_publisher<visualization_msgs::msg::Marker>("loop_traj", 10);
+        _pub_loop_edges             = this->create_publisher<visualization_msgs::msg::Marker>("loop_edges", 10);
+        _pub_loop_new               = this->create_publisher<visualization_msgs::msg::Marker>("loop_new", 10);
         _tf_broadcaster             = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
         _vo_traj_msg.type    = visualization_msgs::msg::Marker::LINE_STRIP;
@@ -701,9 +704,53 @@ class RosVisualizer : public rclcpp::Node {
         _pub_dense_cloud->publish(*msg);
     }
 
+    // Loop closure: the loop-closed trajectory (green), the accepted loops (red) and the latest one (yellow, thick),
+    // in the world frame like the odometry trajectory (vo_traj, blue)
+    void publishLoopClosure(const isae::LoopClosure::Display &d) {
+        auto lines = [&](const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> &segs, double width, float r,
+                         float g, float b, const std::string &ns) {
+            visualization_msgs::msg::Marker m;
+            m.header.stamp    = rclcpp::Node::now();
+            m.header.frame_id = "world";
+            m.ns              = ns;
+            m.type            = visualization_msgs::msg::Marker::LINE_LIST;
+            m.action          = visualization_msgs::msg::Marker::ADD;
+            m.pose.orientation.w = 1.0;
+            m.scale.x         = width;
+            m.color.a         = 1.0;
+            m.color.r         = r;
+            m.color.g         = g;
+            m.color.b         = b;
+            for (const auto &sg : segs) {
+                geometry_msgs::msg::Point p;
+                p.x = sg.first.x(), p.y = sg.first.y(), p.z = sg.first.z();
+                m.points.push_back(p);
+                p.x = sg.second.x(), p.y = sg.second.y(), p.z = sg.second.z();
+                m.points.push_back(p);
+            }
+            return m;
+        };
+        _pub_loop_traj->publish(lines(d.traj, 0.05, 0.f, 0.8f, 0.f, "loop_traj"));
+        _pub_loop_edges->publish(lines(d.loops, 0.01, 1.f, 0.f, 0.f, "loop_edges"));
+        _pub_loop_new->publish(lines(d.new_loops, 0.06, 1.f, 0.9f, 0.f, "loop_new"));
+    }
+
     void runVisualizer(std::shared_ptr<isae::SLAMCore> SLAM) {
 
+        unsigned long loop_version = 0;
+        auto loop_last             = std::chrono::steady_clock::now();
         while (true) {
+
+            // At most 5 times a second: the loop-closed trajectory has one segment per KF
+            const std::shared_ptr<isae::LoopClosure> lc = SLAM->getLoopClosure();
+            if (lc && std::chrono::steady_clock::now() - loop_last > std::chrono::milliseconds(200)) {
+                isae::LoopClosure::Display d;
+                if (lc->display(d, loop_version)) {
+                    publishLoopClosure(d);
+                    loop_version = d.version;
+                }
+                loop_last = std::chrono::steady_clock::now();
+            }
 
             if (SLAM->_frame_to_display) {
                 publishImage(SLAM->_frame_to_display);
@@ -747,6 +794,7 @@ class RosVisualizer : public rclcpp::Node {
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _pub_dense_mesh;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pub_dense_cloud;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _pub_vo_pose;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _pub_loop_traj, _pub_loop_edges, _pub_loop_new;
     std::shared_ptr<tf2_ros::TransformBroadcaster> _tf_broadcaster;
     visualization_msgs::msg::Marker _vo_traj_msg;
     visualization_msgs::msg::Marker _points_local, _points_global, _points_local1, _lines_local, _lines_global;
