@@ -56,7 +56,7 @@ class LoopClosure {
         int n_candidates       = 3;     //!< Candidates verified per keyframe (at least min_gap apart in time)
         int max_loops_per_kf   = 2;     //!< Loops accepted per keyframe (at least min_gap apart in time)
         int n_orb              = 1000;  //!< Pyramid ORB extracted per keyframe
-        bool four_dof          = true;  //!< 4-DoF pose graph (IMU: roll and pitch observable), else 6-DoF
+        bool four_dof          = false; //!< 4-DoF pose graph (roll and pitch kept from the odometry), else 6-DoF
         bool async             = false; //!< Process the keyframes in a thread of their own
         bool correct_window    = false; //!< After a loop, the SLAM moves its sliding window by the correction
     };
@@ -105,6 +105,8 @@ class LoopClosure {
     bool display(Display &out, unsigned long known) const;
 
   private:
+    friend struct LoopClosureTestAccess; // unit tests of the verification (cpp/tests/loopclosure_test.cpp)
+
     struct Input {
         unsigned long long ts;
         int segment;

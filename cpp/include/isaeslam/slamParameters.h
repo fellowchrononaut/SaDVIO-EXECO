@@ -85,8 +85,8 @@ struct Config {
     double loop_min_gap      = 20.0;       //!< Loop candidates are at least this much older than the query (s)
     int loop_min_inliers     = 12;         //!< PnP inliers to accept a loop (each direction)
     double loop_gate_radius  = 2.0;        //!< Proximity gate radius (m)
-    int loop_graph_dof       = 0;          //!< Pose graph: 4 (position, yaw; roll and pitch kept from the odometry), 6, or
-                                           //!< 0: 4 with an IMU, 6 without
+    int loop_graph_dof       = 0;          //!< Pose graph: 4 (position, yaw; roll and pitch kept from the odometry; needs an
+                                           //!< IMU), 6, or 0: automatic (6)
     int loop_correct_window  = 0;          //!< 1: after a loop, move the sliding window by the pose graph's correction
                                            //!< (the marginalization prior is dropped then); 0: correct the output only
     std::string optimizer;       //!< Optimizer type (ReprojectionError, AngularError...)

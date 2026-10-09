@@ -829,8 +829,9 @@ void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
         opt.min_gap     = cfg.loop_min_gap;
         opt.min_inliers = cfg.loop_min_inliers;
         opt.gate_radius = cfg.loop_gate_radius;
-        const bool imu  = cfg.slam_mode == "monovio" || cfg.slam_mode == "bimonovio";
-        opt.four_dof    = cfg.loop_graph_dof == 4 || (cfg.loop_graph_dof == 0 && imu);
+        // 0 (automatic) is 6-DoF in every mode: with an IMU too it was as good or better than 4-DoF on TUM-VI and
+        // EuRoC (VIO's roll and pitch are not exact; doc/loop_closure ledger, 2026-10-09)
+        opt.four_dof    = cfg.loop_graph_dof == 4;
         opt.async       = cfg.multithreading;
         opt.correct_window = cfg.loop_correct_window == 1;
         std::atomic_store(&_loop_closure, std::make_shared<LoopClosure>(opt)); // read by viewer threads

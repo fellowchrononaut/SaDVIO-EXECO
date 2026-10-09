@@ -252,3 +252,60 @@ camera, or structure-based matching (MeshVLPR-style), not a looser verification.
 | without loop closure | 0.290 m | 0.263 / 0.673 m | 4.07 deg | 0.027 m | 0.084 m | 0.93 deg |
 | with, final | 0.024 m | 0.021 / 0.074 m | 1.36 deg | 0.023 m | 0.038 m | 0.88 deg |
 | with, online | 0.036 m | 0.032 / 0.091 m | 1.42 deg | 0.036 m | 0.053 m | 0.94 deg |
+
+## Pose graph DoF on TUM-VI rooms + EuRoC (task 2, 2026-10-09)
+
+`tools/run_lc_dof_all.sh` (binary `lc4`, bag-of-words, output corrected, 2 runs per cell): 6-DoF runs paired with
+the matrix's 4-DoF ones, plus SaDVIO 4-DoF on the rooms. Failed odometry (default stereo VIO on V2_03, tens of m)
+excluded.
+
+| configuration | sequences | median final ATE 4-DoF -> 6-DoF | 6-DoF better in | median final / odometry, 4 -> 6 |
+|---|---|---|---|---|
+| stereo VIO, default | 16 | 0.046 -> 0.038 m | 12 / 16 | 0.47 -> 0.43 |
+| mono VIO, default | 17 | 0.123 -> 0.125 m | 9 / 17 | 0.62 -> 0.51 |
+| SaDVIO (marg + sparse) | 17 | 0.035 -> 0.032 m | 14 / 17 | 0.56 -> 0.53 |
+
+With magistrale2 (6-DoF much better for default VIO, equal with marginalization), 6-DoF is as good or better in every
+configuration: the IMU's roll and pitch are not exact enough to be held fixed. The mono VIO odometry differed a lot
+between the two batches (MH_01 1.03 against 0.26 m), so its ratio to the same run's odometry is the fairer measure.
+Cost: 6-DoF solves are slower (magistrale2, ~3 200 KFs: 65–78 ms against 51–53 ms).
+
+Decision (task 2): `loop_graph_dof: 0` (automatic) is now 6-DoF in every mode; 4-DoF stays available as an explicit
+option for IMU modes. Suite 83 / 84 (`LineFeatureMatching`, coin flip).
+
+## Clean timing pass (task 3, 2026-10-09; SaDLIO paused, machine idle)
+
+`tools/run_lc_timing.sh` (binary `lc5`, automatic graph = 6-DoF): stereo VIO, output corrected, one run at a time on
+cores 16–23; means of 2 runs (magistrale2: 1). Times in ms.
+
+| sequence (KFs) | variant | back end / KF | loop module / KF | descriptor / KF | pose graph / solve | loops | wall |
+|---|---|---|---|---|---|---|---|
+| room1 (~1 230) | none | 11.7 | – | – | – | – | 29 s |
+| | bag-of-words | 37.2 | 24.6 | – | 31 | 566 | 61 s |
+| | MegaLoc GPU | 34.1 | 21.3 | 3.0 | 24.5 | 456 | 57 s |
+| | MegaLoc CPU | 197.9 | 182.7 | 163.3 | 27 | 451 | 260 s |
+| MH_01 (~390) | none | 9.3 | – | – | – | – | 20 s |
+| | bag-of-words | 23.2 | 12.3 | – | 8.3 | 24 | 23 s |
+| | MegaLoc GPU | 28.4 | 13.7 | 4.0 | 7.8 | 29 | 25 s |
+| | MegaLoc CPU | 328.9 | 305.6 | 295.6 | 8.9 | 24 | 143 s |
+| magistrale2 (~3 170) | none | 9.2 | – | – | – | – | 88 s |
+| | bag-of-words | 27.0 | 16.6 | – | 69 | 273 | 140 s |
+
+- Front end unchanged (3.8–4.5 ms per frame; 4.7–4.8 with MegaLoc on the CPU sharing the cores).
+- With `multithreading: 0` the loop closure runs in the back end's step (back end ~10 -> 23–37 ms per KF); with
+  `multithreading: 1` in its own thread.
+- Pose graph solve grows with the KFs: 8 ms (~390), 25–31 ms (~1 230), 69 ms (~3 200, 6-DoF).
+- Real time: room1 (highest KF rate, ~8.7 KF/s) costs 0.21 s of CPU per second of data with bag-of-words; all
+  bag-of-words / GPU runs stay well under real time (room1: 61 s of processing for 141 s of data).
+- MegaLoc on the CPU is not real-time capable here: 163 ms (322 x 322) / 295 ms (322 x 504) per KF; room1 took 260 s
+  for 141 s of data. Live it would need its own thread and a subset of KFs.
+
+## Unit tests of the verification (task 4, 2026-10-09)
+
+`LoopVerificationTest` (`cpp/tests/loopclosure_test.cpp`, access through `LoopClosureTestAccess`, a friend of
+`LoopClosure`): synthetic scene of random points with random 256-bit descriptors, views differing by 6 bits.
+- `revisitIsAcceptedWithItsRelativePose`: 0.5 m / 10 deg apart, accepted, relative pose within 5 cm / 0.5 deg.
+- `differentPlaceIsRejected`: another scene, rejected.
+- `directionsThatDisagreeAreRejected`: the candidate's landmarks 0.6 m off its image; both PnP directions succeed (61
+  and 120 inliers) but disagree by 0.60 m (> 0.3): rejected by the agreement check, as intended.
+Suite: 86 / 87 (`LineFeatureMatching`, coin flip).

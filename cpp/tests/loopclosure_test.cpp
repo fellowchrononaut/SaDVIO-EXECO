@@ -3,6 +3,7 @@
 #include <cmath>
 #include <random>
 
+#include "isaeslam/loopclosure/LoopClosure.h"
 #include "isaeslam/loopclosure/PoseGraph.h"
 
 namespace isae {
@@ -111,4 +112,123 @@ TEST(PoseGraphTest, loopJoinsTwoSegments) {
     }
 }
 
+// Verification of a loop candidate (LoopClosure::verify): each KF's landmarks are matched to the other KF's
+// features, PnP RANSAC gives the relative pose both ways, and the two must agree
+struct LoopClosureTestAccess {
+    using Record = LoopClosure::Record;
+    static bool verify(LoopClosure &lc, const Record &q, const Record &c, Eigen::Affine3d &T_fc_fq) {
+        int a = 0, b = 0;
+        return lc.verify(q, c, T_fc_fq, a, b);
+    }
+};
+
+namespace {
+
+using Record = LoopClosureTestAccess::Record;
+
+// A scene of random points with random 256-bit descriptors; a view of it is a camera pose, whose descriptors differ
+// from the scene's by a few bits (viewpoint)
+struct Scene {
+    std::vector<Eigen::Vector3d> pts;
+    std::vector<cv::Mat> desc;
+    explicit Scene(unsigned seed, int n = 200) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<double> ux(-3, 3), uy(-2, 2), uz(4, 8);
+        std::uniform_int_distribution<int> byte(0, 255);
+        for (int i = 0; i < n; i++) {
+            pts.emplace_back(ux(rng), uy(rng), uz(rng));
+            cv::Mat d(1, 32, CV_8U);
+            for (int k = 0; k < 32; k++)
+                d.at<uchar>(0, k) = static_cast<uchar>(byte(rng));
+            desc.push_back(d);
+        }
+    }
+};
+
+cv::Mat flipBits(const cv::Mat &d, std::mt19937 &rng, int n_bits) {
+    cv::Mat o = d.clone();
+    std::uniform_int_distribution<int> bit(0, 255);
+    for (int k = 0; k < n_bits; k++) {
+        const int b = bit(rng);
+        o.at<uchar>(0, b / 8) ^= static_cast<uchar>(1 << (b % 8));
+    }
+    return o;
+}
+
+// A record of the scene seen from camera pose T_w_c (frame = camera): landmarks [l0, l1) in the camera, and every
+// point in front of the camera as a feature (normalized coordinates, 0.5 px noise at focal 400). lmk_offset moves the
+// landmarks (not the features): a candidate whose structure disagrees with its image
+Record view(const Scene &s, const Eigen::Affine3d &T_w_c, int l0, int l1, unsigned seed,
+            const Eigen::Vector3d &lmk_offset = Eigen::Vector3d::Zero()) {
+    std::mt19937 rng(seed);
+    std::normal_distribution<double> px(0, 0.5 / 400);
+    Record r;
+    r.ts = 0, r.segment = 0, r.node = 0;
+    r.T_s_f = Eigen::Affine3d::Identity();
+    r.focal = 400;
+    const Eigen::Affine3d T_c_w = T_w_c.inverse();
+    for (size_t i = 0; i < s.pts.size(); i++) {
+        const Eigen::Vector3d p = T_c_w * s.pts[i];
+        if (p.z() < 0.5)
+            continue;
+        r.kp_n.emplace_back(static_cast<float>(p.x() / p.z() + px(rng)), static_cast<float>(p.y() / p.z() + px(rng)));
+        r.desc.push_back(flipBits(s.desc[i], rng, 6));
+        if (static_cast<int>(i) >= l0 && static_cast<int>(i) < l1) {
+            r.lmk_c.push_back(p + lmk_offset);
+            r.lmk_desc.push_back(flipBits(s.desc[i], rng, 6));
+        }
+    }
+    return r;
+}
+
+LoopClosure::Options verifyOptions() {
+    LoopClosure::Options o;
+    o.detector    = "proximity"; // no vocabulary needed to test the verification
+    o.min_inliers = 12;
+    return o;
+}
+
+Eigen::Affine3d candidatePose() {
+    Eigen::Affine3d T = Eigen::Affine3d::Identity();
+    T.linear()        = Eigen::AngleAxisd(0.17, Eigen::Vector3d::UnitY()).toRotationMatrix();
+    T.translation()   = Eigen::Vector3d(0.4, 0.1, -0.2);
+    return T;
+}
+
+} // namespace
+
+// The same place seen again from 0.5 m and 10 deg away: accepted, with the relative pose of the two cameras
+TEST(LoopVerificationTest, revisitIsAcceptedWithItsRelativePose) {
+    LoopClosure lc(verifyOptions());
+    const Scene s(1);
+    const Eigen::Affine3d T_w_q = Eigen::Affine3d::Identity(), T_w_c = candidatePose();
+    const Record q = view(s, T_w_q, 0, 120, 2), c = view(s, T_w_c, 60, 180, 3);
+    Eigen::Affine3d T_fc_fq;
+    ASSERT_TRUE(LoopClosureTestAccess::verify(lc, q, c, T_fc_fq));
+    const Eigen::Affine3d T_true = T_w_c.inverse() * T_w_q;
+    EXPECT_LT((T_fc_fq.translation() - T_true.translation()).norm(), 0.05);
+    EXPECT_LT(Eigen::AngleAxisd(T_fc_fq.rotation().transpose() * T_true.rotation()).angle() * 180 / M_PI, 0.5);
+}
+
+// Two different places (other points, other descriptors): rejected
+TEST(LoopVerificationTest, differentPlaceIsRejected) {
+    LoopClosure lc(verifyOptions());
+    const Scene s1(1), s2(7);
+    const Record q = view(s1, Eigen::Affine3d::Identity(), 0, 120, 2), c = view(s2, candidatePose(), 60, 180, 3);
+    Eigen::Affine3d T_fc_fq;
+    EXPECT_FALSE(LoopClosureTestAccess::verify(lc, q, c, T_fc_fq));
+}
+
+// The candidate's landmarks are 0.6 m off its image (a bad triangulation, a wrong map): each direction finds a pose,
+// but they disagree, so the loop is rejected
+TEST(LoopVerificationTest, directionsThatDisagreeAreRejected) {
+    LoopClosure lc(verifyOptions());
+    const Scene s(1);
+    const Record q = view(s, Eigen::Affine3d::Identity(), 0, 120, 2);
+    const Record c = view(s, candidatePose(), 60, 180, 3, Eigen::Vector3d(0.6, 0, 0));
+    Eigen::Affine3d T_fc_fq;
+    EXPECT_FALSE(LoopClosureTestAccess::verify(lc, q, c, T_fc_fq));
+}
+
 } // namespace isae
+

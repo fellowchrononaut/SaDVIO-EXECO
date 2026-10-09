@@ -94,7 +94,7 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         if (cfg.slam_mode == "mono")
             errors.push_back("loop_closure is not available in slam_mode mono (monocular VO needs a Sim3 pose graph)");
         if (cfg.loop_graph_dof != 0 && cfg.loop_graph_dof != 4 && cfg.loop_graph_dof != 6)
-            errors.push_back("loop_graph_dof must be 0 (4 with an IMU, 6 without), 4 or 6");
+            errors.push_back("loop_graph_dof must be 0 (automatic: 6), 4 or 6");
         if (cfg.loop_graph_dof == 4 && cfg.slam_mode != "monovio" && cfg.slam_mode != "bimonovio")
             errors.push_back("loop_graph_dof 4 needs an IMU (roll and pitch observable)");
         if (cfg.loop_correct_window != 0 && cfg.loop_correct_window != 1)
