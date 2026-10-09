@@ -63,11 +63,11 @@ def quat_to_R(w, x, y, z):
                      [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
 
 
-def load_estimate(run_dir, with_segments=False):
+def load_estimate(run_dir, with_segments=False, results='results.csv'):
     """KF poses (last write per timestamp). With with_segments, also the segment of each KF: results.csv rows carry
     the number of re-initializations before them (column 15; older logs, truncated at every re-initialization, have
     a single segment). Each segment has its own world frame."""
-    a = read_csv(run_dir / 'log_slam/results.csv')
+    a = read_csv(run_dir / 'log_slam' / results)
     if len(a) == 0:
         empty = (np.zeros(0), np.zeros((0, 3)), np.zeros((0, 3, 3)), 0)
         return empty + (np.zeros(0, int),) if with_segments else empty
@@ -144,7 +144,10 @@ def rpe(t, p_est, p_gt, R_est, R_gt, delta, seg=None):
     return float(np.sqrt(np.mean(np.square(errs_t)))), float(np.sqrt(np.mean(np.square(errs_r))))
 
 
-def evaluate(run_dir: Path):
+def evaluate(run_dir: Path, results: str = 'results.csv'):
+    """Metrics of log_slam/<results> (default results.csv; e.g. results_loop.csv for the loop-closed trajectory),
+    written to metrics.json, or metrics_<stem>.json for another results file."""
+    out = run_dir / ('metrics.json' if results == 'results.csv' else f'metrics_{Path(results).stem}.json')
     meta = json.loads((run_dir / 'run.json').read_text())
     seq, mode = meta['seq'], meta['mode']
     mono = mode.startswith('mono')
@@ -152,7 +155,7 @@ def evaluate(run_dir: Path):
     crashed = meta['end_reason'].startswith('exited(') and meta['end_reason'] != 'exited(0)'
     m = dict(seq=seq, mode=mode, end_reason=meta['end_reason'], crashed=int(crashed), wall_s=meta['wall_s'],
              resets=stdout.count('Reinitializing'), stdout_nan=stdout.lower().count('nan'))
-    t, p, R, nan_rows, seg = load_estimate(run_dir, with_segments=True)
+    t, p, R, nan_rows, seg = load_estimate(run_dir, with_segments=True, results=results)
     m['nan_rows'] = nan_rows
     m['n_kf'] = int(len(t))
     m['segments'] = int(len(np.unique(seg))) if len(seg) else 0
@@ -162,7 +165,7 @@ def evaluate(run_dir: Path):
     m['coverage'] = float(span / (cam_t[-1] - cam_t[0]))
     if len(t) < 3:
         m['ate_rmse'] = None
-        (run_dir / 'metrics.json').write_text(json.dumps(m, indent=1))
+        out.write_text(json.dumps(m, indent=1))
         return m
     tg, pg, Rg = load_gt(seq)
     ok, p_gt, R_gt = associate(t, tg, pg, Rg)
@@ -190,7 +193,7 @@ def evaluate(run_dir: Path):
     m['n_associated'] = int(len(t))
     if len(t) < 3:
         m['ate_rmse'] = None
-        (run_dir / 'metrics.json').write_text(json.dumps(m, indent=1))
+        out.write_text(json.dumps(m, indent=1))
         return m
     # each segment aligned on its own (its own world frame, and scale in mono); the largest segment's scale is reported
     p_al, R_al = np.zeros_like(p), np.zeros_like(R)
@@ -225,7 +228,7 @@ def evaluate(run_dir: Path):
         same = seg[1:] == seg[:-1]  # steps within a segment
         m['path_ratio'] = float(np.sum(np.linalg.norm(np.diff(p, axis=0), axis=1)[same]) /
                                 np.sum(np.linalg.norm(np.diff(p_gt, axis=0), axis=1)[same]))
-        (run_dir / 'metrics.json').write_text(json.dumps(m, indent=1))
+        out.write_text(json.dumps(m, indent=1))
         return m
     for d in (1.0, 5.0):
         rt, rr = rpe(t, p_al, p_gt, R_al, R_gt, d, seg)
@@ -239,7 +242,7 @@ def evaluate(run_dir: Path):
             pe = s0 * (R0 @ p[~start].T).T + t0
             m['end_drift'] = float(np.linalg.norm(pe - p_gt[~start], axis=1).mean())
             m['end_segment_kf'] = int((~start).sum())
-    (run_dir / 'metrics.json').write_text(json.dumps(m, indent=1))
+    out.write_text(json.dumps(m, indent=1))
     return m
 
 
@@ -273,9 +276,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('paths', nargs='*', type=Path)
     ap.add_argument('--summary', type=Path)
+    ap.add_argument('--results', default='results.csv', help='log_slam file to evaluate (e.g. results_loop.csv)')
     a = ap.parse_args()
     for rd in a.paths:
-        m = evaluate(rd)
+        m = evaluate(rd, a.results)
         print(rd, json.dumps({k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}))
     if a.summary:
         summary(a.summary)
