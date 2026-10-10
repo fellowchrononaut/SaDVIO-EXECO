@@ -1833,6 +1833,145 @@ TEST_F(ImuTest, inertialPriorWithoutKeptLandmarks) {
     }
 }
 
+// A loop closure moves the sliding window into the corrected frame by C (yaw + translation, or a full rotation): the
+// marginalization prior, expressed in the new frame (Marginalization::transformWorld), must give the moved states the
+// cost the old states had. It was dropped at each correction instead; the prior left as it was does not follow
+TEST_F(ImuTest, priorFollowsTheWindowWhenTheWorldMoves) {
+    for (int variant = 0; variant < 2; variant++) {
+        VIScene sc = buildVIScene(_imu_cfg, true, 8);
+        MarginalizationAccess optim;
+        ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), false));
+        sc.map->discardLastFrame();
+        optim.localMapVIOptimization(sc.map, 1); // the kept states leave the linearization point
+        ASSERT_TRUE(optim.prior()->_has_prior);
+        ASSERT_FALSE(optim.prior()->_lmk_to_keep.empty()) << "the test needs kept landmarks";
+
+        Eigen::Affine3d C = Eigen::Affine3d::Identity();
+        C.linear()        = Eigen::AngleAxisd(0.6, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+        if (variant == 1)
+            C.linear() = C.linear() * Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitX()).toRotationMatrix() *
+                         Eigen::AngleAxisd(-0.1, Eigen::Vector3d::UnitY()).toRotationMatrix();
+        C.translation() = Eigen::Vector3d(3, -2, 0.5);
+
+        // The window's states, restored before each perturbation
+        std::vector<std::shared_ptr<Frame>> frames(sc.map->getFrames().begin(), sc.map->getFrames().end());
+        std::vector<Eigen::Affine3d> T0;
+        std::vector<Eigen::Vector3d> v0;
+        for (auto &f : frames) {
+            T0.push_back(f->getWorld2FrameTransform());
+            v0.push_back(f->getIMU() ? f->getIMU()->getVelocity() : Eigen::Vector3d::Zero());
+        }
+        std::vector<std::shared_ptr<ALandmark>> lmks;
+        for (auto &tl : sc.map->getLandmarks())
+            for (auto &l : tl.second)
+                lmks.push_back(l);
+        std::vector<Eigen::Affine3d> L0;
+        for (auto &l : lmks)
+            L0.push_back(l->getPose());
+
+        auto residual = [](const std::shared_ptr<Marginalization> &m) {
+            MarginalizationFactor f(m); // offsets from the current states
+            std::vector<std::vector<double>> blocks;
+            std::vector<double *> params;
+            for (int sz : f.parameter_block_sizes())
+                blocks.emplace_back(sz, 0.0);
+            for (auto &b : blocks)
+                params.push_back(b.data());
+            Eigen::VectorXd r(f.num_residuals());
+            f.Evaluate(params.data(), r.data(), nullptr);
+            return r;
+        };
+        const auto orig  = std::make_shared<Marginalization>(*optim.prior());
+        const auto moved = std::make_shared<Marginalization>(*optim.prior());
+        moved->transformWorld(C);
+
+        std::mt19937 rng(3 + variant);
+        std::uniform_real_distribution<double> u(-0.02, 0.02);
+        auto rnd = [&]() { return Eigen::Vector3d(u(rng), u(rng), u(rng)); };
+        for (int k = 0; k < 3; k++) {
+            // Perturbed states (up to 0.02 rad / m / m/s away from where the window left them)
+            for (size_t i = 0; i < frames.size(); i++) {
+                Eigen::Affine3d T = T0[i];
+                T.linear()        = T.linear() * geometry::exp_so3(rnd());
+                T.translation() += rnd();
+                frames[i]->setWorld2FrameTransform(T);
+                if (frames[i]->getIMU())
+                    frames[i]->getIMU()->setVelocity(v0[i] + rnd());
+            }
+            for (size_t i = 0; i < lmks.size(); i++) {
+                Eigen::Affine3d T = L0[i];
+                T.translation() += rnd();
+                lmks[i]->setPose(T);
+            }
+            const Eigen::VectorXd r_old = residual(orig);
+
+            // The same states in the moved world (points only translate)
+            for (auto &f : frames) {
+                f->setWorld2FrameTransform((C * f->getFrame2WorldTransform()).inverse());
+                if (f->getIMU())
+                    f->getIMU()->setVelocity(C.rotation() * f->getIMU()->getVelocity());
+            }
+            for (auto &l : lmks) {
+                Eigen::Affine3d T = l->getPose();
+                T.translation()   = C * T.translation();
+                l->setPose(T);
+            }
+            const Eigen::VectorXd r_new  = residual(moved);
+            const Eigen::VectorXd r_kept = residual(orig);
+            const double tol             = 1e-4 * r_old.norm() + 1e-6;
+            EXPECT_LT((r_new - r_old).norm(), tol) << "variant " << variant << ", state " << k;
+            EXPECT_GT((r_kept - r_old).norm(), 100 * tol) << "the prior left as it was must not follow";
+        }
+
+        // Its Jacobians with the world change (mapped increments, the translation's dependence on the rotation)
+        MarginalizationFactor fm(moved);
+        std::vector<std::vector<double>> blocks;
+        for (size_t i = 0; i < fm.parameter_block_sizes().size(); i++) {
+            std::vector<double> b(fm.parameter_block_sizes()[i]);
+            for (double &x : b)
+                x = (i == 0 ? 0.1 : 0.05) * u(rng) / 0.02;
+            blocks.push_back(b);
+        }
+        std::vector<double *> params;
+        for (auto &b : blocks)
+            params.push_back(b.data());
+        EXPECT_TRUE(isae_test::JacobiansMatch(fm, params, 1e-5)) << "variant " << variant;
+    }
+}
+
+// The sparse prior's absolute factor (IMUPriordx, built as addSparsePriorResiduals does) follows the window too: its
+// pose error is relative to the linearization pose, its velocity error is rotated into the current world
+TEST_F(ImuTest, sparsePriorFollowsTheWindowWhenTheWorldMoves) {
+    VIScene sc = buildVIScene(_imu_cfg, true, 8);
+    MarginalizationAccess optim;
+    ASSERT_TRUE(optim.marginalize(sc.map->getFrames().at(0), sc.map->getFrames().at(1), true));
+    sc.map->discardLastFrame();
+    optim.localMapVIOptimization(sc.map, 1);
+    const auto m = optim.prior();
+    const std::shared_ptr<Frame> f = m->_frame_to_keep;
+    ASSERT_TRUE(f && f->getIMU() && m->_map_frame_inf.count(f));
+
+    auto residual = [&]() {
+        Eigen::MatrixXd S = m->_map_frame_inf.at(f);
+        S.middleCols(6, 3) = S.middleCols(6, 3) * m->_W_prior.rotation();
+        IMUPriordx c(f->getWorld2FrameTransform(), m->linPoseCurrent(), f->getIMU()->getVelocity(),
+                     m->linVelocityCurrent(), f->getIMU()->getBa(), m->_ba_lin, f->getIMU()->getBg(), m->_bg_lin, S);
+        double zero[6] = {0, 0, 0, 0, 0, 0}, z3[3] = {0, 0, 0};
+        const double *params[4] = {zero, z3, z3, z3};
+        Eigen::Matrix<double, 15, 1> r;
+        c.Evaluate(params, r.data(), nullptr);
+        return r;
+    };
+    const Eigen::Matrix<double, 15, 1> r_old = residual();
+    Eigen::Affine3d C = Eigen::Affine3d::Identity();
+    C.linear()        = Eigen::AngleAxisd(0.6, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    C.translation()   = Eigen::Vector3d(3, -2, 0.5);
+    f->setWorld2FrameTransform((C * f->getFrame2WorldTransform()).inverse());
+    f->getIMU()->setVelocity(C.rotation() * f->getIMU()->getVelocity());
+    m->transformWorld(C);
+    EXPECT_LT((residual() - r_old).norm(), 1e-9 * (1 + r_old.norm()));
+}
+
 TEST(ImuConfigTest, noiseKeysAreReadIntoTheRightFields) {
 
     // Issue 1: the gyroscope random walk was read from accelerometer_random_walk.

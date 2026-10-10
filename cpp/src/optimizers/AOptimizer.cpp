@@ -41,15 +41,20 @@ void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
         Eigen::Vector3d bg    = frame_to_keep->getIMU()->getBg();
         // The prior is centred on its linearization point (not on the current state, which made it pull towards
         // wherever the window had drifted to)
+        // Values in the current world (a loop closure may have moved the window since the prior was made): the pose
+        // error is relative to the linearization pose and does not change, the velocity error rotates
+        Eigen::MatrixXd S_frame = _marginalization->_map_frame_inf.at(frame_to_keep);
+        if (S_frame.cols() == 15)
+            S_frame.middleCols(6, 3) = S_frame.middleCols(6, 3) * _marginalization->_W_prior.rotation();
         ceres::CostFunction *cost_fct0 = new IMUPriordx(T_f_w,
-                                                        _marginalization->_T_f_w_lin,
+                                                        _marginalization->linPoseCurrent(),
                                                         v,
-                                                        _marginalization->_v_lin,
+                                                        _marginalization->linVelocityCurrent(),
                                                         ba,
                                                         _marginalization->_ba_lin,
                                                         bg,
                                                         _marginalization->_bg_lin,
-                                                        _marginalization->_map_frame_inf.at(frame_to_keep));
+                                                        S_frame);
         problem.AddResidualBlock(cost_fct0,
                                  loss_function,
                                  _map_frame_posepar.at(frame_to_keep).values(),
@@ -77,8 +82,12 @@ void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
 
     // Unary factor for the landmark with a prior
     double *prior_block = lmk_block(_marginalization->_lmk_with_prior);
-    ceres::CostFunction *cost_fct_0 = new Landmark3DPrior(
-        _marginalization->_prior_lmk, _marginalization->_lmk_with_prior->getPose().translation(), _marginalization->_info_lmk);
+    // The VO factors are along world axes: their values in the current world
+    const Eigen::Affine3d W_cur = _marginalization->_W_prior.inverse();
+    const Eigen::Matrix3d R_W   = _marginalization->_W_prior.rotation();
+    ceres::CostFunction *cost_fct_0 = new Landmark3DPrior(W_cur * _marginalization->_prior_lmk,
+                                                          _marginalization->_lmk_with_prior->getPose().translation(),
+                                                          Eigen::Matrix3d(_marginalization->_info_lmk * R_W));
     problem.AddResidualBlock(cost_fct_0, loss_function, prior_block);
     ordering->Remove(prior_block);
     ordering->AddElementToGroup(prior_block, 2);
@@ -91,10 +100,10 @@ void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
         double *block_k = lmk_block(lmk_k), *block_kp1 = lmk_block(lmk_kp1);
         ordering->Remove(block_kp1);
         ordering->AddElementToGroup(block_kp1, 2);
-        ceres::CostFunction *cost_fct = new LandmarkToLandmarkFactor(_marginalization->_map_lmk_prior.at(lmk_kp1),
+        ceres::CostFunction *cost_fct = new LandmarkToLandmarkFactor(R_W.transpose() * _marginalization->_map_lmk_prior.at(lmk_kp1),
                                                                      lmk_k->getPose().translation(),
                                                                      lmk_kp1->getPose().translation(),
-                                                                     _marginalization->_map_lmk_inf.at(lmk_kp1));
+                                                                     Eigen::Matrix3d(_marginalization->_map_lmk_inf.at(lmk_kp1) * R_W));
         problem.AddResidualBlock(cost_fct, loss_function, block_k, block_kp1);
     }
 }
@@ -222,8 +231,13 @@ void AOptimizer::restoreGauge(const std::shared_ptr<Frame> &anchor, const Eigen:
         if (f->getIMU() && _map_frame_velpar.count(f))
             f->getIMU()->setVelocity(G.linear() * f->getIMU()->getVelocity());
     }
-    for (auto &lmk_ptpar : _map_lmk_ptpar)
-        lmk_ptpar.first->setPose(G * lmk_ptpar.first->getPose());
+    // Points only translate: they have no orientation, and the sparse prior's landmark factors take their increments
+    // along world axes (a rotated point pose made the reprojection factors take them along that rotation instead)
+    for (auto &lmk_ptpar : _map_lmk_ptpar) {
+        Eigen::Affine3d T = lmk_ptpar.first->getPose();
+        T.translation()   = G * T.translation();
+        lmk_ptpar.first->setPose(T);
+    }
     for (auto &lmk_posepar : _map_lmk_posepar)
         lmk_posepar.first->setPose(G * lmk_posepar.first->getPose());
 }

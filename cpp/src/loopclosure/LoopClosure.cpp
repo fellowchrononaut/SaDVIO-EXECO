@@ -172,6 +172,23 @@ bool LoopClosure::takeCorrection(int segment, Eigen::Affine3d &C) {
         return false;
     _pending_correction = false;
     C                   = _graph.correction(segment);
+    if (_opt.window_gravity) {
+        // Yaw about the world z axis (gravity) closest to the correction's rotation, and the translation that puts
+        // the segment's latest KF where the full correction puts it
+        int last = -1;
+        for (int i = static_cast<int>(_graph.size()) - 1; i >= 0 && last < 0; i--)
+            if (_graph.segment(i) == segment)
+                last = i;
+        if (last < 0)
+            return false;
+        const Eigen::Matrix3d &R   = C.linear();
+        const double yaw           = std::atan2(R(1, 0) - R(0, 1), R(0, 0) + R(1, 1));
+        const Eigen::Vector3d p    = _graph.odomPose(last).translation();
+        Eigen::Affine3d C4         = Eigen::Affine3d::Identity();
+        C4.linear()                = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+        C4.translation()           = C * p - C4.linear() * p;
+        C                          = C4;
+    }
     if (C.translation().norm() < 1e-3 && Eigen::AngleAxisd(C.rotation()).angle() < 1e-4)
         return false;
     _graph.reanchor(segment, C);

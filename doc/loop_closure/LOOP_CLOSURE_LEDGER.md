@@ -309,3 +309,95 @@ cores 16–23; means of 2 runs (magistrale2: 1). Times in ms.
 - `directionsThatDisagreeAreRejected`: the candidate's landmarks 0.6 m off its image; both PnP directions succeed (61
   and 120 inliers) but disagree by 0.60 m (> 0.3): rejected by the agreement check, as intended.
 Suite: 86 / 87 (`LineFeatureMatching`, coin flip).
+
+## The marginalization prior follows the window correction (task 5, mandatory, 2026-10-09/10)
+
+Before: `loop_correct_window: 1` dropped the prior at each correction (`resetMarginalization`), costing SaDVIO
+accuracy (EuRoC 0.039 -> 0.049–0.056 m).
+
+First attempt (discarded): re-expressing the prior's Jacobian in the corrected world (J <- J M^-1). The invariance test
+showed it is only first-order exact: the prior's translation coordinate is the world-to-frame translation, which
+depends on the rotation increment through the world origin (dt' = R_C dt - R_C (Exp(dr) - I) R_C^T t_C); with a 3.6 m
+correction the residual was off by 5–9 %.
+
+Exact design (kept): the prior stays expressed in the world it was linearized in and records the change,
+`Marginalization::_W_prior` (prior's world <- current world; `transformWorld(C)`: W <- W C^-1; reset to identity by
+`storeLinearizationPoint`, i.e. by the next marginalization, which linearizes in the current world).
+- Dense factor (`MarginalizationFactor`): the current states are mapped into the prior's world before the offsets
+  (T_f_w W^-1, R_W v, W T_l), and so are the increments: y_r = R_W x_r, y_t = R_W x_t - R_W (Exp(x_r) - I) R_W^T t_W,
+  y_v = R_W x_v; Jacobians by the chain rule (the rotation columns gain the translation's term
+  A R_W Exp(x_r) [R_W^T t_W]x Jr(x_r)). With W = identity it is the previous code.
+- Sparse factors (`AOptimizer::addSparsePriorResiduals`) take their values in the current world:
+  `linPoseCurrent()` (T_lin W), `linVelocityCurrent()` (R_W^T v_lin), velocity columns of the absolute factor's
+  information times R_W; the VO landmark prior W^-1 p with information S R_W, the landmark-to-landmark differences
+  R_W^T d with S R_W. The pose-to-landmark factors (in the frame) do not change.
+- `AOptimizer::transformPriors(C)` applies it to both prior slots; `SLAMCore::applyLoopCorrection` calls it instead
+  of `resetMarginalization`; the slots' copy carries `_W_prior`.
+- Points only translate (no orientation), in `applyLoopCorrection` and in `AOptimizer::restoreGauge`. The gauge
+  restore rotated point poses by its yaw, after which the reprojection factors (increments `T_w_l * x`) and the
+  sparse prior's landmark factors (increments along world axes) disagreed by that yaw: a small inconsistency in
+  SaDVIO's sparse mode, fixed with it.
+
+Tests (`cpp/tests/imu_test.cpp`):
+- `priorFollowsTheWindowWhenTheWorldMoves`: a real stereo VIO prior with kept landmarks, states perturbed (0.02),
+  the world moved by a yaw + 3.6 m (and a full rotation): the transformed prior gives the moved states the residual
+  the old states had (within 1e-4); the prior left as it was does not (> 100 times that); its Jacobians with the world
+  change match numerical ones. Failed with the first attempt (5–9 %), passes with the exact design.
+- `sparsePriorFollowsTheWindowWhenTheWorldMoves`: the absolute factor's residual is unchanged (1e-9).
+- Suite 88 / 89 (`LineFeatureMatching`, coin flip). ROS package rebuilt.
+
+Running: `tools/run_lc_prior.sh`: drop (binary `lc5`) against transform (`lc6`), window correction, SaDVIO on the
+rooms + EuRoC and VIO marginalization + td on the rooms + magistrale2, 2 runs per cell.
+
+### First real-data comparison: the transformed prior fought gravity
+
+`tools/run_lc_prior.sh` (drop `lc5` against transform `lc6`, window correction, 2 runs per cell): transform was worse,
+median final SaDVIO 0.038 against 0.030 m, and VIO with marginalization + td worse in every cell, room2 diverging
+(129 m). Cause: the pose graph is 6-DoF now, so its correction contains a tilt, and a window moved by a tilt
+contradicts gravity (fixed along the world z axis by the IMU factors). Dropping the prior hid it (the IMU levels the
+window again); a kept prior, which carries the old tilt, fights the IMU factors. The invariance tests have no
+gravity factors and could not see it.
+
+Fix: with an IMU (`LoopClosure::Options::window_gravity`, set for monovio / bimonovio) the window moves by the
+correction's yaw and translation only, the translation chosen so that the segment's latest KF lands where the full
+correction puts it; the pose graph re-anchors by what was applied and keeps the rest (the tilt) in its output.
+Test `LoopWindowCorrectionTest.imuWindowIsMovedWithoutTilt`: a correction with a tilt gives a pure rotation about z,
+the latest KF lands exactly, the graph keeps the rest.
+
+Quick check (`tools/run_lc_prior_check.sh`, binary `lc7`) on the worst cells, final ATE (m), drop / transform 6-DoF
+window / transform gravity-consistent window: VIO marg + td room2 0.021 / 129.6 / 0.016, room4 0.032 / 0.125 / 0.048,
+magistrale2 0.82 / 3.54 / 0.67; SaDVIO room2 0.024 / 0.057 / 0.040, MH_01 0.027 / 0.050 / 0.035, V2_03 0.144 /
+0.179 / 0.101. The divergence is gone; against dropping, mixed. Full comparison: `tools/run_lc_prior_grav.sh`.
+
+### Full comparison (binary `lc7`, `tools/run_lc_prior_grav.sh`, 2 runs per cell)
+
+Final / window ATE medians (m):
+
+| configuration | output only (final) | drop prior: window / final | transform, 6-DoF window | transform, gravity-consistent window |
+|---|---|---|---|---|
+| VIO marg + td (7: rooms + magistrale2) | – (magistrale2 0.705) | 0.041 / 0.021 | 0.125 / 0.051 (room2: 129 m) | **0.035 / 0.017** (final better than drop in 5 / 7) |
+| SaDVIO (17: rooms + EuRoC) | 0.032 | 0.050 / 0.030 | 0.057 / 0.038 | 0.057 / 0.035 (better than drop in 11 / 17, 2 ties) |
+
+- No divergence with the gravity-consistent window. With a dense prior, keeping it is better than dropping it (window
+  and final); with SaDVIO it wins in most sequences (V2_03 0.144 -> 0.101, MH_05 0.062 -> 0.053), the median being
+  slightly higher from how the per-sequence values fall; all three within a few mm of output-only correction.
+- Recommendation: SaDVIO keeps output-only correction as the simplest default; window correction with marginalization
+  is now safe when the live window must run in the corrected frame (MeshCSLAM). VIO with a dense prior: window
+  correction is now the better choice.
+- Task 5 done. Suite 89 / 90 (`LineFeatureMatching`, coin flip).
+
+## Defaults (2026-10-10, decided by the user)
+
+Shipped config `ros/config/config.yaml`: `loop_closure: 1`, bag-of-words, automatic graph (6-DoF), and the new
+automatic window correction `loop_correct_window: -1` (also the code default): the window is moved for VIO with a
+dense prior (better than output-only and than dropping the prior) and for mono VIO (repairs failing runs); elsewhere
+(VIO with no prior or with a sparse prior, stereo VO) the output is corrected and the window left as it is.
+Mono VO: loop closure is skipped with a warning (no Sim3 graph yet) instead of refusing the config, so the shipped
+config (mono) stays valid. The evaluation base config (`doc/vio_imu_fix/configs/base_config.yaml`) keeps
+`loop_closure: 0`, so odometry runs stay comparable with the earlier ones. `ConfigTest` covers the loop options
+(automatic window value, ranges, 4-DoF without IMU, unreadable vocabulary, the mono warning). Suite 89 / 90
+(`LineFeatureMatching`, coin flip).
+
+Naming from here on: "VIO no prior" (`marginalization: 0`), "VIO dense prior" (`marginalization: 1`), "VIO sparse
+prior" (`marginalization: 1`, `sparsification: 1`, the SaDVIO paper's configuration, called "SaDVIO" in the earlier
+sections and run labels).

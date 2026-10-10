@@ -50,7 +50,8 @@ reinit_carry_max_age_vo: 2.0
 ## Loop closure over the keyframes that left the window (doc/loop_closure): a separate pose graph (4-DoF with an IMU,
 ## 6-DoF without; not in mono VO), the window is untouched and the corrected trajectory goes to
 ## log_slam/results_loop.csv (final) and results_loop_online.csv (as estimated at each KF)
-loop_closure: 0
+loop_closure: 0             # off in this evaluation base config, so odometry runs stay comparable with earlier
+                            # ones; on in the shipped ros/config/config.yaml
 ## candidates from: bow (bag-of-words over 1000 pyramid ORB per KF), proximity (gate around the corrected position,
 ## no vocabulary), proximity_bow (the gate ranked by bag-of-words, plus a global search), learned (global image
 ## descriptor, e.g. MegaLoc; needs the build option ISAESLAM_WITH_VPR_OPENVINO for CPU or ISAESLAM_WITH_VPR_TENSORRT
@@ -64,7 +65,8 @@ loop_min_gap: 20.0          # s between a keyframe and its loop candidates
 loop_min_inliers: 12        # PnP inliers to accept a loop (each direction; both directions must agree)
 loop_gate_radius: 2.0       # m, proximity gate
 loop_graph_dof: 0           # pose graph: 6, 4 (roll, pitch kept from the odometry; IMU modes only), or 0: automatic (6)
-loop_correct_window: 0      # 1: after a loop, move the sliding window into the corrected frame (drops the marginalization prior once)
+loop_correct_window: -1     # 1: move the sliding window into the corrected frame (its marginalization prior moves with it),
+                            # 0: correct the output only, -1: automatic (1 for VIO with a dense prior and mono VIO, else 0)
 
 ## LocalMap parameters
 min_kf_number: 1                # number of keyframes that are added by default when the map starts

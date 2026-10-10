@@ -187,6 +187,23 @@ class Marginalization {
     void storeLinearizationPoint();
 
     /*!
+     * @brief The world frame moved by C (world_new <- world_old), with the kept states (a loop closure moving the
+     * sliding window). The prior stays expressed in the world it was linearized in and records the change
+     * (_W_prior): the dense factor maps the current states and their increments into that world before measuring
+     * them from the linearization point (exactly, increments included), the sparse factors take their values in the
+     * current world (linPoseCurrent() etc.). The next marginalization linearizes in the current world again.
+     */
+    void transformWorld(const Eigen::Affine3d &C) { _W_prior = _W_prior * C.inverse(); }
+
+    //! World the prior is expressed in <- current world (identity until a loop closure moves the window)
+    Eigen::Affine3d _W_prior = Eigen::Affine3d::Identity();
+
+    //! Linearization pose of the kept frame (world to frame), in the current world
+    Eigen::Affine3d linPoseCurrent() const { return _T_f_w_lin * _W_prior; }
+    //! Linearization velocity of the kept frame, in the current world
+    Eigen::Vector3d linVelocityCurrent() const { return _W_prior.rotation().transpose() * _v_lin; }
+
+    /*!
      * @brief True if the landmark's position is well conditioned now: every observation's predicted bearing agrees
      * with the measured one (not behind a camera, not badly triangulated) and the observing rays span at least
      * min_ray_angle. Only such landmarks are linearized into the prior: a far or badly triangulated point slides
@@ -228,13 +245,19 @@ class MarginalizationFactor : public ceres::CostFunction {
         // The parameter blocks are increments on the states at the time the problem is built; the prior is
         // linearized at _marginalization_info's linearization point. Offsets between the two (right
         // perturbations, same conventions as the parameter blocks):
+        // The current states are mapped into the world the prior is expressed in (W: identity unless a loop closure
+        // moved the window since the prior was made)
+        const Eigen::Affine3d &W = _marginalization_info->_W_prior;
+        _R_W                     = W.rotation();
+        _v_W                     = W.rotation().transpose() * W.translation();
         if (_marginalization_info->_frame_to_keep) {
             std::shared_ptr<Frame> f = _marginalization_info->_frame_to_keep;
-            const Eigen::Affine3d T_lin = _marginalization_info->_T_f_w_lin, T_now = f->getWorld2FrameTransform();
+            const Eigen::Affine3d T_lin = _marginalization_info->_T_f_w_lin;
+            const Eigen::Affine3d T_now = f->getWorld2FrameTransform() * W.inverse();
             _A_rot = T_lin.rotation().transpose() * T_now.rotation();
             _dt0   = T_lin.rotation().transpose() * (T_now.translation() - T_lin.translation());
             if (f->getIMU()) {
-                _dv0  = f->getIMU()->getVelocity() - _marginalization_info->_v_lin;
+                _dv0  = _R_W * f->getIMU()->getVelocity() - _marginalization_info->_v_lin;
                 _dba0 = f->getIMU()->getBa() - _marginalization_info->_ba_lin;
                 _dbg0 = f->getIMU()->getBg() - _marginalization_info->_bg_lin;
             }
@@ -244,7 +267,7 @@ class MarginalizationFactor : public ceres::CostFunction {
                 auto it = _marginalization_info->_map_lmk_lin.find(lmk);
                 const Eigen::Affine3d T_lin = (it != _marginalization_info->_map_lmk_lin.end()) ? it->second
                                                                                                 : lmk->getPose();
-                const Eigen::Affine3d T_now = lmk->getPose();
+                const Eigen::Affine3d T_now = W * lmk->getPose();
                 _lmk_offsets.emplace(lmk,
                                      std::make_pair(Eigen::Matrix3d(T_lin.rotation().transpose() * T_now.rotation()),
                                                     Eigen::Vector3d(T_lin.rotation().transpose() *
@@ -262,16 +285,23 @@ class MarginalizationFactor : public ceres::CostFunction {
         int block_id = 0;
         // d(rotation dx) / d(rotation increment): d Log(A Exp(x)) / dx = Jr^-1(Log(A Exp(x))) Jr(x), the parameter
         // block being additive (Jr(x) = I only at x = 0)
-        Eigen::Matrix3d J_rot = Eigen::Matrix3d::Identity();
+        Eigen::Matrix3d J_rot = Eigen::Matrix3d::Identity(), J_trot = Eigen::Matrix3d::Zero();
         if (_marginalization_info->_frame_to_keep) {
             const int i0 = _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep);
             Eigen::Map<const Eigen::Matrix<double, 6, 1>> xp(parameters[block_id]);
-            const Eigen::Vector3d drot = geometry::log_so3(_A_rot * geometry::exp_so3(xp.head<3>()));
-            J_rot = geometry::so3_rightJacobian(drot).inverse() * geometry::so3_rightJacobian(xp.head<3>());
+            // Increments in the prior's world: y_r = R_W x_r, y_t = R_W x_t - R_W (Exp(x_r) - I) R_W^T t_W (T_f_w
+            // right perturbations; the translation of a world-to-frame pose depends on the world origin)
+            const Eigen::Vector3d xr   = xp.head<3>();
+            const Eigen::Matrix3d Exr  = geometry::exp_so3(xr);
+            const Eigen::Vector3d yr   = _R_W * xr;
+            const Eigen::Vector3d yt   = _R_W * xp.tail<3>() - _R_W * (Exr * _v_W - _v_W);
+            const Eigen::Vector3d drot = geometry::log_so3(_A_rot * geometry::exp_so3(yr));
+            J_rot = geometry::so3_rightJacobian(drot).inverse() * geometry::so3_rightJacobian(yr) * _R_W;
+            J_trot = _A_rot * _R_W * Exr * geometry::skewMatrix(_v_W) * geometry::so3_rightJacobian(xr);
             dx.segment<3>(i0)          = drot;
-            dx.segment<3>(i0 + 3)      = _dt0 + _A_rot * xp.tail<3>();
+            dx.segment<3>(i0 + 3)      = _dt0 + _A_rot * yt;
             block_id++;
-            dx.segment<3>(i0 + 6) = _dv0 + Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
+            dx.segment<3>(i0 + 6) = _dv0 + _R_W * Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
             block_id++;
             dx.segment<3>(i0 + 9) = _dba0 + Eigen::Map<const Eigen::Vector3d>(parameters[block_id]);
             block_id++;
@@ -312,9 +342,10 @@ class MarginalizationFactor : public ceres::CostFunction {
                     jacobian.setZero();
                     const int i0 = _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep);
                     jacobian.leftCols(3) =
-                        _marginalization_info->_marginalization_jacobian.middleCols(i0, 3) * J_rot;
+                        _marginalization_info->_marginalization_jacobian.middleCols(i0, 3) * J_rot +
+                        _marginalization_info->_marginalization_jacobian.middleCols(i0 + 3, 3) * J_trot;
                     jacobian.middleCols(3, 3) =
-                        _marginalization_info->_marginalization_jacobian.middleCols(i0 + 3, 3) * _A_rot;
+                        _marginalization_info->_marginalization_jacobian.middleCols(i0 + 3, 3) * _A_rot * _R_W;
                 }
                 block_id++;
                 if (jacobians[block_id]) {
@@ -323,7 +354,8 @@ class MarginalizationFactor : public ceres::CostFunction {
                         jacobians[block_id], n, 3);
                     jacobian.setZero();
                     jacobian.leftCols(3) = _marginalization_info->_marginalization_jacobian.middleCols(
-                        _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep) + 6, 3);
+                                               _marginalization_info->_map_frame_idx.at(_marginalization_info->_frame_to_keep) + 6, 3) *
+                                           _R_W;
                 }
                 block_id++;
                 if (jacobians[block_id]) {
@@ -388,6 +420,8 @@ class MarginalizationFactor : public ceres::CostFunction {
     }
 
     // Offsets from the linearization point to the states the parameter blocks start from
+    Eigen::Matrix3d _R_W   = Eigen::Matrix3d::Identity(); //!< Rotation of _W_prior (prior's world <- current world)
+    Eigen::Vector3d _v_W   = Eigen::Vector3d::Zero();     //!< R_W^T t_W of _W_prior
     Eigen::Matrix3d _A_rot = Eigen::Matrix3d::Identity(); //!< R_lin^T R_now of the frame to keep
     Eigen::Vector3d _dt0   = Eigen::Vector3d::Zero();     //!< R_lin^T (t_now - t_lin) of the frame to keep
     Eigen::Vector3d _dv0 = Eigen::Vector3d::Zero(), _dba0 = Eigen::Vector3d::Zero(), _dbg0 = Eigen::Vector3d::Zero();

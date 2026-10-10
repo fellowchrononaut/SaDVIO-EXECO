@@ -342,8 +342,8 @@ class SLAMCore {
 
     /*!
      * @brief With loop_correct_window: move the sliding window (KF poses and velocities, landmarks, the KF being
-     * inserted) by the loop closure's correction, if one is pending. The marginalization prior, linearized in the
-     * old frame, is dropped. Called by the back ends before they insert a KF
+     * inserted) by the loop closure's correction, if one is pending, and the marginalization priors with it
+     * (AOptimizer::transformPriors). Called by the back ends before they insert a KF
      */
     void applyLoopCorrection();
 

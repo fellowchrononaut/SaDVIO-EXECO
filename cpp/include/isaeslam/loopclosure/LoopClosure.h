@@ -59,6 +59,8 @@ class LoopClosure {
         bool four_dof          = false; //!< 4-DoF pose graph (roll and pitch kept from the odometry), else 6-DoF
         bool async             = false; //!< Process the keyframes in a thread of their own
         bool correct_window    = false; //!< After a loop, the SLAM moves its sliding window by the correction
+        bool window_gravity    = false; //!< With an IMU: the window is moved by the correction's yaw and translation only
+                                        //!< (a tilt would contradict gravity, fixed along the world z axis)
     };
 
     struct Stats {
@@ -84,8 +86,10 @@ class LoopClosure {
 
     /*!
      * @brief With correct_window: if a loop was closed since the last call, the current correction of the segment
-     * (corrected world <- odometry world), to apply to the sliding window. The pose graph then takes the segment's
-     * odometry as moved by it (and so do keyframes still queued)
+     * (corrected world <- odometry world), to apply to the sliding window. With window_gravity, its yaw and
+     * translation only (the translation chosen so that the segment's latest KF lands where the full correction puts
+     * it); the rest stays in the output correction. The pose graph then takes the segment's odometry as moved by C
+     * (and so do keyframes still queued)
      * @return false if there is nothing to apply
      */
     bool takeCorrection(int segment, Eigen::Affine3d &C);

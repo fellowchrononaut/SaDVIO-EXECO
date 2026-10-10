@@ -60,6 +60,17 @@ class AOptimizer {
     };
 
     /*!
+     * @brief The world frame moved by C with the window's states (loop closure): express the marginalization priors
+     * in the new frame (Marginalization::transformWorld)
+     */
+    void transformPriors(const Eigen::Affine3d &C) {
+        if (_marginalization)
+            _marginalization->transformWorld(C);
+        if (_marginalization_last && _marginalization_last != _marginalization)
+            _marginalization_last->transformWorld(C);
+    };
+
+    /*!
      * @brief Diagnostics of the last visual-inertial window optimization
      */
     const VIOptimStats &getLastVIStats() const { return _last_vi_stats; }

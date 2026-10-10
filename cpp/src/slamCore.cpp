@@ -22,7 +22,7 @@ SLAMCore::SLAMCore(std::shared_ptr<isae::SLAMParameters> slam_param) : _slam_par
                                             _slam_param->_config.fixed_frame_number);
     _global_map = std::make_shared<GlobalMap>();
     // Each KF leaving the window goes to the loop closure with its final estimate, before its data is cleaned
-    if (_slam_param->_config.loop_closure == 1)
+    if (_slam_param->_config.loop_closure == 1 && _slam_param->_config.slam_mode != "mono")
         _local_map->setDiscardCallback([this](const std::shared_ptr<Frame> &f) { handToLoopClosure(f); });
     if (slam_param->_config.mesh3D)
         _mesher = std::make_shared<Mesher>(
@@ -787,8 +787,14 @@ void SLAMCore::applyLoopCorrection() {
     std::unordered_set<Frame *> frames_done;
     std::unordered_set<ALandmark *> lmks_done;
     auto moveLandmark = [&](const std::shared_ptr<ALandmark> &l) {
-        if (l && lmks_done.insert(l.get()).second)
-            l->setPose(C * l->getPose());
+        if (!l || !lmks_done.insert(l.get()).second)
+            return;
+        Eigen::Affine3d T = l->getPose();
+        if (l->_label == "pointxd")
+            T.translation() = C * T.translation(); // points only translate (no orientation)
+        else
+            T = C * T;
+        l->setPose(T);
     };
     auto moveFrame = [&](const std::shared_ptr<Frame> &f) {
         if (!f || !frames_done.insert(f.get()).second)
@@ -809,15 +815,15 @@ void SLAMCore::applyLoopCorrection() {
     moveFrame(_frame_to_optim);
     moveFrame(_frame);
     _map_mutex.unlock();
-    if (_slam_param->_config.marginalization == 1)
-        _slam_param->getOptimizerBack()->resetMarginalization();
+    // The marginalization priors move with the window: their cost for the moved states is the one they had
+    _slam_param->getOptimizerBack()->transformPriors(C);
     std::cout << "Loop closure: window moved by " << C.translation().norm() << " m, "
               << Eigen::AngleAxisd(C.rotation()).angle() * 180 / M_PI << " deg" << std::endl;
 }
 
 void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
     const Config &cfg = _slam_param->_config;
-    if (cfg.loop_closure != 1 || !f || f->getTimestamp() <= _last_loop_ts)
+    if (cfg.loop_closure != 1 || cfg.slam_mode == "mono" || !f || f->getTimestamp() <= _last_loop_ts)
         return;
     if (!_loop_closure) {
         LoopClosure::Options opt;
@@ -833,7 +839,13 @@ void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
         // EuRoC (VIO's roll and pitch are not exact; doc/loop_closure ledger, 2026-10-09)
         opt.four_dof    = cfg.loop_graph_dof == 4;
         opt.async       = cfg.multithreading;
-        opt.correct_window = cfg.loop_correct_window == 1;
+        // Automatic window correction (-1): where it measured best (doc/loop_closure ledger): VIO with a dense prior
+        // (better than output-only and than dropping the prior) and mono VIO (repairs failing runs); elsewhere the
+        // output is corrected and the window left as it is
+        const bool vio_dense_prior = cfg.slam_mode == "bimonovio" && cfg.marginalization == 1 && !cfg.sparsification;
+        opt.correct_window         = cfg.loop_correct_window == 1 ||
+                             (cfg.loop_correct_window == -1 && (vio_dense_prior || cfg.slam_mode == "monovio"));
+        opt.window_gravity = cfg.slam_mode == "monovio" || cfg.slam_mode == "bimonovio";
         std::atomic_store(&_loop_closure, std::make_shared<LoopClosure>(opt)); // read by viewer threads
     }
     _loop_closure->addKeyframe(f, _segment);

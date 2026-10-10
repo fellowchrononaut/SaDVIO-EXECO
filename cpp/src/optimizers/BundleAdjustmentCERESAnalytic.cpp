@@ -791,6 +791,7 @@ bool BundleAdjustmentCERESAnalytic::marginalize(std::shared_ptr<Frame> &frame0,
     _marginalization_last->_ba_lin                   = _marginalization->_ba_lin;
     _marginalization_last->_bg_lin                   = _marginalization->_bg_lin;
     _marginalization_last->_map_lmk_lin              = _marginalization->_map_lmk_lin;
+    _marginalization_last->_W_prior                  = _marginalization->_W_prior;
     _marginalization->_has_prior                     = true;
     _marginalization_last->_has_prior                = true;
 

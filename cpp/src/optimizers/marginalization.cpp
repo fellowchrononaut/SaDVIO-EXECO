@@ -667,6 +667,7 @@ bool Marginalization::wellConditioned(const std::shared_ptr<ALandmark> &lmk,
 }
 
 void Marginalization::storeLinearizationPoint() {
+    _W_prior = Eigen::Affine3d::Identity(); // linearized in the current world
     _map_lmk_lin.clear();
     if (_frame_to_keep) {
         _T_f_w_lin = _frame_to_keep->getWorld2FrameTransform();

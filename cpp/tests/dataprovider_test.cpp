@@ -265,6 +265,32 @@ TEST(ConfigTest, unsupportedOptionCombinationsAreReported) {
     c.reinit_carry_max_age_vio = 5;
     c.reinit_carry_max_age_vo  = -1;
     check(c, 2, true, 1, 0);
+
+    // Loop closure (doc/loop_closure): proximity needs no vocabulary file
+    c                   = cfg;
+    c.loop_closure      = 1;
+    c.loop_detector     = "proximity";
+    check(c, 2, true, 0, 0);
+    c.loop_correct_window = -1; // automatic
+    check(c, 2, true, 0, 0);
+    c.loop_correct_window = 2;
+    check(c, 2, true, 1, 0);
+    c.loop_correct_window = 0;
+    c.loop_graph_dof      = 5;
+    check(c, 2, true, 1, 0);
+    c.loop_graph_dof = 4;
+    check(c, 2, true, 0, 0);
+    c.slam_mode = "bimono";
+    c.estimate_td = false;
+    check(c, 2, false, 1, 0); // 4-DoF needs an IMU
+    c                 = cfg;
+    c.loop_closure    = 1;
+    c.loop_detector   = "bow";
+    c.loop_vocabulary = "/nonexistent/ORBvoc.dbow3";
+    check(c, 2, true, 1, 0); // unreadable vocabulary
+    c.slam_mode   = "mono";
+    c.estimate_td = false;
+    check(c, 1, false, 0, 1); // mono VO: skipped with a warning (no Sim3 graph), nothing else checked
 }
 
 TEST_F(DataProviderTest, onlineTimeOffsetAppliesToLaterImu) {

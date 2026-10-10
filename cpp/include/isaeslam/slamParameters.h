@@ -87,8 +87,9 @@ struct Config {
     double loop_gate_radius  = 2.0;        //!< Proximity gate radius (m)
     int loop_graph_dof       = 0;          //!< Pose graph: 4 (position, yaw; roll and pitch kept from the odometry; needs an
                                            //!< IMU), 6, or 0: automatic (6)
-    int loop_correct_window  = 0;          //!< 1: after a loop, move the sliding window by the pose graph's correction
-                                           //!< (the marginalization prior is dropped then); 0: correct the output only
+    int loop_correct_window  = -1;         //!< 1: after a loop, move the sliding window by the pose graph's correction
+                                           //!< (the marginalization prior moves with it); 0: correct the output only;
+                                           //!< -1: automatic (1 for VIO with a dense prior and for mono VIO, else 0)
     std::string optimizer;       //!< Optimizer type (ReprojectionError, AngularError...)
     int contrast_enhancer;       //!< integer to choose the contrast enhancement algorithm
     float clahe_clip;            //!< Clip of CLAHE (useful only if it is chosen for contrast enhancement)

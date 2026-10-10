@@ -120,6 +120,8 @@ struct LoopClosureTestAccess {
         int a = 0, b = 0;
         return lc.verify(q, c, T_fc_fq, a, b);
     }
+    static PoseGraph &graph(LoopClosure &lc) { return lc._graph; }
+    static void setPending(LoopClosure &lc) { lc._pending_correction = true; }
 };
 
 namespace {
@@ -228,6 +230,46 @@ TEST(LoopVerificationTest, directionsThatDisagreeAreRejected) {
     const Record c = view(s, candidatePose(), 60, 180, 3, Eigen::Vector3d(0.6, 0, 0));
     Eigen::Affine3d T_fc_fq;
     EXPECT_FALSE(LoopClosureTestAccess::verify(lc, q, c, T_fc_fq));
+}
+
+// With an IMU the window is moved by the correction's yaw and translation only: a tilt would contradict gravity (the
+// IMU factors fix it along the world z axis). The latest KF still lands where the full correction puts it, and the
+// rest of the correction stays in the pose graph's output
+TEST(LoopWindowCorrectionTest, imuWindowIsMovedWithoutTilt) {
+    LoopClosure::Options o;
+    o.detector       = "proximity";
+    o.correct_window = true;
+    o.window_gravity = true;
+    LoopClosure lc(o);
+    PoseGraph &g = LoopClosureTestAccess::graph(lc);
+    // Odometry along x drifting in roll and yaw (0.003 rad per KF); one loop says the last KF is level, at x = 9.5,
+    // facing x
+    const int n = 20;
+    for (int i = 0; i < n; i++) {
+        Eigen::Affine3d T = Eigen::Affine3d::Identity();
+        T.linear()        = (Eigen::AngleAxisd(0.003 * i, Eigen::Vector3d::UnitZ()) *
+                      Eigen::AngleAxisd(0.003 * i, Eigen::Vector3d::UnitX()))
+                         .toRotationMatrix();
+        T.translation() << 0.5 * i, 0.005 * i, 0.003 * i;
+        g.addNode(T, 0);
+    }
+    Eigen::Affine3d T_0_last = Eigen::Affine3d::Identity();
+    T_0_last.translation() << 0.5 * (n - 1), 0, 0;
+    g.addLoop(0, n - 1, T_0_last);
+    ASSERT_EQ(g.optimize(), 0) << "the loop must be kept";
+    const Eigen::Affine3d C_full = g.correction(0);
+    ASSERT_GT(Eigen::AngleAxisd(C_full.rotation()).angle(), 0.01) << "the test needs a real correction";
+    ASSERT_GT((C_full.rotation() * Eigen::Vector3d::UnitZ() - Eigen::Vector3d::UnitZ()).norm(), 1e-3)
+        << "the test needs a tilt in the correction";
+
+    LoopClosureTestAccess::setPending(lc);
+    Eigen::Affine3d C;
+    ASSERT_TRUE(lc.takeCorrection(0, C));
+    EXPECT_LT((C.rotation() * Eigen::Vector3d::UnitZ() - Eigen::Vector3d::UnitZ()).norm(), 1e-9) << "no tilt";
+    const Eigen::Vector3d p = g.odomPose(n - 1).translation(); // reanchored: C applied to the old odometry
+    EXPECT_LT((p - C_full * (C.inverse() * p)).norm(), 1e-9) << "the latest KF lands where the full correction puts it";
+    // The pose graph keeps the rest of the correction (the tilt) for its output
+    EXPECT_LT(((g.correction(0) * g.odomPose(n - 1)).translation() - g.pose(n - 1).translation()).norm(), 1e-9);
 }
 
 } // namespace isae

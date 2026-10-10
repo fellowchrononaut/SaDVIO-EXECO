@@ -77,7 +77,10 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         errors.push_back("reinit_carry_max_age_vio and reinit_carry_max_age_vo must be > 0 (s)");
     if (cfg.loop_closure != 0 && cfg.loop_closure != 1)
         errors.push_back("loop_closure must be 0 or 1");
-    if (cfg.loop_closure == 1) {
+    if (cfg.loop_closure == 1 && cfg.slam_mode == "mono")
+        warnings.push_back("loop_closure has no effect in slam_mode mono (monocular VO needs a Sim3 pose graph, not "
+                           "implemented): skipped");
+    if (cfg.loop_closure == 1 && cfg.slam_mode != "mono") {
         if (cfg.loop_detector != "bow" && cfg.loop_detector != "proximity" && cfg.loop_detector != "proximity_bow" &&
             cfg.loop_detector != "learned")
             errors.push_back("loop_detector must be bow, proximity, proximity_bow or learned");
@@ -91,14 +94,12 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
             !std::ifstream(cfg.loop_vocabulary).good())
             errors.push_back("loop_vocabulary: cannot read '" + cfg.loop_vocabulary + "' (needed by loop_detector " +
                              cfg.loop_detector + ")");
-        if (cfg.slam_mode == "mono")
-            errors.push_back("loop_closure is not available in slam_mode mono (monocular VO needs a Sim3 pose graph)");
         if (cfg.loop_graph_dof != 0 && cfg.loop_graph_dof != 4 && cfg.loop_graph_dof != 6)
             errors.push_back("loop_graph_dof must be 0 (automatic: 6), 4 or 6");
         if (cfg.loop_graph_dof == 4 && cfg.slam_mode != "monovio" && cfg.slam_mode != "bimonovio")
             errors.push_back("loop_graph_dof 4 needs an IMU (roll and pitch observable)");
-        if (cfg.loop_correct_window != 0 && cfg.loop_correct_window != 1)
-            errors.push_back("loop_correct_window must be 0 or 1");
+        if (cfg.loop_correct_window < -1 || cfg.loop_correct_window > 1)
+            errors.push_back("loop_correct_window must be -1 (automatic), 0 or 1");
         if (!(cfg.loop_min_gap >= 0) || cfg.loop_min_inliers < 6 || !(cfg.loop_gate_radius > 0))
             errors.push_back("loop_min_gap must be >= 0, loop_min_inliers >= 6 and loop_gate_radius > 0");
     }
@@ -170,7 +171,7 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.loop_gate_radius = yaml_file["loop_gate_radius"] ? yaml_file["loop_gate_radius"].as<double>() : 2.0;
     _config.loop_graph_dof   = yaml_file["loop_graph_dof"] ? yaml_file["loop_graph_dof"].as<int>() : 0;
     _config.loop_correct_window =
-        yaml_file["loop_correct_window"] ? yaml_file["loop_correct_window"].as<int>() : 0;
+        yaml_file["loop_correct_window"] ? yaml_file["loop_correct_window"].as<int>() : -1;
     _config.min_kf_number         = yaml_file["min_kf_number"].as<int>();
     _config.max_kf_number         = yaml_file["max_kf_number"].as<int>();
     _config.fixed_frame_number    = yaml_file["fixed_frame_number"].as<int>();
