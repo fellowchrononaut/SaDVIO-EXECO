@@ -75,12 +75,17 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         errors.push_back("reinit_carry_state must be 0 or 1");
     if (!(cfg.reinit_carry_max_age_vio > 0) || !(cfg.reinit_carry_max_age_vo > 0))
         errors.push_back("reinit_carry_max_age_vio and reinit_carry_max_age_vo must be > 0 (s)");
+    if (!(cfg.vio_bias_prior_acc >= 0) || !(cfg.vio_bias_prior_gyr >= 0))
+        errors.push_back("vio_bias_prior_acc and vio_bias_prior_gyr must be >= 0 (0: none)");
+    if (cfg.mono_essential_fallback != 0 && cfg.mono_essential_fallback != 1)
+        errors.push_back("mono_essential_fallback must be 0 or 1");
+    if (cfg.dense_submap_kfs < 0)
+        errors.push_back("dense_submap_kfs must be >= 0");
+    if (cfg.dense_submap_kfs > 0 && (!cfg.dense_depth || cfg.dense_mesh_method != "vdbgpdf"))
+        warnings.push_back("dense_submap_kfs has no effect without dense_depth and dense_mesh_method vdbgpdf");
     if (cfg.loop_closure != 0 && cfg.loop_closure != 1)
         errors.push_back("loop_closure must be 0 or 1");
-    if (cfg.loop_closure == 1 && cfg.slam_mode == "mono")
-        warnings.push_back("loop_closure has no effect in slam_mode mono (monocular VO needs a Sim3 pose graph, not "
-                           "implemented): skipped");
-    if (cfg.loop_closure == 1 && cfg.slam_mode != "mono") {
+    if (cfg.loop_closure == 1) {
         if (cfg.loop_detector != "bow" && cfg.loop_detector != "proximity" && cfg.loop_detector != "proximity_bow" &&
             cfg.loop_detector != "learned")
             errors.push_back("loop_detector must be bow, proximity, proximity_bow or learned");
@@ -94,12 +99,17 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
             !std::ifstream(cfg.loop_vocabulary).good())
             errors.push_back("loop_vocabulary: cannot read '" + cfg.loop_vocabulary + "' (needed by loop_detector " +
                              cfg.loop_detector + ")");
-        if (cfg.loop_graph_dof != 0 && cfg.loop_graph_dof != 4 && cfg.loop_graph_dof != 6)
-            errors.push_back("loop_graph_dof must be 0 (automatic: 6), 4 or 6");
+        if (cfg.loop_graph_dof != 0 && cfg.loop_graph_dof != 4 && cfg.loop_graph_dof != 6 && cfg.loop_graph_dof != 7)
+            errors.push_back("loop_graph_dof must be 0 (automatic: 7 in mono, else 6), 4, 6 or 7");
         if (cfg.loop_graph_dof == 4 && cfg.slam_mode != "monovio" && cfg.slam_mode != "bimonovio")
             errors.push_back("loop_graph_dof 4 needs an IMU (roll and pitch observable)");
+        if (cfg.loop_graph_dof == 7 && cfg.slam_mode != "mono")
+            errors.push_back("loop_graph_dof 7 (Sim3) is for slam_mode mono (the other modes have a metric scale)");
         if (cfg.loop_correct_window < -1 || cfg.loop_correct_window > 1)
             errors.push_back("loop_correct_window must be -1 (automatic), 0 or 1");
+        if (cfg.loop_correct_window == 1 && cfg.slam_mode == "mono")
+            errors.push_back("loop_correct_window 1 is not available in slam_mode mono (the window cannot follow a "
+                             "similarity): use 0 or -1");
         if (!(cfg.loop_min_gap >= 0) || cfg.loop_min_inliers < 6 || !(cfg.loop_gate_radius > 0))
             errors.push_back("loop_min_gap must be >= 0, loop_min_inliers >= 6 and loop_gate_radius > 0");
     }
@@ -159,6 +169,10 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         yaml_file["reinit_carry_max_age_vio"] ? yaml_file["reinit_carry_max_age_vio"].as<double>() : 2.0;
     _config.reinit_carry_max_age_vo =
         yaml_file["reinit_carry_max_age_vo"] ? yaml_file["reinit_carry_max_age_vo"].as<double>() : 2.0;
+    _config.vio_bias_prior_acc = yaml_file["vio_bias_prior_acc"] ? yaml_file["vio_bias_prior_acc"].as<double>() : 0.3;
+    _config.vio_bias_prior_gyr = yaml_file["vio_bias_prior_gyr"] ? yaml_file["vio_bias_prior_gyr"].as<double>() : 0;
+    _config.mono_essential_fallback =
+        yaml_file["mono_essential_fallback"] ? yaml_file["mono_essential_fallback"].as<int>() : 1;
     _config.loop_closure     = yaml_file["loop_closure"] ? yaml_file["loop_closure"].as<int>() : 0;
     _config.loop_detector    = yaml_file["loop_detector"] ? yaml_file["loop_detector"].as<std::string>() : "bow";
     _config.loop_vocabulary  = yaml_file["loop_vocabulary"] ? yaml_file["loop_vocabulary"].as<std::string>() : "";
@@ -316,6 +330,8 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.dense_vdbgpdf_mesh_every = yaml_file["dense_vdbgpdf_mesh_every"].as<int>();
     if (yaml_file["dense_vdbgpdf_mesh_path"])
         _config.dense_vdbgpdf_mesh_path = yaml_file["dense_vdbgpdf_mesh_path"].as<std::string>();
+    if (yaml_file["dense_submap_kfs"])
+        _config.dense_submap_kfs = yaml_file["dense_submap_kfs"].as<int>();
     if (yaml_file["dense_pd_steiner_spacing"])
         _config.dense_pd_steiner_spacing = yaml_file["dense_pd_steiner_spacing"].as<int>();
     if (yaml_file["dense_pd_lambda"])
@@ -532,5 +548,12 @@ void isae::SLAMParameters::createOptimizer() {
     if (_optimizer_frontend && _optimizer_backend) {
         _optimizer_frontend->setRobustVisualVO(_config.marginalization == 1);
         _optimizer_backend->setRobustVisualVO(_config.marginalization == 1);
+        // Only without a marginalization prior: with one, the prior factors of the marginalized frames would enter
+        // the prior again at every marginalization
+        const bool no_prior = _config.marginalization == 0;
+        _optimizer_frontend->setBiasPrior(no_prior ? _config.vio_bias_prior_acc : 0,
+                                          no_prior ? _config.vio_bias_prior_gyr : 0);
+        _optimizer_backend->setBiasPrior(no_prior ? _config.vio_bias_prior_acc : 0,
+                                         no_prior ? _config.vio_bias_prior_gyr : 0);
     }
 }

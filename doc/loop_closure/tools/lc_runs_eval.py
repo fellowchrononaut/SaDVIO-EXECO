@@ -4,7 +4,8 @@
 For each run under doc/vio_imu_fix/runs/<label>/<seq>/<mode>/run_NN: the odometry ATE (results.csv), the ATE of the
 loop-closed trajectory (results_loop.csv: final, after all pose graph solves) and of the online output
 (results_loop_online.csv: each KF as corrected when it was estimated), the loops accepted and how many are true by
-the ground truth (the measured distance between the two KFs within 0.15 m of the true one), and the cost (loop
+the ground truth (the measured distance between the two KFs within 0.15 m of the true one; in mono, the measured
+distance is in the match KF's map units and is scaled by its segment's Sim3 alignment first), and the cost (loop
 closure per KF, pose graph per solve, back end per KF) from slam_profiler.txt.
 
 usage: lc_runs_eval.py <label> [<label> ...] [--md out.md]
@@ -18,7 +19,7 @@ import numpy as np
 
 VIO = Path(__file__).resolve().parents[2] / 'vio_imu_fix'
 sys.path.insert(0, str(VIO / 'tools'))
-from eval_traj import associate, evaluate, load_gt  # noqa: E402
+from eval_traj import associate, evaluate, load_estimate, load_gt, umeyama  # noqa: E402
 
 EDGE_TOL = 0.15
 
@@ -36,7 +37,20 @@ def profiler(rd):
     return out
 
 
-def loop_precision(rd, seq):
+def segment_scales(rd, seq):
+    """Mono: per segment of results.csv, the Sim3 alignment scale (metres per map unit), and the KF timestamps"""
+    t, p, _, _, seg = load_estimate(rd, with_segments=True)
+    tg, pg, Rg = load_gt(seq)
+    ok, p_gt, _ = associate(t, tg, pg, Rg)
+    scales = {}
+    for k in np.unique(seg):
+        sel = ok & (seg == k)
+        if sel.sum() >= 3:
+            scales[k] = umeyama(p[sel], p_gt[sel], with_scale=True)[0]
+    return t, seg, scales
+
+
+def loop_precision(rd, seq, mono=False):
     """Loops with ground truth, and how many have a correct relative pose: the measured distance between the two
     KFs agrees with the ground truth's within EDGE_TOL m (frame conventions aside, a wrong loop is off by metres)"""
     f = rd / 'log_slam' / 'loops.csv'
@@ -49,8 +63,17 @@ def loop_precision(rd, seq):
     tg, pg, Rg = load_gt(seq)
     okq, pq, _ = associate(ts[:, 0] * 1e-9, tg, pg, Rg)
     okc, pc, _ = associate(ts[:, 1] * 1e-9, tg, pg, Rg)
-    err = np.abs(np.linalg.norm(t_meas, axis=1) - np.linalg.norm(pq - pc, axis=1))
+    d_meas = np.linalg.norm(t_meas, axis=1)
     ok = okq & okc
+    if mono:
+        t, seg, scales = segment_scales(rd, seq)
+        for k in range(len(d_meas)):
+            i = int(np.argmin(np.abs(t - ts[k, 1] * 1e-9)))
+            if seg[i] in scales:
+                d_meas[k] *= scales[seg[i]]
+            else:
+                ok[k] = False
+    err = np.abs(d_meas - np.linalg.norm(pq - pc, axis=1))
     return int(ok.sum()), int((ok & (err < EDGE_TOL)).sum())
 
 
@@ -82,7 +105,7 @@ def main():
                 mm = evaluate(rd, 'results_loop_merged.csv')
                 merged = f" (merged {len({r[14] for r in rows})} -> {len({r[15] for r in rows})} segments: " \
                          f"{mm['ate_rmse']:.3f})"
-            n_gt, n_true = loop_precision(rd, seq)
+            n_gt, n_true = loop_precision(rd, seq, mono=mode == 'mono')
             p = profiler(rd)
             lines.append(f"| {label} | {seq} | {mode} | {m0['ate_rmse']:.3f} | {m1['ate_rmse']:.3f} | "
                          f"{m2['ate_rmse']:.3f}{merged} | {n_true} / {n_gt} | {p.get('Loop closure dt', float('nan')):.1f} | "

@@ -47,9 +47,18 @@ reinit_carry_state: 1
 reinit_carry_max_age_vio: 2.0
 reinit_carry_max_age_vo: 2.0
 
-## Loop closure over the keyframes that left the window (doc/loop_closure): a separate pose graph (4-DoF with an IMU,
-## 6-DoF without; not in mono VO), the window is untouched and the corrected trajectory goes to
-## log_slam/results_loop.csv (final) and results_loop_online.csv (as estimated at each KF)
+## mono VO: when PnP fails (too few tracked landmarks), pose the frame from the 2D-2D essential matrix of all the
+## tracked features (scale from the landmarks left, else from the motion model; the translation direction only with
+## 1 deg of parallax, else from the motion model) and vote a KF. Other modes ignore it
+mono_essential_fallback: 1
+## VIO without a marginalization prior: zero-mean prior on the window frames' biases (standard deviations, a turn-on
+## bias), so that they stay physical when vision is weak; 0: none
+vio_bias_prior_acc: 0.3     # m/s^2 (fixes the V2_03 bias runaway; median ATE 0.146 -> 0.129 m over 18 sequences)
+vio_bias_prior_gyr: 0       # rad/s
+
+## Loop closure over the keyframes that left the window (doc/loop_closure): a separate pose graph (6-DoF, Sim3 in
+## mono VO), the corrected trajectory goes to log_slam/results_loop.csv (final) and results_loop_online.csv (as
+## estimated at each KF); the window follows the correction only where loop_correct_window says so
 loop_closure: 0             # off in this evaluation base config, so odometry runs stay comparable with earlier
                             # ones; on in the shipped ros/config/config.yaml
 ## candidates from: bow (bag-of-words over 1000 pyramid ORB per KF), proximity (gate around the corrected position,
@@ -64,7 +73,8 @@ loop_model_threads: 8       # learned, CPU: inference threads
 loop_min_gap: 20.0          # s between a keyframe and its loop candidates
 loop_min_inliers: 12        # PnP inliers to accept a loop (each direction; both directions must agree)
 loop_gate_radius: 2.0       # m, proximity gate
-loop_graph_dof: 0           # pose graph: 6, 4 (roll, pitch kept from the odometry; IMU modes only), or 0: automatic (6)
+loop_graph_dof: 0           # pose graph: 6, 4 (roll, pitch kept from the odometry; IMU modes only), 7 (Sim3, mono only),
+                            # or 0: automatic (7 in mono, else 6)
 loop_correct_window: -1     # 1: move the sliding window into the corrected frame (its marginalization prior moves with it),
                             # 0: correct the output only, -1: automatic (1 for VIO with a dense prior and mono VIO, else 0)
 
@@ -145,6 +155,8 @@ dense_vdbgpdf_preset:     "stereo"  # config/vdbgpdf/<preset>.yaml: stereo (VDB-
 dense_vdbgpdf_stride:     2         # pixel stride of the stereo points fed to the map (2: ~100 k points per 848x480 keyframe)
 dense_vdbgpdf_mesh_every: 5         # keyframes between marching cubes + PLY save (0 = never save)
 dense_vdbgpdf_mesh_path:  "log_slam/dense_vdbgpdf_mesh.ply"
+dense_submap_kfs:         0         # keyframes per submap (fused in its first keyframe's frame, placed at its loop-corrected
+                                    # pose; log_slam/dense_submaps/), 0: one global map
 dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
 dense_pd_lambda:             0.5    # depth/tracking L1 data weight
 dense_pd_num_iterations:     120

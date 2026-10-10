@@ -103,6 +103,16 @@ class AOptimizer {
     void setRobustVisualVO(bool robust) { _robust_visual_vo = robust; }
 
     /*!
+     * @brief Without a marginalization prior: a weak prior on every window frame's absolute biases, zero mean with
+     * these standard deviations (a datasheet's turn-on bias), so that they stay physical when vision is weak (config
+     * vio_bias_prior_acc, vio_bias_prior_gyr; 0: none)
+     */
+    void setBiasPrior(double sigma_acc, double sigma_gyr) {
+        _bias_prior_acc = sigma_acc;
+        _bias_prior_gyr = sigma_gyr;
+    }
+
+    /*!
      * @brief Structure only Bundle Adjustment for a frame.
      * @param frame The frame to optimize.
      *
@@ -386,6 +396,8 @@ class AOptimizer {
     VIOptimStats _last_vi_stats; //!< Diagnostics of the last visual-inertial window optimization
 
     bool _enable_sparsif = false;                           //!< enable sparsification of the marginalization
+    double _bias_prior_acc = 0;     //!< absolute bias prior without a marginalization prior (see setBiasPrior)
+    double _bias_prior_gyr = 0;
     bool _robust_visual_vo = false; //!< robust visual loss in the VO window and marginalization (see setRobustVisualVO)
     std::shared_ptr<Marginalization> _marginalization;      //!< marginalization object
     std::shared_ptr<Marginalization> _marginalization_last; //!< marginalization object of the last optimization

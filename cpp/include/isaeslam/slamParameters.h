@@ -76,6 +76,12 @@ struct Config {
     double reinit_carry_max_age_vio = 2.0; //!< VIO: longest time since the last visual pose for which the carried state
                                            //!< (IMU dead reckoning) is used (s)
     double reinit_carry_max_age_vo  = 2.0; //!< Stereo VO: the same for the constant-velocity extrapolation (s)
+    double vio_bias_prior_acc = 0.3;       //!< VIO without a marginalization prior: zero-mean prior on every window
+    double vio_bias_prior_gyr = 0;         //!< frame's accelerometer (m/s^2) / gyroscope (rad/s) bias, as standard
+                                           //!< deviations (a turn-on bias); 0: none. Default 0.3 / 0
+                                           //!< (doc/vio_imu_fix/IMU_FIX_LEDGER.md, 2026-10-10)
+    int mono_essential_fallback = 1;       //!< Mono VO: when PnP fails, pose the frame from the 2D-2D essential matrix
+                                           //!< of the tracked features (scale from the landmarks left or the motion)
     int loop_closure = 0;                  //!< 1: loop closure over the KFs that left the window (doc/loop_closure)
     std::string loop_detector = "bow";     //!< bow | proximity | proximity_bow | learned
     std::string loop_model;                //!< learned: global descriptor model (.onnx for CPU, TensorRT engine for GPU)
@@ -86,10 +92,11 @@ struct Config {
     int loop_min_inliers     = 12;         //!< PnP inliers to accept a loop (each direction)
     double loop_gate_radius  = 2.0;        //!< Proximity gate radius (m)
     int loop_graph_dof       = 0;          //!< Pose graph: 4 (position, yaw; roll and pitch kept from the odometry; needs an
-                                           //!< IMU), 6, or 0: automatic (6)
+                                           //!< IMU), 6, 7 (Sim3, mono only), or 0: automatic (7 in mono, else 6)
     int loop_correct_window  = -1;         //!< 1: after a loop, move the sliding window by the pose graph's correction
                                            //!< (the marginalization prior moves with it); 0: correct the output only;
-                                           //!< -1: automatic (1 for VIO with a dense prior and for mono VIO, else 0)
+                                           //!< -1: automatic (1 for VIO with a dense prior and for mono VIO, else 0;
+                                           //!< mono VO: output only)
     std::string optimizer;       //!< Optimizer type (ReprojectionError, AngularError...)
     int contrast_enhancer;       //!< integer to choose the contrast enhancement algorithm
     float clahe_clip;            //!< Clip of CLAHE (useful only if it is chosen for contrast enhancement)
@@ -178,6 +185,8 @@ struct Config {
     int         dense_vdbgpdf_stride     = 2;
     int         dense_vdbgpdf_mesh_every = 5;         // keyframes between mesh extraction + PLY save (0 = never save)
     std::string dense_vdbgpdf_mesh_path  = "log_slam/dense_vdbgpdf_mesh.ply";
+    int         dense_submap_kfs         = 0;         // vdbgpdf: keyframes per submap, fused in its first keyframe's
+                                                      // frame and placed at its loop-corrected pose (0: one global map)
     std::string dense_vdbgpdf_preset_path;            // resolved from the config folder and dense_vdbgpdf_preset
 
     // Dense primal-dual mesh controls from the inverse-depth optimization paper.

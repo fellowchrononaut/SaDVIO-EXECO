@@ -401,3 +401,139 @@ config (mono) stays valid. The evaluation base config (`doc/vio_imu_fix/configs/
 Naming from here on: "VIO no prior" (`marginalization: 0`), "VIO dense prior" (`marginalization: 1`), "VIO sparse
 prior" (`marginalization: 1`, `sparsification: 1`, the SaDVIO paper's configuration, called "SaDVIO" in the earlier
 sections and run labels).
+
+## 2026-10-10 — Mono VO: Sim3 pose graph
+
+Mono VO's scale is unknown, drifts, and every segment (re-initialization) starts with a scale of its own. Its loop
+closure therefore needs a Sim3 graph, not a rigid one. Until now mono VO skipped loop closure with a warning.
+
+Code:
+- `PoseGraph(four_dof, neighbors, sim3)`: each node also has a log scale. `Sim3Error` (7 residuals) adds the log
+  scale ratio to the 6-DoF residual and divides the translation by node i's scale.
+  - Sigmas: odometry 0.05 and loops 0.05 in log scale. 0.02 for the odometry held the scale too stiffly: in the unit
+    test, 4 good loops were rejected.
+  - The gauge (earliest node of each group) also fixes its scale.
+  - `correction(segment)` is a similarity. `LoopClosure::correct` returns the corrected rigid pose (the similarity
+    moves the position; the scale is not part of the pose).
+- Verification (`Options::sim3`) is the same two-way PnP. The scale ratio of the two maps comes from the inliers that
+  hit the other keyframe's landmarks: the depth of the matched landmark (candidate units) over the depth of the query
+  landmark brought into the candidate's camera (query units), and the reverse.
+  - It takes the median over both directions, with at least 5 ratios in all. When both directions have at least 3,
+    their medians must agree within 15%.
+  - The two directions must then agree once the query's translation is scaled: within 10% of the candidate's median
+    landmark depth (0.3 m at 3 m, as the metric threshold), and within 5°.
+  - `loops.csv` gains a last column, the scale ratio.
+- Config: `loop_graph_dof` 7 (Sim3, mono only). Automatic (0) means 7 in mono, else 6. Mono VO corrects the output
+  only: `loop_correct_window: 1` in mono is an error, since the window cannot follow a similarity.
+- `lc_runs_eval.py`: in mono, the measured loop distance (in the match KF's map units) is scaled by its segment's
+  Sim3 alignment to the ground truth before the 0.15 m check.
+- Tests: `PoseGraphTest.sim3LoopCorrectsScaleDrift` uses two laps with 0.3% shorter steps each KF (45% scale drift).
+  Sim3 brings the last KF to under 15% of the odometry error and under half of the 6-DoF graph's error.
+  `LoopVerificationTest.sim3MeasuresTheScaleRatio`: a candidate map 2.5× larger is accepted with a ratio of 2.5 ± 0.05
+  and the right pose; the rigid verification rejects it. ConfigTest has the mono cases.
+
+Runs: labels `lc_mono7` (Sim3) and `lc_mono6` (6-DoF graph, scale ratio ignored), bow detector, fallback off.
+Snapshot `lcm1`, 18 sequences × 2 runs, `tools/run_lc_mono.sh`. Table: `results/lc_mono.md`. Medians of 36 runs (m):
+
+| | odometry | loop final | loop online | segments joined by loops | correct loops |
+|---|---|---|---|---|---|
+| Sim3 | 0.438 | **0.255** | 0.365 | 0.288 | 2899 / 3035 (95.5%) |
+| 6-DoF | 0.497 | 0.492 | 0.494 | 0.583 | 2166 / 2619 (83%) |
+
+Sim3 improves the final trajectory by more than 10% in 22 of 36 runs and never makes it worse:
+- room3 0.31 → 0.07 and 0.33 → 0.09;
+- room1 0.37 → 0.10;
+- MH_03 0.65 → 0.18;
+- V1_01 0.43 → 0.10.
+
+The 6-DoF graph, which cannot absorb scale drift, improves the final trajectory in 17 runs, by little; joining
+segments at their own scales makes it worse (0.58). Both rows have runs with no loop or no gain: V1_02, V1_03, V2_03
+(mono VO breaks into many short segments there).
+
+Correct loops are 95.5% against 99.6% in stereo. The check scales a whole segment by one factor, which is approximate
+under scale drift, so part of the gap is the evaluation.
+
+Cost: loop closure 8–28 ms per KF (the rooms, with hundreds of loops, are the most), pose graph 4–90 ms per solve.
+Back end unchanged (3–4 ms per KF).
+
+Defaults: `loop_graph_dof: 0` gives Sim3 in mono. The mono VO essential-matrix fallback is now on by default
+(`doc/vio_imu_fix/IMU_FIX_LEDGER.md`, 2026-10-10); these runs had it off.
+
+## 2026-10-10 — Dense submaps placed by the loop closure (MeshCSLAM)
+
+MeshCSLAM needs, from each robot, "KF/submap-anchored meshes that can be moved when poses are optimized"
+(`doc/SaDLIO_novelty_survey.md` §0). Until now the dense map (`MarginalDepthInjector`) fused every keyframe in world
+coordinates at its odometry pose. Its geometry could not follow a loop correction: GP cells and VDB voxels keep no
+per-keyframe record and cannot be un-fused.
+
+Code (VDB-GPDF path only, `dense_submap_kfs`, default 0 = one global map as before):
+- Every `dense_submap_kfs` keyframes the injector starts a new `VDBGPDFMap`, fused in the frame of its first keyframe
+  (the anchor: its rectified left camera, `T_w_anchor`, in the odometry world at fusion). A submap never spans two
+  odometry worlds. A new one also starts at a re-initialization (`queueFrame(frame, mesh, segment)`) and when the loop
+  closure moves the window (`worldMoved()`, called by `applyLoopCorrection`).
+- A closed submap runs marching cubes once, writes `log_slam/dense_submaps/submap_NNNN.ply` (anchor frame), and
+  frees its grid. Marching cubes only runs on the open submap, every `dense_vdbgpdf_mesh_every` keyframes.
+- `dense_submaps/submaps.csv` holds, per submap: anchor timestamp, segment, keyframes, closed, the anchor's odometry
+  pose, and its corrected pose. The global mesh (`dense_vdbgpdf_mesh_path`, the `dense_mesh` topic) is the submaps
+  placed at their corrected anchor poses, rebuilt at every mesh save.
+- `LoopClosure::keyframeCorrection(ts, C)` gives corrected world ← the world a keyframe was handed over in: its graph
+  pose times the inverse of its hand-over pose. Window corrections made since then are included (`T_w_f_handover`
+  is kept apart from `T_w_f`, which follows them). The dense keyframe is queued at marginalization with the same
+  pose the loop closure receives.
+- `SLAMCore` sets the correction callback when its loop closure starts. The lambda holds a `shared_ptr`, so the
+  injector's final write in its destructor stays valid. With submaps, the injector is kept across
+  re-initializations.
+
+Runs (`tools/run_dense_submaps.sh`, snapshot `dsm1`): SGBM, `stereo_tsdf`, submaps of 10 KFs, all keyframes kept,
+loop closure on. VIO no prior (output correction) and VIO dense prior (window correction), one run each.
+`tools/dsm_eval.py` compares the anchors with the ground truth. `tools/dsm_mesh_eval.py` measures the distance of the
+closed submaps' vertices (1500 per submap) to the Leica scan of the Vicon room (`mav0/pointcloud0`, 1 cm subsampled).
+Each placement is aligned by an SE3 fit of its anchors.
+
+| run | submaps | anchor ATE odometry → corrected | KF ATE odometry → loop | mesh to scan, median (odometry → corrected) |
+|---|---|---|---|---|
+| no prior MH_01 | 38 | 0.086 → 0.053 | 0.082 → 0.047 | (no scan) |
+| no prior V1_01 | 35 | 0.098 → 0.092 | 0.061 → 0.042 | 7.0 → 6.7 cm |
+| no prior V2_01 | 30 | 0.062 → 0.056 | 0.044 → 0.029 | 17.1 → 17.4 cm |
+| dense prior MH_01 | 55 | 0.106 → 0.047 | 0.106 → 0.058 | (no scan) |
+| dense prior V1_01 | 42 | 0.096 → 0.086 | 0.052 → 0.039 | 6.8 → 6.3 cm |
+| dense prior V2_01 | 39 | 0.060 → 0.053 | 0.035 → 0.025 | 13.7 → 14.1 cm |
+
+- The anchors move toward the ground truth in all six runs. The anchor ATE includes the rectified camera's lever arm
+  to the body, which rotates with the camera, so it reads higher than the KF ATE.
+- With the window correction (VIO dense prior), the window moved 9–22 times per run and each move started a new
+  submap (39–55 submaps against 30–38).
+- On these easy sequences the mesh accuracy is set by the SGBM depth (median 6–17 cm). The drift is 3–6 cm, so the
+  correction hardly shows (±0.5 cm). Next: V1_02, V1_03, V2_02 (drift up to 0.3 m without a prior).
+- Cost: integration 284 ms per KF (stereo_tsdf, ~75 k points), marching cubes of the open submap 8–17 ms, no keyframe
+  dropped. Meshes: 1.9–4.7 M faces in all. Submaps overlap where they see the same surface: the union carries one
+  layer per submap, as in other submap systems. Fusing them is left to the map server.
+
+Harder Vicon sequences (`SEQS="V1_02 V1_03 V2_02" tools/run_dense_submaps.sh`, same snapshot, so VIO no prior still
+without the bias prior):
+
+| run | submaps | anchor ATE odometry → corrected | KF ATE odometry → loop | mesh to scan, median | mesh within 10 cm |
+|---|---|---|---|---|---|
+| no prior V1_02 | 51 | 0.100 → 0.066 | 0.073 → 0.037 | 10.1 → 9.8 cm | 50 → 50 % |
+| no prior V1_03 | 89 | 0.272 → 0.103 | 0.267 → 0.092 | 22.8 → 19.7 cm | 28 → 32 % |
+| no prior V2_02 | 71 | 0.277 → 0.146 | 0.280 → 0.148 | 24.2 → 20.3 cm | 25 → 31 % |
+| dense prior V1_02 | 67 | 0.077 → 0.059 | 0.059 → 0.030 | 9.1 → 8.5 cm | 52 → 54 % |
+| dense prior V1_03 | 98 | 0.091 → 0.066 | 0.085 → 0.055 | 18.1 → 17.5 cm | 34 → 36 % |
+| dense prior V2_02 | 91 | 0.072 → 0.067 | 0.059 → 0.051 | 17.0 → 16.7 cm | 36 → 37 % |
+
+Where the odometry drifts by decimetres (no prior, V1_03 and V2_02), the anchors move by 0.13–0.17 m toward the
+ground truth. The mesh improves too: median 3–4 cm closer to the scan, and 4–6 points more of it within 10 cm. Every
+run improves, and the gain follows the drift that was removed. The SGBM depth (median ~9 cm at its best here) and the
+stereo TSDF still dominate the mesh error. A sharper matcher (FFS, `doc/dense_ffs_stereo.md`) would show more of the
+correction.
+
+Not done: overlapping submaps are not fused into one surface (each keeps its layer), and a submap is placed by its
+anchor only (a loop inside a submap's 10 KFs does not bend it). Both are map-server work in MeshCSLAM, which receives
+the submaps and their anchor poses.
+
+Next (agreed 2026-10-10, plan in `doc/dense_anchored_maps.md`):
+1. Anchored meshes for every dense method: per-keyframe anchors for zncc, pd, per-keyframe gp and point clouds;
+   submaps for the gp global map and vdbgpdf (gpdf, tsdf).
+2. Optional fused global view (`dense_fused_view`): submap volumes merged into one, refreshed at map saves for the
+   submaps whose correction changed, plus a full rebuild at the end.
+3. Later, as an alternative: per-keyframe depth de-integrated and re-integrated (TSDF).

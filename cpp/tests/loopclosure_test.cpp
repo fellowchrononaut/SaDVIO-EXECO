@@ -112,6 +112,51 @@ TEST(PoseGraphTest, loopJoinsTwoSegments) {
     }
 }
 
+// Monocular VO: the odometry's scale drifts (each step 0.3% shorter than the last, on top of the drift above). The
+// Sim3 graph, whose loops measure the scale ratio of the two KFs' maps, corrects it; a 6-DoF graph cannot
+TEST(PoseGraphTest, sim3LoopCorrectsScaleDrift) {
+    const int n                            = 200;
+    const std::vector<Eigen::Affine3d> gt = circle(n);
+    std::vector<double> sigma(n, 1.0); // odometry length per true length at each KF
+    std::vector<Eigen::Affine3d> od(n);
+    od[0] = gt[0];
+    for (int k = 1; k < n; k++) {
+        sigma[k]          = sigma[k - 1] * 0.997;
+        Eigen::Affine3d d = gt[k - 1].inverse() * gt[k];
+        d.translation()  *= sigma[k];
+        od[k]             = od[k - 1] * d;
+        od[k].linear()    = Eigen::AngleAxisd(0.002, Eigen::Vector3d::UnitZ()).toRotationMatrix() * od[k].linear();
+    }
+    double err[2];
+    for (bool sim3 : {false, true}) {
+        PoseGraph g(false, 4, sim3);
+        for (int k = 0; k < n; k++)
+            g.addNode(od[k], 0);
+        // Loop i -> j: the true relative pose in KF i's odometry units, scale ratio sigma_i / sigma_j
+        for (int k = n / 2; k < n; k += 10) {
+            const int i       = k - n / 2;
+            Eigen::Affine3d S = gt[i].inverse() * gt[k];
+            S.translation()  *= sigma[i];
+            S.linear()       *= sigma[i] / sigma[k];
+            g.addLoop(i, k, S);
+        }
+        const int rejected = g.optimize();
+        if (sim3)
+            EXPECT_EQ(rejected, 0) << "Sim3: no loop should be rejected";
+        err[sim3] = posError(g, gt, n - 1);
+        if (sim3) {
+            // Scale at the latest loop's KF (the odometry edges, which claim no scale change, pull it a little)
+            EXPECT_NEAR(g.scale(n - 10), 1 / sigma[n - 10], 0.1 / sigma[n - 10]) << "scale at the latest loop";
+            // The correction maps the latest odometry position onto the corrected one
+            EXPECT_LT(((g.correction(0) * od[n - 1]).translation() - g.pose(n - 1).translation()).norm(), 1e-9);
+        }
+    }
+    const double before = (od[n - 1].translation() - gt[n - 1].translation()).norm();
+    EXPECT_GT(before, 2.0) << "the test needs real drift";
+    EXPECT_LT(err[1], 0.15 * before) << "Sim3: " << before << " -> " << err[1];
+    EXPECT_LT(err[1], 0.5 * err[0]) << "Sim3 " << err[1] << " against 6-DoF " << err[0];
+}
+
 // Verification of a loop candidate (LoopClosure::verify): each KF's landmarks are matched to the other KF's
 // features, PnP RANSAC gives the relative pose both ways, and the two must agree
 struct LoopClosureTestAccess {
@@ -230,6 +275,30 @@ TEST(LoopVerificationTest, directionsThatDisagreeAreRejected) {
     const Record c = view(s, candidatePose(), 60, 180, 3, Eigen::Vector3d(0.6, 0, 0));
     Eigen::Affine3d T_fc_fq;
     EXPECT_FALSE(LoopClosureTestAccess::verify(lc, q, c, T_fc_fq));
+}
+
+// Monocular VO: the candidate's map has another scale (2.5 times longer: another segment, or scale drift). The Sim3
+// verification measures the ratio from the matched landmarks and accepts; the rigid one sees two directions that
+// disagree and rejects
+TEST(LoopVerificationTest, sim3MeasuresTheScaleRatio) {
+    const Scene s(1);
+    const Eigen::Affine3d T_w_q = Eigen::Affine3d::Identity(), T_w_c = candidatePose();
+    const Record q = view(s, T_w_q, 0, 120, 2);
+    Record c       = view(s, T_w_c, 60, 180, 3);
+    for (auto &p : c.lmk_c)
+        p *= 2.5; // landmarks scaled about the camera: same image, map 2.5 times larger
+    Eigen::Affine3d S;
+    LoopClosure rigid(verifyOptions());
+    EXPECT_FALSE(LoopClosureTestAccess::verify(rigid, q, c, S));
+    LoopClosure::Options o = verifyOptions();
+    o.sim3                 = true;
+    LoopClosure lc(o);
+    ASSERT_TRUE(LoopClosureTestAccess::verify(lc, q, c, S));
+    const double scale = std::cbrt(S.linear().determinant());
+    EXPECT_NEAR(scale, 2.5, 0.05);
+    const Eigen::Affine3d T_true = T_w_c.inverse() * T_w_q;
+    EXPECT_LT((S.translation() - 2.5 * T_true.translation()).norm(), 0.1);
+    EXPECT_LT(Eigen::AngleAxisd((S.linear() / scale).transpose() * T_true.rotation()).angle() * 180 / M_PI, 0.5);
 }
 
 // With an IMU the window is moved by the correction's yaw and translation only: a tilt would contradict gravity (the

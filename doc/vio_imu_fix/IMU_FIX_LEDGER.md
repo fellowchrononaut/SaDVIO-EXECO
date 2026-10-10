@@ -1843,3 +1843,77 @@ Handed back to SaDLIO: `SaDLIO_sparsification_note.md` (the method, its cost, wh
 tests for it).
 
 Builds: `cpp/build`, `cpp/build_tests` and the ROS colcon build rebuilt with all of the above.
+
+## 2026-10-10 — VIO no prior on V2_03: bias runaway
+
+VIO no prior (default stereo VIO, `marginalization: 0`) fails on V2_03 (24.8 / 1.37 m). This failure is already in
+`e035ccc`. `log_slam/vio_diag.csv` of both runs shows the cause. Up to ~60 s, |ba| stays below 0.6 m/s². In the fast,
+blurred part (63 "PnP failed"), the accelerometer bias wanders to 1–2.6 m/s² (EuRoC's true biases are ~0.1 m/s²).
+Run 00 then integrates it into a velocity of 16 m/s. Nothing outside the window holds the biases: only the window's
+data and the bias random walk constrain them.
+
+**Tried and rejected: `vio_anchor_bias`.** The fixed (oldest) frames' bias blocks were held constant, as their poses
+are. Labels `vab0`/`vab1`, 18 sequences × 2 runs, `tools/run_vio_bias_prior.sh` (then named `run_vio_anchor.sh`):
+
+| | free (`vab0`) | anchored (`vab1`) |
+|---|---|---|
+| median ATE of the per-sequence means | 0.146 m | 4.15 m |
+| MH_01 | 0.078 / 0.090 | 452 / 127 |
+| V2_03 | 24.8 / 1.37 | 8.1 / 32.4 (5 resets) |
+| magistrale2 | 7.57 / 5.99 | 1.05 / 1.06 (2 resets) |
+
+The anchor freezes the bias at its value from the IMU initialization. Each oldest frame holds the window's biases
+through the random walk factors, and it got its own value while it was held by the frame before it. So the bias is
+never really estimated. The option was removed.
+
+**Next: `vio_bias_prior_acc` / `vio_bias_prior_gyr`.** This is a weak zero-mean prior on every window frame's
+absolute bias, as standard deviations (a datasheet turn-on bias). It applies only without a marginalization prior:
+with one, the prior factors of marginalized frames would enter the prior again at every marginalization. Default 0.
+A/B: σ_acc 0.3 and 0.1 m/s² against `vab0` (same code path), labels `vbp0.3`/`vbp0.1`, snapshot `vbp1`.
+
+## 2026-10-10 — Mono VO: essential-matrix fallback (`mono_essential_fallback`)
+
+When PnP fails in mono VO, `SLAMMono::predictEssential` poses the frame from the 2D-2D essential matrix of the
+tracked features. It uses OpenCV RANSAC on rays, needs at least 20 matches and 15 inliers, and skips frames whose mean
+flow is under 3 px. The scale is the median ratio of the landmark depths to their unit-baseline triangulation (at
+least 3 landmarks), else the motion model's speed. The pose passes `plausibleUpdate`, the frame becomes a keyframe,
+and the streak is bounded by `maxLostFrames()`.
+
+First version (`mvo_ess1`, snapshot `mvo3`): resets 117 → 34, but median ATE 0.68 → 0.74 m. MH_01 broke (3.01 m) on
+a single fallback whose translation direction was wrong. When the motion is mostly rotation, the essential matrix
+does not determine the translation direction.
+
+**Parallax gate** (`mvo_ess1b`, snapshot `mvo4`): the essential matrix's translation direction is used only if the
+inliers' mean parallax, with the rotation removed, is at least 1°. Otherwise the essential matrix's rotation is kept
+and the translation comes from the constant-velocity prediction. 17 sequences × 2 runs
+(`tools/run_mvo_essential.sh <lane> <part> <parts> mvo4 1 b`):
+
+| | fallback off (`mvo_ess0`) | first version (`mvo_ess1`) | parallax gate (`mvo_ess1b`) |
+|---|---|---|---|
+| resets | 117 | 34 | 38 |
+| median of per-sequence mean ATE | 0.68 m | 0.74 m | 0.69 m |
+| MH_01 | 0.12 / 0.39 | 3.01 / 0.59 | 0.22 / 0.20 |
+| V2_03 | 0.38 / 0.74 (15, 17 segments) | 1.63 / 1.39 (4, 3) | 1.57 / 0.94 (6, 9) |
+| room2 | 0.96 / 1.04 (6, 6 segments) | 1.13 / 1.16 (2, 3) | 0.50 / 0.87 (1, 1) |
+
+ATE is computed per segment with a Sim3 alignment each, which flatters runs cut into many short segments (V2_03 off).
+With 3× fewer resets the ATE stays at the level of no fallback. Mono VO stays noisy from run to run either way
+(MH_05 0.35 / 4.75 with the gate, V2_01 0.27 / 1.83 without). Proposal: `mono_essential_fallback: 1` by default.
+
+**Result (`vio_bias_prior_acc`).** 18 sequences × 2 runs, `tools/run_vio_bias_prior.sh`, snapshot `vbp1`. Free =
+`vab0`. ATE (m):
+
+| | free | σ_acc 0.3 | σ_acc 0.1 |
+|---|---|---|---|
+| V2_03 | 24.8 / 1.37 | **0.44 / 0.47** | 0.33 / 0.32 |
+| V2_02 | 0.30 / 0.28 | 0.08 / 0.10 | 0.14 / 0.12 |
+| magistrale2 | 7.57 / 5.99 | 4.95 / 4.80 | 4.28 / 5.08 |
+| room2 / room5 | 0.29 0.32 / 0.31 0.30 | 0.11 0.11 / 0.22 0.21 | 0.18 0.19 / 0.26 0.26 |
+| MH_01 / MH_03 | 0.08 0.09 / 0.16 0.13 | 0.13 0.13 / 0.24 0.16 | 0.12 0.09 / 0.18 0.19 |
+| V1_02 | 0.07 0.06 | 0.09 0.08 | 0.19 0.16 |
+| median of the per-sequence means | 0.146 | **0.129** | 0.168 |
+| mean | 1.25 | 0.42 | 0.41 |
+
+σ 0.3 removes the V2_03 failure and improves V2_02, room2, room5 and magistrale2. It costs a few centimetres on MH_01
+and MH_03. σ 0.1 holds the bias too hard (V1_02 0.07 → 0.19). **Default `vio_bias_prior_acc: 0.3`**, gyroscope 0
+(its bias did not run away). This changes the VIO no prior odometry: runs before this date used no bias prior.

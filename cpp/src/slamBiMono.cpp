@@ -92,7 +92,9 @@ bool SLAMBiMono::init() {
     profiling();
 
     // Construct dense stereo injector if enabled
-    if (_slam_param->_config.dense_depth) {
+    // With dense submaps the map outlives a re-initialization (the new segment starts a submap of its own); without,
+    // the injector and its global map start again
+    if (_slam_param->_config.dense_depth && !(_depth_injector && _slam_param->_config.dense_submap_kfs > 0)) {
         auto cam_cfgs = _slam_param->getDataProvider()->getCamConfigs();
         if (cam_cfgs.size() >= 2) {
             auto& cL = *cam_cfgs.at(0);
@@ -162,6 +164,7 @@ bool SLAMBiMono::init() {
             dcfg.vdbgpdf_stride               = _slam_param->_config.dense_vdbgpdf_stride;
             dcfg.vdbgpdf_mesh_every           = _slam_param->_config.dense_vdbgpdf_mesh_every;
             dcfg.vdbgpdf_mesh_path            = _slam_param->_config.dense_vdbgpdf_mesh_path;
+            dcfg.submap_kfs                   = _slam_param->_config.dense_submap_kfs;
             dcfg.pd_steiner_spacing  = _slam_param->_config.dense_pd_steiner_spacing;
             dcfg.pd_lambda           = _slam_param->_config.dense_pd_lambda;
             dcfg.pd_num_iterations   = _slam_param->_config.dense_pd_num_iterations;
@@ -409,7 +412,7 @@ bool SLAMBiMono::backEndStep() {
 
             // Queue frame for async dense mesh BEFORE discardLastFrame() frees images
             if (_depth_injector)
-                _depth_injector->queueFrame(frame_to_marg, nullptr);
+                _depth_injector->queueFrame(frame_to_marg, nullptr, _segment);
 
             if (_slam_param->_config.marginalization == 1)
                 _slam_param->getOptimizerBack()->marginalize(frame_to_marg,

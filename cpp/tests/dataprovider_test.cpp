@@ -290,7 +290,15 @@ TEST(ConfigTest, unsupportedOptionCombinationsAreReported) {
     check(c, 2, true, 1, 0); // unreadable vocabulary
     c.slam_mode   = "mono";
     c.estimate_td = false;
-    check(c, 1, false, 0, 1); // mono VO: skipped with a warning (no Sim3 graph), nothing else checked
+    check(c, 1, false, 1, 0); // mono VO has loop closure too (Sim3 graph): its options are checked
+    c.loop_detector  = "proximity";
+    c.loop_graph_dof = 7;
+    check(c, 1, false, 0, 0);
+    c.loop_correct_window = 1;
+    check(c, 1, false, 1, 0); // mono VO: no window correction (the window cannot follow a similarity)
+    c.loop_correct_window = -1;
+    c.slam_mode           = "bimono";
+    check(c, 2, false, 1, 0); // Sim3 is for mono only
 }
 
 TEST_F(DataProviderTest, onlineTimeOffsetAppliesToLaterImu) {

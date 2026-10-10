@@ -67,6 +67,10 @@ def write_config(cfg_dir: Path, mode: str, overrides: dict):
     cfg_dir.joinpath('dataset').mkdir(parents=True, exist_ok=True)
     for y in (EVAL / 'configs/dataset').glob('*.yaml'):
         shutil.copy(y, cfg_dir / 'dataset' / y.name)
+    # dense VDB-GPDF presets (dense_vdbgpdf_preset is looked up in <config>/vdbgpdf/)
+    cfg_dir.joinpath('vdbgpdf').mkdir(exist_ok=True)
+    for y in (EVAL.parents[1] / 'ros/config/vdbgpdf').glob('*.yaml'):
+        shutil.copy(y, cfg_dir / 'vdbgpdf' / y.name)
     lines = (EVAL / 'configs/base_config.yaml').read_text().splitlines()
     overrides = dict(overrides, slam_mode=f'"{mode}"')
     out, seen = [], set()

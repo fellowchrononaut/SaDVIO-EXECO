@@ -62,7 +62,7 @@ float icAngle(const cv::Mat &img, const cv::Point2f &p) {
 
 } // namespace
 
-LoopClosure::LoopClosure(const Options &opt) : _opt(opt), _graph(opt.four_dof) {
+LoopClosure::LoopClosure(const Options &opt) : _opt(opt), _graph(opt.four_dof, 4, opt.sim3) {
     const bool bow = _opt.detector == "bow" || _opt.detector == "proximity_bow";
     if (bow) {
         const auto t0 = Clock::now();
@@ -93,10 +93,12 @@ LoopClosure::LoopClosure(const Options &opt) : _opt(opt), _graph(opt.four_dof) {
 
     std::ofstream("log_slam/loops.csv", std::ofstream::trunc)
         << "timestamp query (ns), timestamp match (ns), candidates, inliers query->match, inliers match->query, "
-           "kept by pose graph, t_x, t_y, t_z (match frame), ms\n";
+           "kept by pose graph, t_x, t_y, t_z (match frame), ms, scale ratio (sim3: match map length per query map "
+           "length)\n";
     std::ofstream("log_slam/loop_attempts.csv", std::ofstream::trunc)
         << "timestamp query (ns), timestamp candidate (ns), query landmarks, matches query->candidate, inliers, "
-           "candidate landmarks, matches candidate->query, inliers, disagreement (m), disagreement (deg), accepted\n";
+           "candidate landmarks, matches candidate->query, inliers, disagreement (m; sim3: fraction of the candidate's "
+           "scene depth), disagreement (deg), accepted\n";
     std::ofstream("log_slam/results_loop.csv", std::ofstream::trunc) << kTrajHeader;
     std::ofstream("log_slam/results_loop_online.csv", std::ofstream::trunc) << kTrajHeader;
 
@@ -119,6 +121,7 @@ void LoopClosure::addKeyframe(const std::shared_ptr<Frame> &f, int segment) {
     in.ts      = f->getTimestamp();
     in.segment = segment;
     in.T_w_f   = f->getFrame2WorldTransform();
+    in.T_w_f_handover = in.T_w_f;
     in.cam     = f->getSensors().at(0);
     in.T_s_f   = in.cam->getFrame2SensorTransform();
 
@@ -162,13 +165,15 @@ void LoopClosure::loop() {
 
 Eigen::Affine3d LoopClosure::correct(const Eigen::Affine3d &T_w_f, int segment) const {
     std::lock_guard<std::mutex> lock(_graph_mutex);
-    return _graph.correction(segment) * T_w_f;
+    Eigen::Affine3d T = _graph.correction(segment) * T_w_f;
+    T.linear() /= std::cbrt(T.linear().determinant()); // sim3: the similarity's scale is not part of the pose
+    return T;
 }
 
 bool LoopClosure::takeCorrection(int segment, Eigen::Affine3d &C) {
     std::lock_guard<std::mutex> lock_q(_queue_mutex);
     std::lock_guard<std::mutex> lock(_graph_mutex);
-    if (!_pending_correction)
+    if (!_pending_correction || _opt.sim3)
         return false;
     _pending_correction = false;
     C                   = _graph.correction(segment);
@@ -213,6 +218,15 @@ bool LoopClosure::display(Display &out, unsigned long known) const {
             out.loops.push_back({_graph.pose(std::get<0>(l)).translation(), _graph.pose(std::get<1>(l)).translation()});
     for (const auto &l : _last_loops)
         out.new_loops.push_back({_graph.pose(l.first).translation(), _graph.pose(l.second).translation()});
+    return true;
+}
+
+bool LoopClosure::keyframeCorrection(unsigned long long ts, Eigen::Affine3d &C) const {
+    std::lock_guard<std::mutex> lock(_graph_mutex);
+    const auto it = _handover.find(ts);
+    if (it == _handover.end())
+        return false;
+    C = _graph.pose(it->second.first) * it->second.second.inverse();
     return true;
 }
 
@@ -270,6 +284,7 @@ void LoopClosure::process(Input &in) {
     {
         std::lock_guard<std::mutex> lock(_graph_mutex);
         r.node = _graph.addNode(in.T_w_f, in.segment);
+        _handover[in.ts] = {r.node, in.T_w_f_handover};
     }
 
     // Detection and verification: up to max_loops_per_kf verified candidates, from different times (a recent
@@ -317,7 +332,7 @@ void LoopClosure::process(Input &in) {
             lf << r.ts << "," << _records[accepted[k].first].ts << "," << cands.size() << ","
                << accepted[k].second[0] << "," << accepted[k].second[1] << "," << (reject == 0 ? 1 : 0) << ","
                << rel[k].translation().x() << "," << rel[k].translation().y() << "," << rel[k].translation().z()
-               << "," << dt << "\n";
+               << "," << dt << "," << std::cbrt(rel[k].linear().determinant()) << "\n";
     }
 
     _records.push_back(std::move(r));
@@ -454,7 +469,8 @@ std::vector<int> LoopClosure::candidates(const Record &q) {
 }
 
 bool LoopClosure::pnp(const std::vector<Eigen::Vector3d> &pts, const cv::Mat &pts_desc, const Record &target,
-                      Eigen::Affine3d &T_t_src, int &inliers, int &matches) const {
+                      Eigen::Affine3d &T_t_src, int &inliers, int &matches,
+                      std::vector<std::pair<int, int>> *inlier_pairs) const {
     inliers = matches = 0;
     if (static_cast<int>(pts.size()) < _opt.min_inliers || target.desc.empty())
         return false;
@@ -477,6 +493,7 @@ bool LoopClosure::pnp(const std::vector<Eigen::Vector3d> &pts, const cv::Mat &pt
     matcher.knnMatch(pts_desc, tgt_desc, knn, 2);
     std::vector<cv::Point3f> obj;
     std::vector<cv::Point2f> img;
+    std::vector<std::pair<int, int>> pairs; // (source point, target) of each correspondence
     for (const auto &m : knn) {
         // A landmark detected again by the ORB has two near-identical targets: no ratio test between them
         if (m.empty() || m[0].distance > 50)
@@ -487,6 +504,7 @@ bool LoopClosure::pnp(const std::vector<Eigen::Vector3d> &pts, const cv::Mat &pt
         const Eigen::Vector3d &p = pts[m[0].queryIdx];
         obj.emplace_back(p.x(), p.y(), p.z());
         img.push_back(tgt_n[m[0].trainIdx]);
+        pairs.emplace_back(m[0].queryIdx, m[0].trainIdx);
     }
     matches = static_cast<int>(obj.size());
     if (matches < _opt.min_inliers)
@@ -500,6 +518,12 @@ bool LoopClosure::pnp(const std::vector<Eigen::Vector3d> &pts, const cv::Mat &pt
     inliers = static_cast<int>(idx.size());
     if (inliers < _opt.min_inliers)
         return false;
+    if (inlier_pairs) {
+        // Targets below target.lmk_c.size() are the target's landmarks
+        inlier_pairs->clear();
+        for (int k : idx)
+            inlier_pairs->push_back(pairs[k]);
+    }
     cv::Mat R;
     cv::Rodrigues(rvec, R);
     T_t_src = Eigen::Affine3d::Identity();
@@ -516,12 +540,51 @@ bool LoopClosure::verify(const Record &q, const Record &c, Eigen::Affine3d &T_fc
     Eigen::Affine3d T_cc_cq, T_cq_cc;
     inl_q = inl_c = 0;
     int m_q = 0, m_c = 0;
-    const bool ok_q   = pnp(q.lmk_c, q.lmk_desc, c, T_cc_cq, inl_q, m_q);
+    std::vector<std::pair<int, int>> pairs_q, pairs_c;
+    const bool ok_q   = pnp(q.lmk_c, q.lmk_desc, c, T_cc_cq, inl_q, m_q, &pairs_q);
     const bool both   = static_cast<int>(c.lmk_c.size()) >= _opt.min_inliers;
-    const bool ok_c   = both && pnp(c.lmk_c, c.lmk_desc, q, T_cq_cc, inl_c, m_c);
+    const bool ok_c   = both && pnp(c.lmk_c, c.lmk_desc, q, T_cq_cc, inl_c, m_c, &pairs_c);
     bool accepted     = false;
     double e_t = -1, e_deg = -1;
-    if (ok_q && ok_c) {
+    double s_cq = 1; // sim3: the candidate map's length per query map length
+    if (_opt.sim3) {
+        // Scale ratio from the landmarks matched between the two maps: a query landmark brought into the candidate's
+        // camera (query units) against the candidate landmark it matched (candidate units), and the reverse. The
+        // two directions then agree once the query's translation is scaled, within 10% of the candidate's scene
+        // depth (0.3 m at 3 m, the metric threshold)
+        if (ok_q && ok_c) {
+            std::vector<double> lq, lc, depth_c;
+            auto logRatio = [](double num, double den, std::vector<double> &out, double sign) {
+                if (num > 1e-6 && den > 1e-6)
+                    out.push_back(sign * std::log(num / den));
+            };
+            for (const auto &m : pairs_q)
+                if (m.second < static_cast<int>(c.lmk_c.size()))
+                    logRatio(c.lmk_c[m.second].norm(), (T_cc_cq * q.lmk_c[m.first]).norm(), lq, 1);
+            for (const auto &m : pairs_c)
+                if (m.second < static_cast<int>(q.lmk_c.size()))
+                    logRatio(q.lmk_c[m.second].norm(), (T_cq_cc * c.lmk_c[m.first]).norm(), lc, -1);
+            for (const auto &p : c.lmk_c)
+                depth_c.push_back(p.norm());
+            auto median = [](std::vector<double> v) {
+                std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+                return v[v.size() / 2];
+            };
+            std::vector<double> all = lq;
+            all.insert(all.end(), lc.begin(), lc.end());
+            const bool directions_agree =
+                lq.size() < 3 || lc.size() < 3 || std::abs(median(lq) - median(lc)) < std::log(1.15);
+            if (all.size() >= 5 && directions_agree) {
+                s_cq                  = std::exp(median(all));
+                Eigen::Affine3d T_s   = T_cc_cq;
+                T_s.translation()    *= s_cq;
+                const Eigen::Affine3d E = T_s * T_cq_cc;
+                e_t                     = E.translation().norm() / median(depth_c);
+                e_deg                   = Eigen::AngleAxisd(E.rotation()).angle() * 180 / M_PI;
+                accepted                = e_t < 0.1 && e_deg < 5;
+            }
+        }
+    } else if (ok_q && ok_c) {
         // The two directions must agree
         const Eigen::Affine3d E = T_cc_cq * T_cq_cc;
         e_t                     = E.translation().norm();
@@ -536,7 +599,10 @@ bool LoopClosure::verify(const Record &q, const Record &c, Eigen::Affine3d &T_fc
         << m_c << "," << inl_c << "," << e_t << "," << e_deg << "," << (accepted ? 1 : 0) << "\n";
     if (!accepted)
         return false;
-    T_fc_fq = c.T_s_f.inverse() * T_cc_cq * q.T_s_f;
+    Eigen::Affine3d S_cc_cq = T_cc_cq; // sim3: a similarity (linear part s R), else rigid
+    S_cc_cq.linear()       *= s_cq;
+    S_cc_cq.translation()  *= s_cq;
+    T_fc_fq = c.T_s_f.inverse() * S_cc_cq * q.T_s_f;
     return true;
 }
 

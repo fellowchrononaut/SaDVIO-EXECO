@@ -1,5 +1,21 @@
 #include "isaeslam/optimizers/AOptimizer.h"
 
+namespace {
+
+// Absolute prior on a bias: (b + db) / sigma, with b the current bias and db the window's increment
+struct BiasPriorError {
+    BiasPriorError(const Eigen::Vector3d &b, double sigma) : _b(b), _w(1 / sigma) {}
+    template <typename T> bool operator()(const T *db, T *r) const {
+        for (int k = 0; k < 3; k++)
+            r[k] = (T(_b(k)) + db[k]) * T(_w);
+        return true;
+    }
+    Eigen::Vector3d _b;
+    double _w;
+};
+
+} // namespace
+
 namespace isae {
 
 void AOptimizer::addSparsePriorResiduals(ceres::Problem &problem,
@@ -159,6 +175,19 @@ uint AOptimizer::addIMUResiduals(ceres::Problem &problem,
 
             problem.AddParameterBlock(_map_frame_dbgpar.at(frame_vector.at(i)).values(), 3);
             ordering->AddElementToGroup(_map_frame_dbgpar.at(frame_vector.at(i)).values(), 1);
+
+            // Without a marginalization prior the biases are held only by the window's data and their random walk:
+            // when vision is weak they drift freely (V2_03, no prior: |ba| up to 2.6 m/s^2, then the velocity
+            // integrates it). A weak absolute prior keeps them physical
+            const std::shared_ptr<IMU> imu = frame_vector.at(i)->getIMU();
+            if (_bias_prior_acc > 0)
+                problem.AddResidualBlock(new ceres::AutoDiffCostFunction<BiasPriorError, 3, 3>(
+                                             new BiasPriorError(imu->getBa(), _bias_prior_acc)),
+                                         nullptr, _map_frame_dbapar.at(frame_vector.at(i)).values());
+            if (_bias_prior_gyr > 0)
+                problem.AddResidualBlock(new ceres::AutoDiffCostFunction<BiasPriorError, 3, 3>(
+                                             new BiasPriorError(imu->getBg(), _bias_prior_gyr)),
+                                         nullptr, _map_frame_dbgpar.at(frame_vector.at(i)).values());
         }
     }
 

@@ -67,6 +67,43 @@ struct SixDofError {
     double _wt, _wr;
 };
 
+// Sim3 relative pose residual: as SixDofError with node i's scale on the translation, plus the log scale ratio.
+// Node k maps its frame to the world by x_w = s_k R_k x_k + t_k, so S_i^-1 S_j = (s_j / s_i, R_i^T R_j,
+// R_i^T (t_j - t_i) / s_i)
+struct Sim3Error {
+    Sim3Error(const Eigen::Affine3d &T_ij, double s_ij, double sigma_t, double sigma_rot, double sigma_s)
+        : _q_ij(T_ij.rotation()), _t_ij(T_ij.translation()), _ls_ij(std::log(s_ij)), _wt(1 / sigma_t),
+          _wr(1 / sigma_rot), _ws(1 / sigma_s) {}
+
+    template <typename T>
+    bool operator()(const T *q_i, const T *t_i, const T *ls_i, const T *q_j, const T *t_j, const T *ls_j,
+                    T *r) const {
+        Eigen::Map<const Eigen::Quaternion<T>> qi(q_i), qj(q_j);
+        Eigen::Map<const Eigen::Matrix<T, 3, 1>> ti(t_i), tj(t_j);
+        const Eigen::Quaternion<T> q_err   = _q_ij.cast<T>().conjugate() * qi.conjugate() * qj;
+        const Eigen::Matrix<T, 3, 1> t_est = (qi.conjugate() * (tj - ti)) * ceres::exp(-ls_i[0]);
+        T aa[3];
+        const T qe[4] = {q_err.w(), q_err.x(), q_err.y(), q_err.z()};
+        ceres::QuaternionToAngleAxis(qe, aa);
+        for (int k = 0; k < 3; k++) {
+            r[k]     = (t_est(k) - T(_t_ij(k))) * T(_wt);
+            r[3 + k] = aa[k] * T(_wr);
+        }
+        r[6] = (ls_j[0] - ls_i[0] - T(_ls_ij)) * T(_ws);
+        return true;
+    }
+
+    Eigen::Quaterniond _q_ij;
+    Eigen::Vector3d _t_ij;
+    double _ls_ij;
+    double _wt, _wr, _ws;
+};
+
+// Scale of a similarity given as an affine transform (linear part s R)
+double scaleOf(const Eigen::Affine3d &S) {
+    return std::cbrt(S.linear().determinant());
+}
+
 Eigen::Matrix3d rotZ(double yaw) {
     return Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
 }
@@ -76,10 +113,13 @@ Eigen::Matrix3d rotZ(double yaw) {
 void PoseGraph::setEstimate(Node &n, const Eigen::Affine3d &T) const {
     const Eigen::Vector3d t = T.translation();
     std::copy(t.data(), t.data() + 3, n.t);
+    const double s = scaleOf(T);
+    n.log_s        = _sim3 ? std::log(s) : 0;
+    const Eigen::Matrix3d R = T.linear() / s;
     if (_four_dof) {
-        n.yaw = yawOf(T.rotation());
+        n.yaw = yawOf(R);
     } else {
-        const Eigen::Quaterniond q(T.rotation());
+        const Eigen::Quaterniond q(R);
         n.q[0] = q.x(), n.q[1] = q.y(), n.q[2] = q.z(), n.q[3] = q.w();
     }
 }
@@ -95,7 +135,10 @@ int PoseGraph::addNode(const Eigen::Affine3d &T_w_f_odom, int segment) {
 }
 
 void PoseGraph::addLoop(int i, int j, const Eigen::Affine3d &T_fi_fj) {
-    _loops.push_back({i, j, T_fi_fj, true});
+    const double s    = scaleOf(T_fi_fj);
+    Eigen::Affine3d T = T_fi_fj;
+    T.linear()        = T_fi_fj.linear() / s;
+    _loops.push_back({i, j, T, _sim3 ? s : 1.0, true});
 }
 
 size_t PoseGraph::nActiveLoops() const {
@@ -112,9 +155,13 @@ Eigen::Affine3d PoseGraph::pose(int i) const {
 }
 
 Eigen::Affine3d PoseGraph::correction(int segment) const {
-    for (int i = static_cast<int>(_nodes.size()) - 1; i >= 0; i--)
-        if (_nodes[i].segment == segment)
-            return pose(i) * _nodes[i].T_odom.inverse();
+    for (int i = static_cast<int>(_nodes.size()) - 1; i >= 0; i--) {
+        if (_nodes[i].segment != segment)
+            continue;
+        Eigen::Affine3d S = pose(i);
+        S.linear() *= scale(i);
+        return S * _nodes[i].T_odom.inverse();
+    }
     return Eigen::Affine3d::Identity();
 }
 
@@ -163,11 +210,17 @@ int PoseGraph::optimize(double reject_chi2) {
                 problem.AddParameterBlock(n.q, 4, quat_manifold);
             }
             problem.AddParameterBlock(n.t, 3);
+            if (_sim3)
+                problem.AddParameterBlock(&n.log_s, 1);
         };
-        auto addEdge = [&](int i, int j, const Eigen::Affine3d &T_ij, double st, double sr,
+        auto addEdge = [&](int i, int j, const Eigen::Affine3d &T_ij, double s_ij, double st, double sr, double ss,
                            ceres::LossFunction *loss) -> ceres::ResidualBlockId {
             Node &a = _nodes[i], &b = _nodes[j];
-            if (_four_dof) {
+            if (_sim3) {
+                auto *c = new ceres::AutoDiffCostFunction<Sim3Error, 7, 4, 3, 1, 4, 3, 1>(
+                    new Sim3Error(T_ij, s_ij, st, sr, ss));
+                return problem.AddResidualBlock(c, loss, a.q, a.t, &a.log_s, b.q, b.t, &b.log_s);
+            } else if (_four_dof) {
                 const double yaw_ij = yawOf(a.T_odom.rotation() * T_ij.rotation()) - yawOf(a.T_odom.rotation());
                 auto *c = new ceres::AutoDiffCostFunction<FourDofError, 4, 1, 3, 1, 3>(
                     new FourDofError(T_ij.translation(), yaw_ij, a.R_rp, st, sr));
@@ -186,8 +239,8 @@ int PoseGraph::optimize(double reject_chi2) {
             for (int i = j - 1; i >= 0 && linked < _neighbors; i--) {
                 if (_nodes[i].segment != _nodes[j].segment)
                     continue;
-                addEdge(i, j, _nodes[i].T_odom.inverse() * _nodes[j].T_odom, _sigmas.odom_t, _sigmas.odom_rot,
-                        nullptr);
+                addEdge(i, j, _nodes[i].T_odom.inverse() * _nodes[j].T_odom, 1.0, _sigmas.odom_t, _sigmas.odom_rot,
+                        _sigmas.odom_s, nullptr);
                 linked++;
             }
         }
@@ -196,8 +249,8 @@ int PoseGraph::optimize(double reject_chi2) {
         for (size_t k = 0; k < _loops.size(); k++) {
             if (!_loops[k].active)
                 continue;
-            loop_ids[k] = addEdge(_loops[k].i, _loops[k].j, _loops[k].T_ij, _sigmas.loop_t, _sigmas.loop_rot,
-                                  nullptr);
+            loop_ids[k] = addEdge(_loops[k].i, _loops[k].j, _loops[k].T_ij, _loops[k].s_ij, _sigmas.loop_t,
+                                  _sigmas.loop_rot, _sigmas.loop_s, nullptr);
         }
 
         // Gauge: the earliest node of each group of segments connected by active loops
@@ -220,6 +273,8 @@ int PoseGraph::optimize(double reject_chi2) {
             Node &n = _nodes[fg.second];
             problem.SetParameterBlockConstant(_four_dof ? &n.yaw : n.q);
             problem.SetParameterBlockConstant(n.t);
+            if (_sim3)
+                problem.SetParameterBlockConstant(&n.log_s);
         }
 
         ceres::Solver::Options options;

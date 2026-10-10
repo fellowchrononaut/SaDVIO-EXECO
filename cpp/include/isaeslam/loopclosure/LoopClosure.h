@@ -38,6 +38,10 @@ class ImageSensor;
  * at once. The sliding window is left untouched: the pose graph's correction is applied to the output only
  * (log_slam/results_loop*.csv).
  *
+ * Monocular VO (sim3): the map's scale is unknown and drifts, so the pose graph is Sim3 and a loop also measures the
+ * scale ratio of the two keyframes' maps, from the depths of the landmarks matched between them (each direction's
+ * PnP inliers that hit the other keyframe's landmarks).
+ *
  * The phase-0 benchmark (doc/loop_closure) chose 1000 pyramid ORB: the ORB-SLAM vocabulary matches them much
  * better than the front end's single-scale FAST corners (R@1 0.74 against 0.47).
  */
@@ -61,6 +65,8 @@ class LoopClosure {
         bool correct_window    = false; //!< After a loop, the SLAM moves its sliding window by the correction
         bool window_gravity    = false; //!< With an IMU: the window is moved by the correction's yaw and translation only
                                         //!< (a tilt would contradict gravity, fixed along the world z axis)
+        bool sim3              = false; //!< Monocular VO: Sim3 pose graph, loops measure the scale ratio (no window
+                                        //!< correction)
     };
 
     struct Stats {
@@ -78,9 +84,18 @@ class LoopClosure {
     void addKeyframe(const std::shared_ptr<Frame> &f, int segment);
 
     /*!
-     * @brief Pose (frame to world) corrected by the current pose graph, for a pose of the given segment
+     * @brief Pose (frame to world) corrected by the current pose graph, for a pose of the given segment (sim3: the
+     * position follows the similarity, the pose stays rigid)
      */
     Eigen::Affine3d correct(const Eigen::Affine3d &T_w_f, int segment) const;
+
+    /*!
+     * @brief Correction of a keyframe already processed, by its timestamp: corrected world <- the world it was handed
+     * over in (its corrected pose times the inverse of its hand-over pose; window corrections since then included).
+     * For maps anchored to keyframes (dense submaps). Thread-safe
+     * @return false if the keyframe is unknown (not handed over, or not processed yet)
+     */
+    bool keyframeCorrection(unsigned long long ts, Eigen::Affine3d &C) const;
 
     Stats stats() const;
 
@@ -115,6 +130,7 @@ class LoopClosure {
         unsigned long long ts;
         int segment;
         Eigen::Affine3d T_w_f;              // odometry (window) estimate, frame to world
+        Eigen::Affine3d T_w_f_handover;     // T_w_f as handed over (T_w_f follows later window corrections)
         Eigen::Affine3d T_s_f;              // frame to camera 0
         std::shared_ptr<ImageSensor> cam;   // held until processed, for the image and the camera model
         std::vector<Eigen::Vector3d> lmk_c; // landmarks seen by camera 0, in camera 0
@@ -138,7 +154,8 @@ class LoopClosure {
     std::vector<int> candidates(const Record &q);
     bool verify(const Record &q, const Record &c, Eigen::Affine3d &T_fc_fq, int &inl_q, int &inl_c);
     bool pnp(const std::vector<Eigen::Vector3d> &pts, const cv::Mat &pts_desc, const Record &target,
-             Eigen::Affine3d &T_t_src, int &inliers, int &matches) const;
+             Eigen::Affine3d &T_t_src, int &inliers, int &matches,
+             std::vector<std::pair<int, int>> *inlier_pairs = nullptr) const;
     void writeTrajectory();
     void loop();
 
@@ -150,6 +167,7 @@ class LoopClosure {
     PoseGraph _graph;
     std::vector<Record> _records;
     std::map<int, std::pair<int, int>> _online_label;
+    std::map<unsigned long long, std::pair<int, Eigen::Affine3d>> _handover; // ts -> (node, hand-over pose)
     bool _pending_correction = false; // a loop was closed: the window should move (correct_window)
     unsigned long _version   = 0;     // KFs processed (display)
     std::vector<std::pair<int, int>> _last_loops; // node pairs of the latest loop KF (display) // segment -> (group seen last, frame changes): online labels

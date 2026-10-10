@@ -22,7 +22,7 @@ SLAMCore::SLAMCore(std::shared_ptr<isae::SLAMParameters> slam_param) : _slam_par
                                             _slam_param->_config.fixed_frame_number);
     _global_map = std::make_shared<GlobalMap>();
     // Each KF leaving the window goes to the loop closure with its final estimate, before its data is cleaned
-    if (_slam_param->_config.loop_closure == 1 && _slam_param->_config.slam_mode != "mono")
+    if (_slam_param->_config.loop_closure == 1)
         _local_map->setDiscardCallback([this](const std::shared_ptr<Frame> &f) { handToLoopClosure(f); });
     if (slam_param->_config.mesh3D)
         _mesher = std::make_shared<Mesher>(
@@ -817,13 +817,15 @@ void SLAMCore::applyLoopCorrection() {
     _map_mutex.unlock();
     // The marginalization priors move with the window: their cost for the moved states is the one they had
     _slam_param->getOptimizerBack()->transformPriors(C);
+    if (_depth_injector)
+        _depth_injector->worldMoved(); // dense submaps: the next keyframe starts a submap in the new world
     std::cout << "Loop closure: window moved by " << C.translation().norm() << " m, "
               << Eigen::AngleAxisd(C.rotation()).angle() * 180 / M_PI << " deg" << std::endl;
 }
 
 void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
     const Config &cfg = _slam_param->_config;
-    if (cfg.loop_closure != 1 || cfg.slam_mode == "mono" || !f || f->getTimestamp() <= _last_loop_ts)
+    if (cfg.loop_closure != 1 || !f || f->getTimestamp() <= _last_loop_ts)
         return;
     if (!_loop_closure) {
         LoopClosure::Options opt;
@@ -838,15 +840,25 @@ void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
         // 0 (automatic) is 6-DoF in every mode: with an IMU too it was as good or better than 4-DoF on TUM-VI and
         // EuRoC (VIO's roll and pitch are not exact; doc/loop_closure ledger, 2026-10-09)
         opt.four_dof    = cfg.loop_graph_dof == 4;
+        // Monocular VO: Sim3 (its scale drifts and every segment has a scale of its own), output correction only
+        opt.sim3        = cfg.loop_graph_dof == 7 || (cfg.loop_graph_dof == 0 && cfg.slam_mode == "mono");
         opt.async       = cfg.multithreading;
         // Automatic window correction (-1): where it measured best (doc/loop_closure ledger): VIO with a dense prior
         // (better than output-only and than dropping the prior) and mono VIO (repairs failing runs); elsewhere the
         // output is corrected and the window left as it is
         const bool vio_dense_prior = cfg.slam_mode == "bimonovio" && cfg.marginalization == 1 && !cfg.sparsification;
-        opt.correct_window         = cfg.loop_correct_window == 1 ||
-                             (cfg.loop_correct_window == -1 && (vio_dense_prior || cfg.slam_mode == "monovio"));
+        opt.correct_window         = cfg.slam_mode != "mono" &&
+                             (cfg.loop_correct_window == 1 ||
+                              (cfg.loop_correct_window == -1 && (vio_dense_prior || cfg.slam_mode == "monovio")));
         opt.window_gravity = cfg.slam_mode == "monovio" || cfg.slam_mode == "bimonovio";
         std::atomic_store(&_loop_closure, std::make_shared<LoopClosure>(opt)); // read by viewer threads
+        if (_depth_injector) {
+            // Dense submaps are placed at their anchor keyframes' corrected poses (the callback keeps the loop
+            // closure alive for the injector's final write)
+            std::shared_ptr<LoopClosure> lc = _loop_closure;
+            _depth_injector->setKeyframeCorrection(
+                [lc](unsigned long long ts, Eigen::Affine3d &C) { return lc->keyframeCorrection(ts, C); });
+        }
     }
     _loop_closure->addKeyframe(f, _segment);
     _last_loop_ts = f->getTimestamp();

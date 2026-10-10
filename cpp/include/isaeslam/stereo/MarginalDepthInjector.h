@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -92,6 +93,11 @@ struct MarginalDepthConfig {
     int         vdbgpdf_stride     = 2;                                   // pixel stride of the points fed to the map
     int         vdbgpdf_mesh_every = 5;                                   // keyframes between mesh extraction + PLY save
     std::string vdbgpdf_mesh_path  = "log_slam/dense_vdbgpdf_mesh.ply";
+    // Submaps (vdbgpdf only): every submap_kfs keyframes (and at every re-initialization or window correction) a
+    // new map is started, fused in the frame of its first keyframe (the anchor). Each submap is written in its anchor
+    // frame (<mesh dir>/dense_submaps/submap_NNNN.ply) with its anchor pose (submaps.csv), and the global mesh is the
+    // submaps placed at their anchors' poses, corrected by the loop closure when it runs. 0: one global map
+    int         submap_kfs         = 0;
 
     // Primal-dual mesh optimization over SGBM inverse depth
     int    pd_steiner_spacing = 20;
@@ -125,7 +131,17 @@ class MarginalDepthInjector {
 
     // Queue a frame for async dense mesh computation.
     // Must be called BEFORE discardLastFrame().
-    void queueFrame(const std::shared_ptr<Frame>& frame, const std::shared_ptr<Mesh3D>& mesh);
+    // segment: re-initializations so far (each has its own world frame; submaps never span two)
+    void queueFrame(const std::shared_ptr<Frame>& frame, const std::shared_ptr<Mesh3D>& mesh, int segment = 0);
+
+    // Submaps: correction of a keyframe's pose (corrected world <- world the keyframe was handed over in), by its
+    // timestamp; returns false when there is none (identity). Set by the SLAM when its loop closure starts
+    using KeyframeCorrection = std::function<bool(unsigned long long, Eigen::Affine3d&)>;
+    void setKeyframeCorrection(KeyframeCorrection fn);
+
+    // Submaps: the SLAM moved its window (loop closure window correction): keyframes queued from now on are in
+    // another odometry world, so the next one starts a new submap
+    void worldMoved() { ++_world_epoch; }
 
     // Consume the latest result. Returns false if no new result is available.
     // Clears the stored result so the next call returns false until new data arrives.
@@ -137,6 +153,8 @@ class MarginalDepthInjector {
         Eigen::Affine3d T_w_rectcam;
         std::shared_ptr<Frame> frame;
         std::shared_ptr<Mesh3D> mesh;
+        int segment = 0;
+        int epoch   = 0;
         bool valid = false;
     };
 
@@ -175,6 +193,27 @@ class MarginalDepthInjector {
     std::unique_ptr<VDBGPDFMap> _vdb_map;
     DenseMesh _vdb_mesh; // last extracted mesh, republished between extractions
     std::ofstream _vdb_log; // dense_vdbgpdf_keyframes.csv: pose each keyframe was fused with
+
+    // Submaps (submap_kfs > 0, vdbgpdf; worker thread only, except the correction callback)
+    struct Submap {
+        int id = 0;
+        unsigned long long anchor_ts = 0; // anchor keyframe
+        int segment = 0, epoch = 0;
+        Eigen::Affine3d T_w_anchor = Eigen::Affine3d::Identity(); // anchor's rectified camera, odometry world
+        std::unique_ptr<VDBGPDFMap> map;                          // released when the submap is closed
+        DenseMesh mesh;                                           // in the anchor frame
+        int n_kf = 0;
+    };
+    void integrateSubmap(const QueueItem& item, const std::vector<Eigen::Vector3d>& points_cam,
+                         DenseMesh& dense_mesh);
+    void closeSubmap();
+    DenseMesh assembleSubmaps(); // the submaps at their anchors' corrected poses; writes submaps.csv
+    std::vector<Submap> _submaps;
+    std::string _submap_dir;
+    VDBGPDFMapConfig _vdb_cfg;
+    std::mutex _corr_mtx;
+    KeyframeCorrection _kf_correction;
+    std::atomic<int> _world_epoch{0};
     int _integrated = 0;
     std::ofstream _reg_log;
     std::atomic<bool> _running{true};

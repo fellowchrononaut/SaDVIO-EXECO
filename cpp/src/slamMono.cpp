@@ -1,4 +1,8 @@
 #include "isaeslam/slamCore.h"
+
+#include <opencv2/calib3d.hpp>
+#include <opencv2/core/eigen.hpp>
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
@@ -199,10 +203,17 @@ bool SLAMMono::frontEndStep() {
     // to predict pose. Also remove outliers from tracks_in_time vector
     isae::timer::tic();
     bool good_it   = predict(_frame);
+    // PnP failed: the motion from the 2D-2D essential matrix of the tracked features, for a bounded number of frames
+    bool from_essential = false;
+    if (!good_it && _slam_param->_config.mono_essential_fallback == 1 && _essential_streak < maxLostFrames()) {
+        from_essential = predictEssential(_frame);
+        good_it        = from_essential;
+    }
     _avg_predict_t = (_avg_predict_t * (_nframes - 1) + isae::timer::silentToc()) / _nframes;
 
     if (good_it) {
         _successive_fails = 0;
+        _essential_streak = from_essential ? _essential_streak + 1 : 0;
 
         // Epipolar Filtering for matches in time
         isae::timer::tic();
@@ -229,12 +240,18 @@ bool SLAMMono::frontEndStep() {
         Eigen::MatrixXd cov;
         Eigen::Affine3d T_last_curr, T_w_f;
         T_last_curr = getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform();
-        ESKFEstimator eskf;
-        const Eigen::Affine3d T_pnp = T_last_curr;
-        eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
-        if (!plausibleUpdate(T_pnp, T_last_curr)) {
-            std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
-            T_last_curr = T_pnp;
+        if (from_essential) {
+            // Too few landmarks for the ESKF: keep the essential-matrix pose, vote a KF to triangulate new landmarks
+            cov = 100 * Eigen::MatrixXd::Identity(6, 6);
+            _frame->setKeyFrame();
+        } else {
+            ESKFEstimator eskf;
+            const Eigen::Affine3d T_pnp = T_last_curr;
+            eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
+            if (!plausibleUpdate(T_pnp, T_last_curr)) {
+                std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
+                T_last_curr = T_pnp;
+            }
         }
         T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
         _frame->setdTCov(cov);
@@ -305,7 +322,8 @@ bool SLAMMono::frontEndStep() {
                   << std::endl;
         waitBackEnd(); // the window is read below
         logWindowBeforeReset();
-        _is_init = false;
+        _is_init          = false;
+        _essential_streak = 0;
 
         return true;
     }
@@ -314,6 +332,107 @@ bool SLAMMono::frontEndStep() {
     _frame_to_display = _frame;
     execo_log_perframe(_frame, _nframes);
 
+    return true;
+}
+
+bool SLAMMono::predictEssential(std::shared_ptr<Frame> &f) {
+    const std::shared_ptr<ImageSensor> cam1 = getLastKF()->getSensors().at(0), cam2 = f->getSensors().at(0);
+
+    // Every feature tracked since the last KF (with or without landmark), as normalized coordinates of its rays
+    std::vector<cv::Point2f> p1, p2;
+    std::vector<std::shared_ptr<ALandmark>> lmk;
+    double flow = 0;
+    auto add    = [&](const vec_match &ms) {
+        for (const auto &m : ms) {
+            const Eigen::Vector3d r1 = cam1->getRayCamera(m.first->getPoints().at(0));
+            const Eigen::Vector3d r2 = cam2->getRayCamera(m.second->getPoints().at(0));
+            if (r1.z() < 0.2 * r1.norm() || r2.z() < 0.2 * r2.norm())
+                continue;
+            p1.emplace_back(r1.x() / r1.z(), r1.y() / r1.z());
+            p2.emplace_back(r2.x() / r2.z(), r2.y() / r2.z());
+            lmk.push_back(m.first->getLandmark().lock());
+            flow += (m.first->getPoints().at(0) - m.second->getPoints().at(0)).norm();
+        }
+    };
+    add(_matches_in_time["pointxd"]);
+    add(_matches_in_time_lmk["pointxd"]);
+    if (p1.size() < 20)
+        return false;
+    if (flow / p1.size() < 3)
+        return true; // too little parallax for an essential matrix: the constant-velocity prediction stays
+
+    // Camera motion up to scale: x2 = R x1 + t
+    const cv::Mat K = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat inl;
+    cv::Mat E = cv::findEssentialMat(p1, p2, K, cv::RANSAC, 0.999, 1.0 / cam1->getFocal(), inl);
+    if (E.rows < 3 || E.cols != 3)
+        return false;
+    E = E.rowRange(0, 3).clone();
+    cv::Mat Rcv, tcv;
+    if (cv::recoverPose(E, p1, p2, K, Rcv, tcv, inl) < 15)
+        return false;
+    Eigen::Matrix3d R;
+    Eigen::Vector3d t;
+    cv::cv2eigen(Rcv, R);
+    cv::cv2eigen(tcv, t);
+
+    // Scale: known depths of the landmarks among the inliers against their depths triangulated with a unit baseline
+    const Eigen::Affine3d T_c1_w = cam1->getWorld2SensorTransform();
+    const Eigen::Vector3d c2     = -R.transpose() * t; // camera 2's centre in camera 1, unit baseline
+    std::vector<double> ratios;
+    for (size_t i = 0; i < p1.size(); i++) {
+        if (!inl.at<uchar>(static_cast<int>(i)) || !lmk[i] || !lmk[i]->isInitialized() || lmk[i]->isOutlier())
+            continue;
+        const Eigen::Vector3d X = T_c1_w * lmk[i]->getPose().translation();
+        const Eigen::Vector3d b1(p1[i].x, p1[i].y, 1), b2 = R.transpose() * Eigen::Vector3d(p2[i].x, p2[i].y, 1);
+        Eigen::Matrix<double, 3, 2> A;
+        A.col(0) = b1;
+        A.col(1) = -b2;
+        const Eigen::Vector2d lambda = A.colPivHouseholderQr().solve(c2); // X = l1 b1 = c2 + l2 b2
+        if (X.z() > 0.1 && lambda(0) > 1e-6 && lambda(1) > 1e-6)
+            ratios.push_back(X.z() / lambda(0));
+    }
+    const Eigen::Affine3d T_c1_c2_cv = T_c1_w * cam2->getSensor2WorldTransform(); // constant-velocity prediction
+    double scale                     = T_c1_c2_cv.translation().norm();
+    if (ratios.size() >= 3) {
+        std::nth_element(ratios.begin(), ratios.begin() + ratios.size() / 2, ratios.end());
+        scale = ratios[ratios.size() / 2];
+    }
+    if (!std::isfinite(scale) || scale < 1e-4)
+        return false;
+
+    // The translation direction of an essential matrix is only determined with enough translational parallax (the
+    // rays' angle once the rotation is removed): with a motion that is mostly rotation, its rotation is kept and the
+    // translation comes from the constant-velocity prediction (a wrong direction times the speed ruined MH_01)
+    double parallax = 0;
+    int n_inl       = 0;
+    for (size_t i = 0; i < p1.size(); i++) {
+        if (!inl.at<uchar>(static_cast<int>(i)))
+            continue;
+        const Eigen::Vector3d b1 = R * Eigen::Vector3d(p1[i].x, p1[i].y, 1).normalized();
+        const Eigen::Vector3d b2 = Eigen::Vector3d(p2[i].x, p2[i].y, 1).normalized();
+        parallax += std::acos(std::clamp(b1.dot(b2), -1.0, 1.0));
+        n_inl++;
+    }
+    parallax = n_inl > 0 ? parallax / n_inl * 180 / M_PI : 0;
+    const bool direction_ok = parallax >= 1.0;
+
+    Eigen::Affine3d T_c2_c1 = Eigen::Affine3d::Identity();
+    T_c2_c1.linear()        = R;
+    T_c2_c1.translation()   = direction_ok ? Eigen::Vector3d(scale * t)
+                                           : Eigen::Vector3d(-(R * T_c1_c2_cv.translation()));
+    const Eigen::Affine3d T_c_f      = cam1->getFrame2SensorTransform();
+    const Eigen::Affine3d T_f1_f2    = T_c_f.inverse() * T_c2_c1.inverse() * T_c_f;
+    const Eigen::Affine3d T_f1_f2_cv = getLastKF()->getWorld2FrameTransform() * f->getFrame2WorldTransform();
+    if (!plausibleUpdate(T_f1_f2_cv, T_f1_f2))
+        return false;
+    f->setWorld2FrameTransform((getLastKF()->getFrame2WorldTransform() * T_f1_f2).inverse());
+    std::cerr << "PnP failed: pose from the essential matrix (" << cv::countNonZero(inl) << " inliers, parallax "
+              << parallax << " deg, "
+              << (!direction_ok ? std::string("translation from the motion model")
+                                : (ratios.size() >= 3 ? "scale from " + std::to_string(ratios.size()) + " landmarks"
+                                                      : std::string("scale from the motion model")))
+              << ")" << std::endl;
     return true;
 }
 

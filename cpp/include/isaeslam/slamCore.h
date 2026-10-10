@@ -476,6 +476,16 @@ class SLAMMono : public SLAMCore {
     bool frontEndStep() override;
     bool backEndStep() override;
 
+  private:
+    /*!
+     * @brief PnP failed (too few tracked landmarks): the frame's motion from every feature tracked since the last KF
+     * (2D-2D essential matrix, in camera coordinates), its scale from the landmarks among them when at least 3 are
+     * left, else from the motion model (config mono_essential_fallback)
+     * @return true if the frame pose was set
+     */
+    bool predictEssential(std::shared_ptr<Frame> &f);
+
+    int _essential_streak = 0; //!< Consecutive frames posed by predictEssential (bounded by maxLostFrames())
 };
 
 /*!
