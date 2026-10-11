@@ -230,6 +230,19 @@ bool LoopClosure::keyframeCorrection(unsigned long long ts, Eigen::Affine3d &C) 
     return true;
 }
 
+bool LoopClosure::keyframes(std::vector<std::pair<unsigned long long, Eigen::Affine3d>> &out, unsigned long known,
+                            unsigned long &version) const {
+    std::lock_guard<std::mutex> lock(_graph_mutex);
+    if (_version == known)
+        return false;
+    version = _version;
+    out.clear();
+    out.reserve(_handover.size());
+    for (const auto &h : _handover)
+        out.emplace_back(h.first, _graph.pose(h.second.first));
+    return true;
+}
+
 LoopClosure::Stats LoopClosure::stats() const {
     std::lock_guard<std::mutex> lock(_graph_mutex);
     return _stats;

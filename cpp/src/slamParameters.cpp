@@ -153,6 +153,7 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.dataset_path   = path_config_folder + "/dataset/" + _config.dataset_id + ".yaml";
     _config.slam_mode      = yaml_file["slam_mode"].as<std::string>();
     _config.enable_visu    = yaml_file["enable_visu"].as<int>();
+    _config.ros_map_interface = yaml_file["ros_map_interface"] ? yaml_file["ros_map_interface"].as<int>() : 1;
     _config.multithreading = yaml_file["multithreading"].as<int>();
 
     // Image processing
@@ -174,7 +175,7 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.vio_bias_prior_acc = yaml_file["vio_bias_prior_acc"] ? yaml_file["vio_bias_prior_acc"].as<double>() : 0.3;
     _config.vio_bias_prior_gyr = yaml_file["vio_bias_prior_gyr"] ? yaml_file["vio_bias_prior_gyr"].as<double>() : 0;
     _config.mono_essential_fallback =
-        yaml_file["mono_essential_fallback"] ? yaml_file["mono_essential_fallback"].as<int>() : 1;
+        yaml_file["mono_essential_fallback"] ? yaml_file["mono_essential_fallback"].as<int>() : 0;
     _config.loop_closure     = yaml_file["loop_closure"] ? yaml_file["loop_closure"].as<int>() : 0;
     _config.loop_detector    = yaml_file["loop_detector"] ? yaml_file["loop_detector"].as<std::string>() : "bow";
     _config.loop_vocabulary  = yaml_file["loop_vocabulary"] ? yaml_file["loop_vocabulary"].as<std::string>() : "";

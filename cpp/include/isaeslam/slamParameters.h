@@ -68,6 +68,9 @@ struct Config {
     std::string slam_mode;       //!< SLAM mode (mono, bimono, monovio...)
     bool multithreading;         //!< Allow to run front-end and back-end on different threads (unstable...)
     bool enable_visu;            //!< Allow visualization
+    int ros_map_interface = 1;   //!< ROS node: publish the loop-corrected outputs (TF map -> world, corrected poses, the
+                                 //!< anchored dense meshes and their poses) for a map server such as MeshCSLAM, also
+                                 //!< with enable_visu off
     bool estimate_td;            //!< Estimate time delay between IMU and cameras
     int max_lost_frames = 0;     //!< Consecutive frames without visual pose estimate before re-initializing (0: mode
                                  //!< default, see SLAMCore::maxLostFrames)
@@ -80,7 +83,7 @@ struct Config {
     double vio_bias_prior_gyr = 0;         //!< frame's accelerometer (m/s^2) / gyroscope (rad/s) bias, as standard
                                            //!< deviations (a turn-on bias); 0: none. Default 0.3 / 0
                                            //!< (doc/vio_imu_fix/IMU_FIX_LEDGER.md, 2026-10-10)
-    int mono_essential_fallback = 1;       //!< Mono VO: when PnP fails, pose the frame from the 2D-2D essential matrix
+    int mono_essential_fallback = 0;       //!< Mono VO: when PnP fails, pose the frame from the 2D-2D essential matrix
                                            //!< of the tracked features (scale from the landmarks left or the motion)
     int loop_closure = 0;                  //!< 1: loop closure over the KFs that left the window (doc/loop_closure)
     std::string loop_detector = "bow";     //!< bow | proximity | proximity_bow | learned

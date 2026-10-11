@@ -91,6 +91,7 @@ class SLAMCore {
 
     //! Loop closure, null until the first KF leaves the window or when loop_closure is off (for viewers)
     std::shared_ptr<LoopClosure> getLoopClosure() const { return std::atomic_load(&_loop_closure); }
+    int segment() const { return _segment; } //!< Re-initializations so far (for viewers: LoopClosure::correct)
 
     /*!
      * @brief Detect all types of features for a given sensor with bucketting

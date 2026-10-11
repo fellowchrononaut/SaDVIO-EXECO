@@ -456,8 +456,9 @@ under scale drift, so part of the gap is the evaluation.
 Cost: loop closure 8–28 ms per KF (the rooms, with hundreds of loops, are the most), pose graph 4–90 ms per solve.
 Back end unchanged (3–4 ms per KF).
 
-Defaults: `loop_graph_dof: 0` gives Sim3 in mono. The mono VO essential-matrix fallback is now on by default
-(`doc/vio_imu_fix/IMU_FIX_LEDGER.md`, 2026-10-10); these runs had it off.
+Defaults: `loop_graph_dof: 0` gives Sim3 in mono. These runs had the mono VO essential-matrix fallback off. It was
+then made the default, and reverted after the final matrix: with loop closure it costs mono VO 0.19 → 0.52 m
+(`doc/vio_imu_fix/IMU_FIX_LEDGER.md`, 2026-10-10).
 
 ## 2026-10-10 — Dense submaps placed by the loop closure (MeshCSLAM)
 
@@ -654,3 +655,59 @@ here, not the anchored maps or their merge, which adds about 3 cm of resampling 
 - The ExECoSim result in `doc/dense_vdb_gpdf.md` (4.6 cm, one volume) was simulated images with ground-truth poses.
 - Products unchanged: anchored meshes for MeshCSLAM; the fused view (default `dense_fused_view: 1`) for viewing. The
   fused view is better than the old global map and follows the loop closure.
+
+## 2026-10-10 — Final regression matrix (every shipped default, loop closure on)
+
+`tools/run_final_matrix.sh` (snapshot `fin1`): six configurations × 18 sequences × 2 runs, labels `fin_<config>`.
+Loop closure is on with bag-of-words, the automatic graph and window rule, the VIO bias prior 0.3 and Sim3 in mono.
+The mono VO fallback was on in this matrix; it has since been reverted. Table: `results/final_matrix.md`
+(`tools/final_summary.py`). No run crashed. Medians over the sequences (ATE m, window → loop-closed):
+
+| configuration | window | loop-closed | earlier reference |
+|---|---|---|---|
+| VIO no prior | 0.137 | **0.049** | matrix: 0.169 → 0.050. V2_03 is now 0.39 → 0.19 (was 29.7 m: bias prior); magistrale2 4.7 → 1.3 (was 7.5 → 3.7) |
+| VIO dense prior | 0.062 | **0.039** | window correction automatic (on) |
+| VIO sparse prior | 0.111 | **0.033** | ~0.032 |
+| stereo VO | 0.163 | **0.050** | V2_03: 37 resets, 0.27 m |
+| mono VIO | 0.166 | **0.103** | ~0.12; MH_01/MH_02/V1_03 still 0.36–1.09 m |
+| mono VO | 0.714 | 0.534 | **regression from the fallback**: 0.465 → 0.191 without it (`lc_mono7`); fallback off again |
+
+The other configurations are as good as or better than before. The bias prior gives VIO no prior its first V2_03 run
+without a failure.
+
+## 2026-10-10 — ROS map interface (`ros_map_interface`, `doc/loop_closure/ros_map_interface.md`)
+
+What the node publishes for a map server (MeshCSLAM), with standard messages, also when `enable_visu` is 0:
+- TF `map -> world` (the loop closure's correction of the odometry frame) and `vo_pose_corrected`;
+- `keyframes_corrected` (`nav_msgs/Path`, latched);
+- `dense_anchor_mesh` (each closed anchor's mesh once, in its anchor frame, marker pose = anchor pose);
+- `dense_anchor_poses` (`nav_msgs/Path`, latched, refreshed at every map save).
+
+Supporting code:
+- `LoopClosure::keyframes`, the `AnchoredMaps` outbox (off until a consumer enables it), `SLAMCore::segment`;
+- the loop closure markers and the anchored `dense_mesh` are in `map` when the interface is on.
+
+Live check (`run_sadvio_ros.py --record-interface`, `record_map_interface.py`): room1 ROS 2 bag, stereo VIO with the
+dense prior, loop closure, zncc anchored meshes (SGBM: this checks the plumbing, not the meshes), `enable_visu: 0`.
+Result: `results/ros_map_interface_room1.json`.
+- 2703 frames, each with a corrected pose and a `map -> world`. The transform changed 323 times; it stays under 2 cm
+  because the dense prior's window correction moves the odometry itself.
+- `keyframes_corrected` was sent 654 times and ends with all 1228 keyframes.
+- 1228 anchor meshes, each id once (329 k triangles).
+- The last anchor pose list holds 1225 anchors, all matching a mesh. The last 3 closed after the last save; they are
+  in `anchors.csv` only, since the final save happens as the process exits.
+- After their meshes were sent, anchors moved by up to 8.4 cm (mean 1.7 cm) in the pose list, so re-placement is
+  exercised.
+
+Also fixed on the way:
+- `run_sadvio_ros.py` now pins the node (`--cpus`, `--nice`), as the batch runner does, and waits up to 600 s for the
+  node's final dense files.
+- The recorder opts out of rclpy's signal handling, which swallowed SIGINT and SIGTERM, and writes its summary every
+  second.
+
+Follow-ups:
+- With the dense prior, room1's loop closure moved the window 450 times, and every move starts a new submap. The
+  fused methods then get submaps of a few keyframes (515 volumes in a first TSDF attempt). Better: on a move by C,
+  re-anchor the open submap (`T_w_anchor := C T_w_anchor`) and continue it.
+- Mono VO: the essential-matrix fallback as a scale break in the Sim3 graph (`IMU_FIX_LEDGER.md`).
+- The open question of long-horizon TSDF fusion (fused view, above).

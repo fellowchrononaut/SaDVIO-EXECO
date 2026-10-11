@@ -1917,3 +1917,20 @@ With 3× fewer resets the ATE stays at the level of no fallback. Mono VO stays n
 σ 0.3 removes the V2_03 failure and improves V2_02, room2, room5 and magistrale2. It costs a few centimetres on MH_01
 and MH_03. σ 0.1 holds the bias too hard (V1_02 0.07 → 0.19). **Default `vio_bias_prior_acc: 0.3`**, gyroscope 0
 (its bias did not run away). This changes the VIO no prior odometry: runs before this date used no bias prior.
+
+**Reverted to off (2026-10-10, final regression matrix).** With loop closure on (the shipped default), the fallback
+makes mono VO's loop closure much worse. Same 17 sequences, 2 runs each:
+
+| | odometry ATE (median) | loop-closed ATE (median) | room1 / room2 / room3 / room5 loop-closed |
+|---|---|---|---|
+| fallback off, Sim3 loop closure (`lc_mono7`) | 0.465 | **0.191** | 0.13 / 0.12 / 0.08 / 0.17 |
+| fallback on, Sim3 loop closure (`fin_vo_mono`) | 0.705 | 0.518 | 0.55 / 0.67 / 0.46 / 0.52 |
+
+The loops are found as often, but the pose graph rejects more of them (room5 65–71 against 7–23) or cannot correct
+with them. A re-initialization starts a segment with a free scale, which the Sim3 graph rescales through loops. The
+fallback turns it into a scale jump inside one segment, against odometry edges that only allow a slow scale change
+(σ 0.05 in log scale per edge). The fallback's own A/B above had loop closure off, so it could not show this.
+`mono_essential_fallback: 0` by default again.
+
+Follow-up, not built: mark a keyframe posed by the fallback as a scale break, so that the pose graph's odometry edges
+across it get a loose scale σ. The odometry would keep the fallback's continuity, and the loop closure its free scale.

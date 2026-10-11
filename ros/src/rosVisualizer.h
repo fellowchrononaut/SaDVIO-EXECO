@@ -18,6 +18,7 @@
 #include <std_msgs/msg/header.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_broadcaster.h>
+#include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
 #include "isaeslam/data/mesh/mesh.h"
@@ -79,7 +80,10 @@ sensor_msgs::msg::PointCloud2::SharedPtr convertToPointCloud2(const std::vector<
 class RosVisualizer : public rclcpp::Node {
 
   public:
-    RosVisualizer() : Node("slam_publisher") {
+    // visu: the viewer topics (enable_visu); map_interface: the loop-corrected outputs for a map server
+    // (ros_map_interface, doc/loop_closure/ros_map_interface.md)
+    RosVisualizer(bool visu = true, bool map_interface = true)
+        : Node("slam_publisher"), _visu(visu), _map_interface(map_interface) {
         std::cout << "\n Creation of ROS vizualizer" << std::endl;
 
         _pub_image_matches_in_time  = this->create_publisher<sensor_msgs::msg::Image>("image_matches_in_time", 1000);
@@ -103,6 +107,16 @@ class RosVisualizer : public rclcpp::Node {
         _pub_loop_edges             = this->create_publisher<visualization_msgs::msg::Marker>("loop_edges", 10);
         _pub_loop_new               = this->create_publisher<visualization_msgs::msg::Marker>("loop_new", 10);
         _tf_broadcaster             = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+        if (_map_interface) {
+            // The latest corrected poses are kept for late subscribers; anchor meshes are sent once each (reliable,
+            // deep queue: a map server should be up first, the anchor PLYs on disk are the fallback)
+            const auto latched = rclcpp::QoS(1).reliable().transient_local();
+            _pub_vo_pose_corr   = this->create_publisher<geometry_msgs::msg::PoseStamped>("vo_pose_corrected", 100);
+            _pub_kf_corr        = this->create_publisher<nav_msgs::msg::Path>("keyframes_corrected", latched);
+            _pub_anchor_poses   = this->create_publisher<nav_msgs::msg::Path>("dense_anchor_poses", latched);
+            _pub_anchor_mesh    = this->create_publisher<visualization_msgs::msg::Marker>(
+                "dense_anchor_mesh", rclcpp::QoS(1000).reliable());
+        }
 
         _vo_traj_msg.type    = visualization_msgs::msg::Marker::LINE_STRIP;
         _vo_traj_msg.color.a = 1.0;
@@ -357,6 +371,102 @@ class RosVisualizer : public rclcpp::Node {
         _pub_vo_pose->publish(Twc_msg);
     }
 
+    static geometry_msgs::msg::Pose toPose(const Eigen::Affine3d &T) {
+        geometry_msgs::msg::Pose p;
+        p.position.x = T.translation().x(), p.position.y = T.translation().y(), p.position.z = T.translation().z();
+        const Eigen::Quaterniond q(T.linear());
+        p.orientation.x = q.x(), p.orientation.y = q.y(), p.orientation.z = q.z(), p.orientation.w = q.w();
+        return p;
+    }
+
+    // Map interface, per frame: TF map -> world (the loop closure's current correction of the odometry frame, as the
+    // usual map -> odom; the identity until a loop, the rigid part of the similarity in mono VO) and the frame's
+    // corrected pose
+    void publishCorrectedFrame(const std::shared_ptr<isae::Frame> frame, isae::SLAMCore &SLAM) {
+        const std::shared_ptr<isae::LoopClosure> lc = SLAM.getLoopClosure();
+        const int seg                = SLAM.segment();
+        const Eigen::Affine3d T_w_f  = frame->getFrame2WorldTransform();
+        const Eigen::Affine3d T_m_f  = lc ? lc->correct(T_w_f, seg) : T_w_f;
+        const Eigen::Affine3d T_m_w  = T_m_f * T_w_f.inverse();
+        const rclcpp::Time stamp(frame->getTimestamp());
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header.stamp    = stamp;
+        tf.header.frame_id = "map";
+        tf.child_frame_id  = "world";
+        const geometry_msgs::msg::Pose pw = toPose(T_m_w);
+        tf.transform.translation.x = pw.position.x;
+        tf.transform.translation.y = pw.position.y;
+        tf.transform.translation.z = pw.position.z;
+        tf.transform.rotation      = pw.orientation;
+        _tf_broadcaster->sendTransform(tf);
+        geometry_msgs::msg::PoseStamped ps;
+        ps.header.stamp    = stamp;
+        ps.header.frame_id = "map";
+        ps.pose            = toPose(T_m_f);
+        _pub_vo_pose_corr->publish(ps);
+    }
+
+    // Map interface: every keyframe's corrected pose (stamped with the keyframe), after a new keyframe or a solve
+    void publishCorrectedKeyframes(const std::vector<std::pair<unsigned long long, Eigen::Affine3d>> &kfs) {
+        nav_msgs::msg::Path path;
+        path.header.stamp    = rclcpp::Node::now();
+        path.header.frame_id = "map";
+        for (const auto &k : kfs) {
+            geometry_msgs::msg::PoseStamped ps;
+            ps.header.stamp    = rclcpp::Time(k.first);
+            ps.header.frame_id = "map";
+            ps.pose            = toPose(k.second);
+            path.poses.push_back(ps);
+        }
+        _pub_kf_corr->publish(path);
+    }
+
+    // Map interface: a closed anchor's mesh, once: vertices in the anchor frame, marker pose = the anchor's corrected
+    // pose when it closed, id = anchor id, stamp = anchor keyframe. Later corrections come in dense_anchor_poses
+    void publishAnchorMesh(const isae::AnchoredMaps::Closed &a) {
+        visualization_msgs::msg::Marker m;
+        m.header.stamp    = rclcpp::Time(a.ts);
+        m.header.frame_id = "map";
+        m.ns              = "dense_anchor";
+        m.id              = a.id;
+        m.type            = a.mesh.faces.empty() ? visualization_msgs::msg::Marker::POINTS
+                                                 : visualization_msgs::msg::Marker::TRIANGLE_LIST;
+        m.action          = visualization_msgs::msg::Marker::ADD;
+        m.pose            = toPose(a.T_w_anchor);
+        m.scale.x = m.scale.y = m.scale.z = a.mesh.faces.empty() ? 0.02 : 1.0;
+        m.color.r = m.color.g = m.color.b = 0.7f;
+        m.color.a = 1.0f;
+        auto pt = [](const Eigen::Vector3d &v) {
+            geometry_msgs::msg::Point p;
+            p.x = v.x(), p.y = v.y(), p.z = v.z();
+            return p;
+        };
+        if (a.mesh.faces.empty()) {
+            for (const auto &v : a.mesh.vertices)
+                m.points.push_back(pt(v));
+        } else {
+            for (const auto &f : a.mesh.faces)
+                for (int k = 0; k < 3; k++)
+                    m.points.push_back(pt(a.mesh.vertices[f(k)]));
+        }
+        _pub_anchor_mesh->publish(m);
+    }
+
+    // Map interface: every closed anchor's corrected pose (stamp = anchor keyframe, in anchor id order)
+    void publishAnchorPoses(const std::vector<isae::AnchoredMaps::Pose> &poses) {
+        nav_msgs::msg::Path path;
+        path.header.stamp    = rclcpp::Node::now();
+        path.header.frame_id = "map";
+        for (const auto &p : poses) {
+            geometry_msgs::msg::PoseStamped ps;
+            ps.header.stamp    = rclcpp::Time(p.ts);
+            ps.header.frame_id = "map";
+            ps.pose            = toPose(p.T_w_anchor);
+            path.poses.push_back(ps);
+        }
+        _pub_anchor_poses->publish(path);
+    }
+
     void publishLocalMap(const std::shared_ptr<isae::LocalMap> map) {
 
         _vo_traj_msg.header.stamp    = rclcpp::Node::now();
@@ -598,7 +708,7 @@ class RosVisualizer : public rclcpp::Node {
     void publishDenseMesh(const isae::DenseMesh& dm) {
         if (dm.vertices.empty() || dm.faces.empty()) {
             visualization_msgs::msg::Marker clear_faces;
-            clear_faces.header.frame_id = "world";
+            clear_faces.header.frame_id = _dense_frame;
             clear_faces.header.stamp    = rclcpp::Node::now();
             clear_faces.ns              = "dense_mesh";
             clear_faces.id              = 10;
@@ -606,7 +716,7 @@ class RosVisualizer : public rclcpp::Node {
             _pub_dense_mesh->publish(clear_faces);
 
             visualization_msgs::msg::Marker clear_edges;
-            clear_edges.header.frame_id = "world";
+            clear_edges.header.frame_id = _dense_frame;
             clear_edges.header.stamp    = clear_faces.header.stamp;
             clear_edges.ns              = "dense_mesh_edges";
             clear_edges.id              = 11;
@@ -616,7 +726,7 @@ class RosVisualizer : public rclcpp::Node {
         }
 
         visualization_msgs::msg::Marker marker;
-        marker.header.frame_id = "world";
+        marker.header.frame_id = _dense_frame;
         marker.header.stamp    = rclcpp::Node::now();
         marker.type            = visualization_msgs::msg::Marker::TRIANGLE_LIST;
         marker.action          = visualization_msgs::msg::Marker::ADD;
@@ -711,7 +821,7 @@ class RosVisualizer : public rclcpp::Node {
                          float g, float b, const std::string &ns) {
             visualization_msgs::msg::Marker m;
             m.header.stamp    = rclcpp::Node::now();
-            m.header.frame_id = "world";
+            m.header.frame_id = _map_interface ? "map" : "world"; // loop-corrected positions
             m.ns              = ns;
             m.type            = visualization_msgs::msg::Marker::LINE_LIST;
             m.action          = visualization_msgs::msg::Marker::ADD;
@@ -737,7 +847,11 @@ class RosVisualizer : public rclcpp::Node {
 
     void runVisualizer(std::shared_ptr<isae::SLAMCore> SLAM) {
 
-        unsigned long loop_version = 0;
+        unsigned long loop_version = 0, kf_version = 0;
+        unsigned anchor_version    = 0;
+        std::vector<std::pair<unsigned long long, Eigen::Affine3d>> kfs;
+        std::vector<isae::AnchoredMaps::Closed> closed;
+        std::vector<isae::AnchoredMaps::Pose> anchor_poses;
         auto loop_last             = std::chrono::steady_clock::now();
         while (true) {
 
@@ -745,38 +859,60 @@ class RosVisualizer : public rclcpp::Node {
             const std::shared_ptr<isae::LoopClosure> lc = SLAM->getLoopClosure();
             if (lc && std::chrono::steady_clock::now() - loop_last > std::chrono::milliseconds(200)) {
                 isae::LoopClosure::Display d;
-                if (lc->display(d, loop_version)) {
+                if (_visu && lc->display(d, loop_version)) {
                     publishLoopClosure(d);
                     loop_version = d.version;
                 }
+                if (_map_interface && lc->keyframes(kfs, kf_version, kf_version))
+                    publishCorrectedKeyframes(kfs);
                 loop_last = std::chrono::steady_clock::now();
             }
 
             if (SLAM->_frame_to_display) {
-                publishImage(SLAM->_frame_to_display);
-                publishFrame(SLAM->_frame_to_display);
+                const std::shared_ptr<isae::Frame> f = SLAM->_frame_to_display;
                 SLAM->_frame_to_display.reset();
+                if (_visu) {
+                    publishImage(f);
+                    publishFrame(f);
+                }
+                if (_map_interface)
+                    publishCorrectedFrame(f, *SLAM);
             }
 
             if (SLAM->_local_map_to_display) {
-                publishLocalMap(SLAM->_local_map_to_display);
-                publishLocalMapCloud(SLAM->_local_map_to_display);
+                if (_visu) {
+                    publishLocalMap(SLAM->_local_map_to_display);
+                    publishLocalMapCloud(SLAM->_local_map_to_display);
+                }
                 SLAM->_local_map_to_display.reset();
             }
 
             if (SLAM->_mesh_to_display) {
-                publishMesh(SLAM->_mesh_to_display);
+                if (_visu)
+                    publishMesh(SLAM->_mesh_to_display);
                 SLAM->_mesh_to_display.reset();
             }
 
             // Poll for dense stereo results (depth image, GP mesh, dense cloud)
             if (SLAM->_depth_injector) {
                 isae::DenseResult result;
-                if (SLAM->_depth_injector->pollResult(result)) {
+                // With anchored maps the global dense mesh is placed at the corrected anchor poses: frame map
+                _dense_frame = _map_interface && SLAM->_depth_injector->anchoredMaps() ? "map" : "world";
+                if (SLAM->_depth_injector->pollResult(result) && _visu) {
                     publishDenseSGBMImages(result);
                     publishDenseDepth(result.depth_img);
                     publishDenseMesh(result.mesh);
                     publishDenseCloud(result);
+                }
+                // Map interface: closed anchors once, and every anchor's corrected pose when it changes
+                isae::AnchoredMaps *am = SLAM->_depth_injector->anchoredMaps();
+                if (_map_interface && am) {
+                    am->enableOutbox();
+                    am->takeClosed(closed);
+                    for (const auto &a : closed)
+                        publishAnchorMesh(a);
+                    if (am->poses(anchor_poses, anchor_version))
+                        publishAnchorPoses(anchor_poses);
                 }
             }
 
@@ -796,6 +932,11 @@ class RosVisualizer : public rclcpp::Node {
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _pub_vo_pose;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _pub_loop_traj, _pub_loop_edges, _pub_loop_new;
     std::shared_ptr<tf2_ros::TransformBroadcaster> _tf_broadcaster;
+    bool _visu, _map_interface;
+    std::string _dense_frame = "world";
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _pub_vo_pose_corr;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr _pub_kf_corr, _pub_anchor_poses;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _pub_anchor_mesh;
     visualization_msgs::msg::Marker _vo_traj_msg;
     visualization_msgs::msg::Marker _points_local, _points_global, _points_local1, _lines_local, _lines_global;
     visualization_msgs::msg::Marker _mesh_line_list;

@@ -5,6 +5,7 @@
 #include "isaeslam/stereo/GPGlobalMap.h"
 #include "isaeslam/stereo/VDBGPDFMap.h"
 #include <Eigen/Geometry>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -86,6 +87,24 @@ class AnchoredMaps {
 
     size_t size() const { return _anchors.size(); }
 
+    // Outbox for publishers (the ROS map interface; off by default so that nothing piles up without a consumer).
+    // A closed anchor's geometry once, in its anchor frame, with its pose at that time; and every anchor's corrected
+    // pose, refreshed at every save. Thread-safe
+    struct Closed {
+        int id;
+        unsigned long long ts;
+        Eigen::Affine3d T_w_anchor; // corrected when it closed
+        DenseMesh mesh;             // anchor frame
+    };
+    struct Pose {
+        int id;
+        unsigned long long ts;
+        Eigen::Affine3d T_w_anchor; // corrected
+    };
+    void enableOutbox() { _outbox_on = true; }
+    void takeClosed(std::vector<Closed>& out);
+    bool poses(std::vector<Pose>& out, unsigned& known);
+
   private:
     // A volume of the fused view, placed by an anchor: a vdbgpdf submap's own volume, or a TSDF chunk of geometry
     struct View {
@@ -101,6 +120,7 @@ class AnchoredMaps {
     void addGeometryToView(const Anchor& a);
     void updateFused(const KeyframeCorrection& corr, bool full);
     void writeAnchors(const KeyframeCorrection& corr);
+    void post(const Anchor& a); // a closed anchor to the outbox
     KeyframeCorrection currentCorrection();
 
     AnchoredMapsConfig _cfg;
@@ -113,6 +133,11 @@ class AnchoredMaps {
     int _keyframes = 0;
     std::mutex _corr_mtx;
     KeyframeCorrection _corr;
+    std::atomic<bool> _outbox_on{false};
+    std::mutex _out_mtx;
+    std::vector<Closed> _closed_out;
+    std::vector<Pose> _poses_out;
+    unsigned _poses_version = 0;
 };
 
 DenseMesh transformMesh(const DenseMesh& m, const Eigen::Affine3d& T);

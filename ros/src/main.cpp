@@ -13,9 +13,11 @@ int main(int argc, char **argv) {
     std::shared_ptr<isae::SLAMParameters> slam_param = std::make_shared<isae::SLAMParameters>(argv[1]);
 
     // Create the ROS Visualizer
+    // The viewer topics (enable_visu) and the map interface for a map server (ros_map_interface) share one node
     std::shared_ptr<RosVisualizer> prosviz;
-    if (slam_param->_config.enable_visu)
-        prosviz = std::make_shared<RosVisualizer>();
+    if (slam_param->_config.enable_visu || slam_param->_config.ros_map_interface)
+        prosviz = std::make_shared<RosVisualizer>(slam_param->_config.enable_visu,
+                                                  slam_param->_config.ros_map_interface == 1);
     else
         prosviz = nullptr;
 
@@ -50,7 +52,7 @@ int main(int argc, char **argv) {
     }
 
     // Start the vizu thread
-    if (slam_param->_config.enable_visu) {
+    if (prosviz) {
         std::thread vizu_thread(&RosVisualizer::runVisualizer, prosviz, SLAM);
         vizu_thread.detach();
     }

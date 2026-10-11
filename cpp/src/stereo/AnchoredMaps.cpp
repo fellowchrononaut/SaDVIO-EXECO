@@ -57,6 +57,7 @@ void AnchoredMaps::addKeyframe(unsigned long long ts, int segment, int epoch, co
     a->closed     = true;
     a->mesh       = std::move(mesh_cam);
     writeAnchorPly(*a);
+    post(*a);
     _anchors.push_back(std::move(a));
     if (_cfg.fused_view != 0 && _cfg.view_from_geometry)
         addGeometryToView(*_anchors.back());
@@ -131,6 +132,7 @@ void AnchoredMaps::closeOpenSubmap(const Mesher& mesher) {
     a.mesh    = mesher(a);
     a.closed  = true;
     writeAnchorPly(a);
+    post(a);
     if (_cfg.fused_view != 0 && a.vdb && !_cfg.view_from_geometry) {
         // vdbgpdf: the submap's volume itself goes to the fused view
         View v;
@@ -164,6 +166,29 @@ Eigen::Affine3d AnchoredMaps::correction(const Anchor& a, const KeyframeCorrecti
     if (corr && !corr(a.ts, C))
         C = Eigen::Affine3d::Identity();
     return C;
+}
+
+void AnchoredMaps::post(const Anchor& a) {
+    if (!_outbox_on)
+        return;
+    const Eigen::Affine3d T = correction(a, currentCorrection()) * a.T_w_anchor;
+    std::lock_guard<std::mutex> lock(_out_mtx);
+    _closed_out.push_back({a.id, a.ts, T, a.mesh});
+}
+
+void AnchoredMaps::takeClosed(std::vector<Closed>& out) {
+    std::lock_guard<std::mutex> lock(_out_mtx);
+    out.clear();
+    out.swap(_closed_out);
+}
+
+bool AnchoredMaps::poses(std::vector<Pose>& out, unsigned& known) {
+    std::lock_guard<std::mutex> lock(_out_mtx);
+    if (_poses_version == known)
+        return false;
+    known = _poses_version;
+    out   = _poses_out;
+    return true;
 }
 
 AnchoredMaps::KeyframeCorrection AnchoredMaps::currentCorrection() {
@@ -256,9 +281,12 @@ void AnchoredMaps::writeAnchors(const KeyframeCorrection& corr) {
             << q.x() << "," << q.y() << "," << q.z() << "," << q.w();
     };
     DenseMesh out;
+    std::vector<Pose> poses;
     for (const auto& ap : _anchors) {
         const Anchor& a         = *ap;
         const Eigen::Affine3d T = correction(a, corr) * a.T_w_anchor;
+        if (a.closed)
+            poses.push_back({a.id, a.ts, T});
         csv << std::setprecision(10) << a.id << "," << a.ts << "," << a.segment << "," << a.n_kf << ","
             << (a.closed ? 1 : 0);
         pose(a.T_w_anchor);
@@ -280,6 +308,11 @@ void AnchoredMaps::writeAnchors(const KeyframeCorrection& corr) {
     if (out.face_normals.size() != out.faces.size())
         out.face_normals.clear();
     _global = std::move(out);
+    if (_outbox_on) {
+        std::lock_guard<std::mutex> lock(_out_mtx);
+        _poses_out = std::move(poses);
+        ++_poses_version;
+    }
     if (!writeDenseMeshPly(_global, _cfg.mesh_path, "SaDVIO dense anchored map (anchors at corrected poses)"))
         std::cerr << "[DenseMesh] could not write " << _cfg.mesh_path << std::endl;
 }

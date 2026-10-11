@@ -97,6 +97,14 @@ class LoopClosure {
      */
     bool keyframeCorrection(unsigned long long ts, Eigen::Affine3d &C) const;
 
+    /*!
+     * @brief Every processed keyframe's corrected pose (frame to world), by timestamp, if anything changed since
+     * version known (a new keyframe or a pose graph solve); version is set to the current one. For publishers
+     * @return false if nothing changed
+     */
+    bool keyframes(std::vector<std::pair<unsigned long long, Eigen::Affine3d>> &out, unsigned long known,
+                   unsigned long &version) const;
+
     Stats stats() const;
 
     /*!

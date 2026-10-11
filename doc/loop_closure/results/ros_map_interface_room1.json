@@ -1,0 +1,21 @@
+{
+ "counts": {
+  "vo_pose_corrected": 2703,
+  "keyframes_corrected": 654,
+  "dense_anchor_mesh": 1228,
+  "dense_anchor_poses": 246,
+  "tf_map_world": 2703
+ },
+ "tf_map_world_changes": 323,
+ "tf_map_world_max_offset_m": 0.01915833671436547,
+ "keyframes_in_last_path": 1228,
+ "anchor_meshes": 1228,
+ "anchor_mesh_ids_unique": true,
+ "anchor_mesh_triangles": 328808,
+ "anchors_in_last_poses": 1225,
+ "anchor_poses_matching_a_mesh": 1225,
+ "anchor_moved_since_mesh_m": {
+  "max": 0.08360133494001568,
+  "mean": 0.017136167465850553
+ }
+}

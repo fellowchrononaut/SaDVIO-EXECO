@@ -8,6 +8,8 @@ dataset_id : "airsim"
 ## slam mode in {mono, bimono, nofov, monovio, bimonovio}
 slam_mode : "mono"
 enable_visu : 1
+ros_map_interface : 1   # ROS node: TF map -> world (the loop correction), vo_pose_corrected, keyframes_corrected,
+                        # dense_anchor_mesh, dense_anchor_poses (doc/loop_closure/ros_map_interface.md); also with enable_visu 0
 multithreading : 0
 
 ## contrast enhancer parameters (0: nothing, 1: clahe, 2: histogram equalization, 
@@ -49,8 +51,10 @@ reinit_carry_max_age_vo: 2.0
 
 ## mono VO: when PnP fails (too few tracked landmarks), pose the frame from the 2D-2D essential matrix of all the
 ## tracked features (scale from the landmarks left, else from the motion model; the translation direction only with
-## 1 deg of parallax, else from the motion model) and vote a KF. Other modes ignore it
-mono_essential_fallback: 1
+## 1 deg of parallax, else from the motion model) and vote a KF. Other modes ignore it. Off by default: it turns
+## re-initializations (free scale for the Sim3 loop closure) into scale jumps inside a segment, and with loop closure
+## on mono VO's median loop-closed ATE went 0.19 -> 0.52 m (doc/vio_imu_fix/IMU_FIX_LEDGER.md, 2026-10-10)
+mono_essential_fallback: 0
 ## VIO without a marginalization prior: zero-mean prior on the window frames' biases (standard deviations, a turn-on
 ## bias), so that they stay physical when vision is weak; 0: none
 vio_bias_prior_acc: 0.3     # m/s^2 (fixes the V2_03 bias runaway; median ATE 0.146 -> 0.129 m over 18 sequences)

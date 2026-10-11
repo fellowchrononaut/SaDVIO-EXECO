@@ -32,6 +32,7 @@ find_package(rcutils REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -96,7 +97,7 @@ install(
 # Executables generation
 # -------------------------------------------------------------------
 add_executable(vio_ros ./src/main.cpp)
-ament_target_dependencies(vio_ros rclcpp sensor_msgs pcl_conversions visualization_msgs tf2_ros tf2_geometry_msgs std_msgs cv_bridge)
+ament_target_dependencies(vio_ros rclcpp sensor_msgs pcl_conversions visualization_msgs nav_msgs tf2_ros tf2_geometry_msgs std_msgs cv_bridge)
 target_link_libraries(vio_ros ${PROJECT_NAME})
 
 install(TARGETS vio_ros

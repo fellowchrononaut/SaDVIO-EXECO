@@ -150,6 +150,9 @@ class MarginalDepthInjector {
     // another odometry world, so the next one starts a new submap
     void worldMoved() { ++_world_epoch; }
 
+    // Anchored maps, for the ROS map interface: null without dense_anchored. Its outbox is thread-safe
+    AnchoredMaps* anchoredMaps() { return _anchors.get(); }
+
     // End of the run: the keyframes still queued are processed, then the final files are written (the last submap
     // closed, the anchored map and the fused view's full rebuild). Idempotent; the destructor does the same without
     // waiting for the queue. Called on SIGTERM / SIGINT by main (batch runs end with pkill) and when ROS shuts down

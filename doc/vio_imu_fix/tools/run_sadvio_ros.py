@@ -8,7 +8,11 @@ offline results are directly comparable. The node runs in the container's dense_
 played with `ros2 bag play` (rate 1, camera + IMU topics only) on an isolated ROS domain (localhost only).
 The node is stopped once the bag has finished and its outputs have not grown for --stall seconds.
 
+With --record-interface, record_map_interface.py listens to the map interface topics (ros_map_interface) during the
+run and writes interface.json next to the logs.
+
 Usage: run_sadvio_ros.py --label ros_vo --seq rs_13_34_21 --mode bimono --runs 1 [--set key=value ...]
+       [--record-interface]
 """
 import argparse, json, os, shutil, subprocess, time
 from pathlib import Path
@@ -26,7 +30,8 @@ ENV = ['-e', 'ROS_DOMAIN_ID=77', '-e', 'ROS_LOCALHOST_ONLY=1']
 SRC = f'source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash'
 
 
-def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: float):
+def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: float, record: bool = False,
+             cpus: str = None, nice: int = 0):
     run_dir = rs.SCRATCH / result_dir.relative_to(rs.EVAL / 'runs')
     if run_dir.exists():
         subprocess.run(['docker', 'exec', rs.CONTAINER, 'rm', '-rf', rs.to_container(run_dir)], check=True)
@@ -36,10 +41,17 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
     rs.write_config(cfg_dir, mode, overrides)
     ccfg = rs.to_container(cfg_dir)
 
+    # Optional CPU limits, as run_sadvio.py: pin the node to a core list and lower its priority
+    limit = (f'nice -n {nice} ' if nice else '') + (f'taskset -c {cpus} ' if cpus else '')
     t0 = time.time()
     node = subprocess.Popen(['docker', 'exec', *ENV, '-e', 'EXECO_PERFRAME_LOG=1', '-w', rs.to_container(run_dir),
                              rs.CONTAINER, 'bash', '-c',
-                             f'{SRC} && exec {NODE} {ccfg} > stdout.log 2>&1'])
+                             f'{SRC} && exec {limit}{NODE} {ccfg} > stdout.log 2>&1'])
+    recorder = None
+    if record:
+        shutil.copy(Path(__file__).with_name('record_map_interface.py'), run_dir / 'record_map_interface.py')
+        recorder = subprocess.Popen(['docker', 'exec', *ENV, '-w', rs.to_container(run_dir), rs.CONTAINER, 'bash', '-c',
+                                     f'{SRC} && exec python3 record_map_interface.py interface.json'])
     time.sleep(8)                                        # node start-up (config, sensors, subscriptions)
     play = subprocess.run(['docker', 'exec', *ENV, rs.CONTAINER, 'bash', '-c',
                            f'{SRC} && ros2 bag play {BAGS[seq]} --rate 1.0 --topics {" ".join(RS_TOPICS if seq.startswith("rs_") else TUMVI_TOPICS)}'],
@@ -54,7 +66,15 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
     reason = f'exited({node.returncode})' if node.poll() is not None else 'stall'
     if node.poll() is None:
         subprocess.run(['docker', 'exec', rs.CONTAINER, 'pkill', '-f', f'vio_ros {ccfg}'])
-        node.wait(timeout=30)
+        node.wait(timeout=600)  # the dense map writes its final files on SIGTERM
+    if recorder:
+        subprocess.run(['docker', 'exec', rs.CONTAINER, 'pkill', '-INT', '-f', 'record_map_interface.py interface.json'])
+        try:
+            recorder.wait(timeout=30)
+        except subprocess.TimeoutExpired:  # it writes its summary every second: nothing is lost
+            subprocess.run(['docker', 'exec', rs.CONTAINER, 'pkill', '-KILL', '-f',
+                            'record_map_interface.py interface.json'])
+            recorder.wait(timeout=30)
     meta = dict(seq=seq, mode=mode, overrides=overrides, end_reason=reason, engine='ros',
                 wall_s=round(time.time() - t0 - (stall if reason == 'stall' else 0), 1), bag_play_s=round(t_play, 1),
                 bag_play_rc=play.returncode, binary=NODE, started=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(t0)))
@@ -79,12 +99,16 @@ def main():
     ap.add_argument('--runs', type=int, default=1)
     ap.add_argument('--set', action='append', default=[])
     ap.add_argument('--stall', type=float, default=15)
+    ap.add_argument('--record-interface', action='store_true')
+    ap.add_argument('--cpus', help='pin the node to these cores (taskset list, e.g. 8-15)')
+    ap.add_argument('--nice', type=int, default=0, help='run the node at this nice level')
     a = ap.parse_args()
     overrides = dict(kv.split('=', 1) for kv in a.set)
     if a.seq in rs.SEQ_DATASET:
         overrides.setdefault('dataset_id', rs.SEQ_DATASET[a.seq])
     for i in range(a.runs):
-        run_once(rs.EVAL / 'runs' / a.label / a.seq / a.mode / f'run_{i:02d}', a.seq, a.mode, overrides, a.stall)
+        run_once(rs.EVAL / 'runs' / a.label / a.seq / a.mode / f'run_{i:02d}', a.seq, a.mode, overrides, a.stall,
+                 a.record_interface, a.cpus, a.nice)
 
 
 if __name__ == '__main__':
