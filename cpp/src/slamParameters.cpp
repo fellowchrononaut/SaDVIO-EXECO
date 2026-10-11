@@ -79,10 +79,12 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         errors.push_back("vio_bias_prior_acc and vio_bias_prior_gyr must be >= 0 (0: none)");
     if (cfg.mono_essential_fallback != 0 && cfg.mono_essential_fallback != 1)
         errors.push_back("mono_essential_fallback must be 0 or 1");
-    if (cfg.dense_submap_kfs < 0)
-        errors.push_back("dense_submap_kfs must be >= 0");
-    if (cfg.dense_submap_kfs > 0 && (!cfg.dense_depth || cfg.dense_mesh_method != "vdbgpdf"))
-        warnings.push_back("dense_submap_kfs has no effect without dense_depth and dense_mesh_method vdbgpdf");
+    if (cfg.dense_submap_kfs < 1 || cfg.dense_anchored_save_every < 0)
+        errors.push_back("dense_submap_kfs must be >= 1 and dense_anchored_save_every >= 0");
+    if (cfg.dense_fused_view < 0 || cfg.dense_fused_view > 2)
+        errors.push_back("dense_fused_view must be 0 (off), 1 (at every save and at the end) or 2 (at the end)");
+    if (cfg.dense_anchored && !cfg.dense_depth)
+        warnings.push_back("dense_anchored has no effect without dense_depth");
     if (cfg.loop_closure != 0 && cfg.loop_closure != 1)
         errors.push_back("loop_closure must be 0 or 1");
     if (cfg.loop_closure == 1) {
@@ -330,8 +332,18 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         _config.dense_vdbgpdf_mesh_every = yaml_file["dense_vdbgpdf_mesh_every"].as<int>();
     if (yaml_file["dense_vdbgpdf_mesh_path"])
         _config.dense_vdbgpdf_mesh_path = yaml_file["dense_vdbgpdf_mesh_path"].as<std::string>();
+    if (yaml_file["dense_anchored"])
+        _config.dense_anchored = yaml_file["dense_anchored"].as<bool>();
     if (yaml_file["dense_submap_kfs"])
         _config.dense_submap_kfs = yaml_file["dense_submap_kfs"].as<int>();
+    if (yaml_file["dense_anchored_mesh_path"])
+        _config.dense_anchored_mesh_path = yaml_file["dense_anchored_mesh_path"].as<std::string>();
+    if (yaml_file["dense_anchored_save_every"])
+        _config.dense_anchored_save_every = yaml_file["dense_anchored_save_every"].as<int>();
+    if (yaml_file["dense_fused_view"])
+        _config.dense_fused_view = yaml_file["dense_fused_view"].as<int>();
+    if (yaml_file["dense_fused_mesh_path"])
+        _config.dense_fused_mesh_path = yaml_file["dense_fused_mesh_path"].as<std::string>();
     if (yaml_file["dense_pd_steiner_spacing"])
         _config.dense_pd_steiner_spacing = yaml_file["dense_pd_steiner_spacing"].as<int>();
     if (yaml_file["dense_pd_lambda"])

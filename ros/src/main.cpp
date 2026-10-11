@@ -4,6 +4,8 @@
 #include "isaeslam/slamCore.h"
 #include <rclcpp/rclcpp.hpp>
 
+#include <cstdlib>
+
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
 
@@ -62,5 +64,8 @@ int main(int argc, char **argv) {
 
     rclcpp::spin(sensor_subscriber);
 
-    return 1;
+    // Shutdown (Ctrl-C): the dense map finishes (queued keyframes, final files); the SLAM threads never return
+    if (SLAM->_depth_injector)
+        SLAM->_depth_injector->finish();
+    std::_Exit(0);
 }

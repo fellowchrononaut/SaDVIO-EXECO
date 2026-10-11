@@ -1,4 +1,16 @@
 #include "isaeslam/slamCore.h"
+#include "isaeslam/stereo/MarginalDepthInjector.h"
+
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <thread>
+
+namespace {
+std::atomic<bool> g_stop{false};
+extern "C" void onStop(int) { g_stop = true; }
+} // namespace
 
 int main(int argc, char **argv) {
 
@@ -22,6 +34,18 @@ int main(int argc, char **argv) {
 
     // Create the data grabber
     std::string data_folder_path = argv[2];
+    // The SLAM threads run until the process is stopped (batch runs: pkill at the end of the data). On SIGTERM /
+    // SIGINT the dense map finishes (queued keyframes, final files), then the process exits
+    std::signal(SIGTERM, onStop);
+    std::signal(SIGINT, onStop);
+    std::thread([SLAM] {
+        while (!g_stop)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (SLAM->_depth_injector)
+            SLAM->_depth_injector->finish();
+        std::_Exit(0);
+    }).detach();
+
     isae::EUROCGrabber grabber(data_folder_path, slam_param->getDataProvider());
 
     // Load images

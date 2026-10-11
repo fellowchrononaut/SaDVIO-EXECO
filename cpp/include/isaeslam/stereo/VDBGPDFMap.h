@@ -3,6 +3,7 @@
 
 #include "isaeslam/stereo/DenseMesh.h"
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <memory>
 #include <string>
 #include <vector>
@@ -64,6 +65,16 @@ class VDBGPDFMap {
 
     // Marching cubes on the global distance grid (upstream ExtractTriangleMesh); cost grows with the map
     DenseMesh mesh() const;
+
+    // Weighted voxel merging (fused view of anchored maps, doc/dense_anchored_maps.md): this volume's distance and
+    // weight grids, moved by T_dst_src, added to (sign +1) or removed from (sign -1) dst's running weighted average.
+    // Each voxel is splatted trilinearly onto dst's lattice, so a rotation leaves no holes and the same call with
+    // sign -1 removes exactly what sign +1 added. Only voxels within sdf_trunc of a surface are merged (not the
+    // free space space carving saturates)
+    void accumulateInto(VDBGPDFMap& dst, const Eigen::Affine3d& T_dst_src, float sign) const;
+
+    // Active voxels of the distance grid (memory: ~8 bytes each in the distance and weight grids)
+    size_t activeVoxels() const;
 
     const VDBGPDFMapConfig& config() const { return _cfg; }
 

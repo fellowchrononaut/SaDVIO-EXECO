@@ -154,8 +154,17 @@ dense_vdbgpdf_preset:     "stereo"  # config/vdbgpdf/<preset>.yaml: stereo (VDB-
 dense_vdbgpdf_stride:     2         # pixel stride of the stereo points fed to the map (2: ~100 k points per 848x480 keyframe)
 dense_vdbgpdf_mesh_every: 5         # keyframes between marching cubes + PLY save (0 = never save)
 dense_vdbgpdf_mesh_path:  "log_slam/dense_vdbgpdf_mesh.ply"
-dense_submap_kfs:         0         # keyframes per submap (fused in its first keyframe's frame, placed at its loop-corrected
-                                    # pose; log_slam/dense_submaps/), 0: one global map
+## Anchored maps (doc/dense_anchored_maps.md): the dense geometry of every dense_mesh_method is kept per anchor
+## keyframe, in its frame, and placed at its loop-corrected pose (log_slam/dense_anchors/: anchor_NNNNN.ply, anchors.csv)
+dense_anchored:           false
+dense_submap_kfs:         10        # fused methods (gp global map, vdbgpdf): keyframes per submap; per-keyframe methods
+                                    # (zncc, pd, per-keyframe gp, none) anchor every keyframe
+dense_anchored_mesh_path: "log_slam/dense_anchored_mesh.ply"  # the anchors at their corrected poses
+dense_anchored_save_every: 5        # keyframes between saves of that mesh (0: only at the end)
+dense_fused_view:         1         # anchors merged into one VDB volume (revisits averaged; needs the VDB-GPDF build):
+                                    # 0 off, 1 at every save (moved volumes re-projected) + full rebuild at the end,
+                                    # 2 only at the end
+dense_fused_mesh_path:    "log_slam/dense_fused_mesh.ply"
 dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
 dense_pd_lambda:             0.5    # depth/tracking L1 data weight
 dense_pd_num_iterations:     120

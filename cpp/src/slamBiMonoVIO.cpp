@@ -139,9 +139,9 @@ bool SLAMBiMonoVIO::init() {
     IMUprofiling();
 
     // Construct dense stereo injector if enabled
-    // With dense submaps the map outlives a re-initialization (the new segment starts a submap of its own); without,
+    // With anchored maps the map outlives a re-initialization (the new segment gets anchors of its own); without,
     // the injector and its global map start again
-    if (_slam_param->_config.dense_depth && !(_depth_injector && _slam_param->_config.dense_submap_kfs > 0)) {
+    if (_slam_param->_config.dense_depth && !(_depth_injector && _slam_param->_config.dense_anchored)) {
         auto cam_cfgs = _slam_param->getDataProvider()->getCamConfigs();
         if (cam_cfgs.size() >= 2) {
             auto& cL = *cam_cfgs.at(0);
@@ -211,7 +211,12 @@ bool SLAMBiMonoVIO::init() {
             dcfg.vdbgpdf_stride               = _slam_param->_config.dense_vdbgpdf_stride;
             dcfg.vdbgpdf_mesh_every           = _slam_param->_config.dense_vdbgpdf_mesh_every;
             dcfg.vdbgpdf_mesh_path            = _slam_param->_config.dense_vdbgpdf_mesh_path;
+            dcfg.anchored                     = _slam_param->_config.dense_anchored;
             dcfg.submap_kfs                   = _slam_param->_config.dense_submap_kfs;
+            dcfg.anchored_mesh_path           = _slam_param->_config.dense_anchored_mesh_path;
+            dcfg.anchored_save_every          = _slam_param->_config.dense_anchored_save_every;
+            dcfg.fused_view                   = _slam_param->_config.dense_fused_view;
+            dcfg.fused_mesh_path              = _slam_param->_config.dense_fused_mesh_path;
             dcfg.pd_steiner_spacing  = _slam_param->_config.dense_pd_steiner_spacing;
             dcfg.pd_lambda           = _slam_param->_config.dense_pd_lambda;
             dcfg.pd_num_iterations   = _slam_param->_config.dense_pd_num_iterations;

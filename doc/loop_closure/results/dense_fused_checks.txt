@@ -1,0 +1,39 @@
+# per vertex
+ffsdense_tsdf V1_03 (98 anchors, final rebuild): odometry: 6.1 cm, <5 cm 42%, <10 cm 71%, complete 80% | corrected: 4.5 cm, <5 cm 54%, <10 cm 80%, complete 83% | fused: 16.1 cm, <5 cm 27%, <10 cm 39%, complete 78%
+ffsdense_tsdf V2_02 (90 anchors, final rebuild): odometry: 6.1 cm, <5 cm 43%, <10 cm 67%, complete 83% | corrected: 6.1 cm, <5 cm 43%, <10 cm 67%, complete 83% | fused: 20.0 cm, <5 cm 19%, <10 cm 30%, complete 65%
+ffsdense_gpdf V1_03 (98 anchors, final rebuild): odometry: 7.4 cm, <5 cm 35%, <10 cm 63%, complete 79% | corrected: 6.1 cm, <5 cm 41%, <10 cm 75%, complete 81% | fused: 15.3 cm, <5 cm 22%, <10 cm 40%, complete 77%
+ffsdense_gpdf V2_02 (97 anchors, final rebuild): odometry: 6.0 cm, <5 cm 43%, <10 cm 69%, complete 85% | corrected: 5.8 cm, <5 cm 44%, <10 cm 70%, complete 85% | fused: 20.0 cm, <5 cm 22%, <10 cm 34%, complete 82%
+ffssparse_tsdf V1_03 (90 anchors, final rebuild): odometry: 8.5 cm, <5 cm 32%, <10 cm 56%, complete 74% | corrected: 4.7 cm, <5 cm 53%, <10 cm 78%, complete 80% | fused: 15.4 cm, <5 cm 26%, <10 cm 39%, complete 75%
+ffssparse_tsdf V2_02 (71 anchors, final rebuild): odometry: 6.2 cm, <5 cm 43%, <10 cm 66%, complete 85% | corrected: 6.3 cm, <5 cm 42%, <10 cm 66%, complete 85% | fused: 20.0 cm, <5 cm 20%, <10 cm 31%, complete 68%
+ffssparse_gpdf V1_03 (90 anchors, final rebuild): odometry: 7.7 cm, <5 cm 34%, <10 cm 62%, complete 73% | corrected: 5.9 cm, <5 cm 43%, <10 cm 75%, complete 78% | fused: 15.4 cm, <5 cm 21%, <10 cm 39%, complete 74%
+ffssparse_gpdf V2_02 (72 anchors, final rebuild): odometry: 6.3 cm, <5 cm 42%, <10 cm 67%, complete 86% | corrected: 6.2 cm, <5 cm 42%, <10 cm 68%, complete 86% | fused: 20.0 cm, <5 cm 22%, <10 cm 34%, complete 84%
+band_tsdf V1_03 (90 anchors, final rebuild): odometry: 7.7 cm, <5 cm 35%, <10 cm 60%, complete 73% | corrected: 5.2 cm, <5 cm 49%, <10 cm 77%, complete 80% | fused: 16.9 cm, <5 cm 24%, <10 cm 38%, complete 77%
+band_tsdf V2_02 (70 anchors, final rebuild): odometry: 6.6 cm, <5 cm 40%, <10 cm 65%, complete 83% | corrected: 6.3 cm, <5 cm 42%, <10 cm 66%, complete 84% | fused: 20.0 cm, <5 cm 18%, <10 cm 29%, complete 71%
+band_gpdf V1_03 (89 anchors, final rebuild): odometry: 7.8 cm, <5 cm 34%, <10 cm 61%, complete 74% | corrected: 6.0 cm, <5 cm 42%, <10 cm 75%, complete 77% | fused: 14.5 cm, <5 cm 21%, <10 cm 40%, complete 76%
+band_gpdf V2_02 (70 anchors, final rebuild): odometry: 6.6 cm, <5 cm 40%, <10 cm 66%, complete 88% | corrected: 6.4 cm, <5 cm 41%, <10 cm 67%, complete 88% | fused: 20.0 cm, <5 cm 21%, <10 cm 33%, complete 89%
+# per surface area (--area)
+band_tsdf V1_03 (90 anchors, final rebuild): odometry: 8.6 cm, <5 cm 31%, <10 cm 56%, complete 73% | corrected: 5.7 cm, <5 cm 45%, <10 cm 73%, complete 80% | fused: 16.1 cm, <5 cm 26%, <10 cm 39%, complete 77%
+band_tsdf V2_02 (70 anchors, final rebuild): odometry: 7.3 cm, <5 cm 37%, <10 cm 61%, complete 83% | corrected: 7.0 cm, <5 cm 39%, <10 cm 62%, complete 84% | fused: 20.0 cm, <5 cm 19%, <10 cm 30%, complete 71%
+band_gpdf V1_03 (89 anchors, final rebuild): odometry: 8.2 cm, <5 cm 32%, <10 cm 59%, complete 74% | corrected: 6.5 cm, <5 cm 39%, <10 cm 71%, complete 77% | fused: 13.7 cm, <5 cm 21%, <10 cm 41%, complete 76%
+band_gpdf V2_02 (70 anchors, final rebuild): odometry: 7.0 cm, <5 cm 38%, <10 cm 63%, complete 88% | corrected: 6.9 cm, <5 cm 38%, <10 cm 64%, complete 88% | fused: 20.0 cm, <5 cm 21%, <10 cm 34%, complete 89%
+ffssparse_tsdf V1_03 (90 anchors, final rebuild): odometry: 9.1 cm, <5 cm 29%, <10 cm 54%, complete 74% | corrected: 5.4 cm, <5 cm 47%, <10 cm 73%, complete 81% | fused: 14.4 cm, <5 cm 28%, <10 cm 41%, complete 75%
+ffssparse_tsdf V2_02 (71 anchors, final rebuild): odometry: 6.9 cm, <5 cm 40%, <10 cm 63%, complete 85% | corrected: 7.0 cm, <5 cm 39%, <10 cm 62%, complete 85% | fused: 19.5 cm, <5 cm 21%, <10 cm 33%, complete 68%
+ffssparse_gpdf V1_03 (90 anchors, final rebuild): odometry: 8.3 cm, <5 cm 31%, <10 cm 59%, complete 74% | corrected: 6.5 cm, <5 cm 39%, <10 cm 70%, complete 78% | fused: 14.3 cm, <5 cm 22%, <10 cm 41%, complete 74%
+ffssparse_gpdf V2_02 (72 anchors, final rebuild): odometry: 6.8 cm, <5 cm 39%, <10 cm 64%, complete 87% | corrected: 6.7 cm, <5 cm 39%, <10 cm 65%, complete 87% | fused: 20.0 cm, <5 cm 23%, <10 cm 35%, complete 84%
+ffs_tsdf V1_03 (90 anchors, final rebuild): odometry: 10.2 cm, <5 cm 27%, <10 cm 49%, complete 68% | corrected: 7.4 cm, <5 cm 35%, <10 cm 63%, complete 77% | fused: 16.4 cm, <5 cm 21%, <10 cm 37%, complete 65%
+ffs_tsdf V2_02 (72 anchors, final rebuild): odometry: 10.5 cm, <5 cm 27%, <10 cm 48%, complete 81% | corrected: 8.4 cm, <5 cm 33%, <10 cm 56%, complete 81% | fused: 20.0 cm, <5 cm 18%, <10 cm 29%, complete 59%
+ffs_gpdf V1_03 (90 anchors, final rebuild): odometry: 12.1 cm, <5 cm 22%, <10 cm 43%, complete 62% | corrected: 8.1 cm, <5 cm 33%, <10 cm 59%, complete 73% | fused: 16.0 cm, <5 cm 18%, <10 cm 35%, complete 61%
+ffs_gpdf V2_02 (73 anchors, final rebuild): odometry: 8.9 cm, <5 cm 30%, <10 cm 55%, complete 81% | corrected: 7.9 cm, <5 cm 34%, <10 cm 59%, complete 81% | fused: 19.7 cm, <5 cm 20%, <10 cm 35%, complete 78%
+dbg_onesub V2_02 (1 anchors, final rebuild): odometry: 18.3 cm, <5 cm 21%, <10 cm 34%, complete 70% | corrected: 18.6 cm, <5 cm 21%, <10 cm 33%, complete 69% | fused: 20.0 cm, <5 cm 19%, <10 cm 31%, complete 66%
+dbg_onesub_nocarve V2_02 (1 anchors, final rebuild): odometry: 20.0 cm, <5 cm 16%, <10 cm 27%, complete 84% | corrected: 20.0 cm, <5 cm 16%, <10 cm 27%, complete 83% | fused: 20.0 cm, <5 cm 14%, <10 cm 23%, complete 81%
+nocarve_tsdf V2_02 (71 anchors, final rebuild): odometry: 8.2 cm, <5 cm 34%, <10 cm 57%, complete 83% | corrected: 8.0 cm, <5 cm 35%, <10 cm 58%, complete 83% | fused: 20.0 cm, <5 cm 14%, <10 cm 23%, complete 83%
+ffs_zncc V1_03 (897 anchors, final rebuild): odometry: 9.1 cm, <5 cm 28%, <10 cm 54%, complete 63% | corrected: 7.5 cm, <5 cm 34%, <10 cm 63%, complete 68% | fused: 9.8 cm, <5 cm 27%, <10 cm 51%, complete 74%
+ffs_zncc V2_02 (718 anchors, final rebuild): odometry: 6.9 cm, <5 cm 38%, <10 cm 64%, complete 76% | corrected: 6.0 cm, <5 cm 43%, <10 cm 70%, complete 77% | fused: 10.5 cm, <5 cm 28%, <10 cm 48%, complete 85%
+ffs_pd V1_03 (890 anchors, final rebuild): odometry: 11.5 cm, <5 cm 24%, <10 cm 45%, complete 70% | corrected: 8.3 cm, <5 cm 32%, <10 cm 57%, complete 77% | fused: 19.0 cm, <5 cm 16%, <10 cm 30%, complete 81%
+ffs_pd V2_02 (707 anchors, final rebuild): odometry: 9.5 cm, <5 cm 29%, <10 cm 52%, complete 75% | corrected: 8.3 cm, <5 cm 34%, <10 cm 56%, complete 77% | fused: 20.0 cm, <5 cm 15%, <10 cm 28%, complete 82%
+ffsglob_tsdf V1_03 global (dense_vdbgpdf_mesh.ply): 20.0 cm, <5 cm 15%, <10 cm 28%, complete 51% (own region)
+ffsglob_tsdf V2_02 global (dense_vdbgpdf_mesh.ply): 20.0 cm, <5 cm 13%, <10 cm 26%, complete 52% (own region)
+ffsglob_gpdf V1_03 global (dense_vdbgpdf_mesh.ply): 15.5 cm, <5 cm 18%, <10 cm 35%, complete 54% (own region)
+ffsglob_gpdf V2_02 global (dense_vdbgpdf_mesh.ply): 20.0 cm, <5 cm 13%, <10 cm 26%, complete 49% (own region)
+ffsglob_gpmap V1_03 global (dense_gp_global_mesh.ply): 20.0 cm, <5 cm 7%, <10 cm 12%, complete 45% (own region)
+ffsglob_gpmap V2_02 global (dense_gp_global_mesh.ply): 20.0 cm, <5 cm 8%, <10 cm 15%, complete 49% (own region)

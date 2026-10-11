@@ -537,3 +537,120 @@ Next (agreed 2026-10-10, plan in `doc/dense_anchored_maps.md`):
 2. Optional fused global view (`dense_fused_view`): submap volumes merged into one, refreshed at map saves for the
    submaps whose correction changed, plus a full rebuild at the end.
 3. Later, as an alternative: per-keyframe depth de-integrated and re-integrated (TSDF).
+
+## 2026-10-10 — Anchored maps for every mesh method, fused view (`doc/dense_anchored_maps.md`)
+
+Steps 1 and 2 of the plan are built (`AnchoredMaps`, options `dense_anchored`, `dense_submap_kfs`,
+`dense_anchored_*`, `dense_fused_view`, `dense_fused_mesh_*`), and they replace the vdbgpdf-only submaps above.
+`main` and the ROS node now stop cleanly on SIGTERM / SIGINT or ROS shutdown (`MarginalDepthInjector::finish()`), so
+the final dense files are written. Before this, batch runs ended with `pkill` and no final dense file was ever written.
+
+Tests (`mesh_test.cpp`):
+- anchors placed at corrected poses;
+- submaps start when full, at a new segment and at a new epoch;
+- merge: one wall merged at an off-lattice pose lies on the wall; merged twice it is averaged, not layered; removed
+  twice it leaves nothing;
+- a synthetic room in two submaps (space carving, rotated cameras): the fused mesh lies on the room as closely as the
+  placed submaps.
+
+Suite 95 / 96 (`LineFeatureMatching`).
+
+Bugs found on the way:
+- The merge first used OpenVDB's voxel centres (`indexToWorld`). The vendored code puts them half a voxel further
+  (`GetVoxelCenter`, marching cubes), so merged submaps were shifted by a rotated half-voxel (up to ~4 cm). Fixed.
+- TSDF chunks of the GP methods' geometry took stereo points up to 20 m and grew to 60–78 M voxels of noise, and
+  per-keyframe gp was killed (exit 137). Chunks are now capped at 8 m (as the `stereo_tsdf` preset) and thinned to
+  2.5 cm.
+- Weights count observations and reach hundreds, so float cancellation left voxels after a removal. A voxel under
+  0.01 of one observation is now cleared.
+
+Runs: `tools/run_dense_anchored.sh` (snapshot `dam3`), VIO no prior with loop closure, all keyframes kept, fused view
+1. **FFS depth** (fp32 engine, as `doc/dense_vdb_gpdf.md`), V1_03 and V2_02, the Vicon rooms with laser scans and the
+most drift. Labels `ffs_<method>`; baselines `ffsglob_<method>` are the global maps without anchors, i.e. the map as
+it was before. `tools/dense_anchor_eval.py` measures the distance of the mesh vertices to the Leica scan, capped at
+20 cm, and completeness (scan points within 10 cm of the mesh). Each mesh is aligned by an SE3 fit of the keyframe
+trajectory: `results.csv` for odometry and global, `results_loop.csv` for corrected and fused. Raw output:
+`results/dense_anchored_ffs.txt`.
+
+Share of vertices within 5 cm / 10 cm of the scan (median distance):
+
+| method | seq | anchors at odometry poses | anchors at corrected poses | fused view | global map (before) |
+|---|---|---|---|---|---|
+| zncc | V1_03 | 30 / 59 % (8.4 cm) | **37 / 68 % (6.9)** | 27 / 50 % (9.9) | |
+| zncc | V2_02 | 44 / 70 % (5.9) | **51 / 76 % (4.9)** | 28 / 48 % (10.6) | |
+| pd | V1_03 | 25 / 49 % (10.3) | **37 / 64 % (7.1)** | 16 / 30 % | |
+| pd | V2_02 | 32 / 57 % (8.4) | **39 / 62 % (6.9)** | 16 / 28 % | |
+| gp per keyframe | V1_03 | 18 / 34 % | **25 / 45 %** | 9 / 17 % | |
+| gp per keyframe | V2_02 | 22 / 38 % | **23 / 40 %** | 9 / 17 % | |
+| gp global map | V1_03 | 15 / 28 % | **19 / 33 %** | 11 / 20 % | 7 / 12 % |
+| gp global map | V2_02 | 16 / 30 % | **20 / 34 %** | 10 / 20 % | 8 / 15 % |
+| vdbgpdf tsdf | V1_03 | 29 / 52 % (9.4) | **38 / 67 % (6.6)** | 20 / 36 % | 14 / 28 % |
+| vdbgpdf tsdf | V2_02 | 28 / 50 % (10.0) | **35 / 59 % (7.8)** | 17 / 28 % | 13 / 25 % |
+| vdbgpdf gpdf | V1_03 | 24 / 45 % (11.4) | **36 / 64 % (7.2)** | 18 / 34 % | 18 / 35 % |
+| vdbgpdf gpdf | V2_02 | 32 / 57 % (8.3) | **37 / 63 % (7.3)** | 19 / 34 % | 13 / 26 % |
+
+- **Step 1 works for every method.** In all 12 runs the anchors at their loop-corrected poses are closer to the scan
+  than at their odometry poses: 6–15 points more within 10 cm on V1_03 (the larger drift), 2–9 on V2_02. Completeness
+  rises too (V1_03 tsdf 68 → 78 %).
+- **The fused view is better than the global map it replaces, but less accurate than the anchored layers.** Fused vs
+  global: tsdf 36 vs 28 % and 28 vs 25 % within 10 cm, gpdf 34 vs 35 % and 34 vs 26 %, gp map 20 vs 12 % and 20 vs
+  15 %. It follows the loop closure, and the global map cannot.
+  - Against the layers it loses about half of the surface within 5 cm, so averaging the volumes costs accuracy here.
+  - Likely cause: the poses. VIO no prior is still at ~5–9 cm ATE after loops, close to the TSDF truncation (10 cm).
+    Overlapping submaps then disagree by about their truncation band, so the average blurs, and one submap's space
+    carving erodes another's surface.
+  - The global map shows the same loss (median 15–20 cm against 6.6–7.8 cm for the layers). Not yet tested: a run
+    with better poses (VIO dense or sparse prior, ~3–5 cm), where the fused view should come closer to the layers.
+- For the per-keyframe methods, the fused view is a TSDF of their mesh vertices, a sparser input. It only gains
+  completeness (zncc 85 % against 77 % on V2_02) at the cost of accuracy.
+- With FFS, zncc at corrected anchors is the most accurate mesh here (V2_02: 4.9 cm median, 51 % within 5 cm).
+
+Products:
+- **For MeshCSLAM: the anchored meshes** (`dense_anchors/`, anchor PLYs plus `anchors.csv`). They are the most
+  accurate and stay exact under later loops, and the map server fuses them with its own optimized poses.
+- **For viewing and local use: the fused view.** One surface, better than the old global map, consistent with the
+  loop closure.
+
+The first pass was run by mistake with SGBM, the configs' default (`results/dense_anchored_sgbm_first.txt`, before the
+half-voxel fix and the chunk cap). It showed the same ordering for odometry vs corrected anchors (zncc V1_03 43 → 57 %
+within 10 cm), with every mesh 3–8 cm worse than with FFS.
+
+### Fused view with better poses, and why it stays behind the layers (2026-10-10)
+
+Same runs with VIO dense prior and sparse prior (FFS, VDB TSDF and VDB-GPDF, V1_03 / V2_02; labels `ffsdense_*`,
+`ffssparse_*`). Loop-closed ATE is 3.2–6.3 cm, against ~9 cm without a prior. Raw output:
+`results/dense_fused_checks.txt`.
+
+| VDB TSDF, V1_03 | ATE loop | anchors at corrected poses, within 5 / 10 cm | fused view |
+|---|---|---|---|
+| no prior | ~0.09 | 38 / 67 % (6.6 cm) | 20 / 36 % |
+| dense prior | 0.056 | **54 / 80 % (4.5 cm)** | 27 / 39 % |
+| sparse prior | 0.046 | **53 / 78 % (4.7 cm)** | 26 / 39 % |
+
+- With better poses the anchored layers improve a lot; the fused view barely does. So pose accuracy was not the main
+  cause, and the explanation given above (poses close to the truncation band) is withdrawn.
+- **Merge only the surface band** (`accumulateInto` skips voxels with |d| at the truncation, i.e. the free space
+  written by space carving). This is kept, but it only raises completeness by 3–5 points (TSDF V2_02 68 → 71 %,
+  VDB-GPDF 84 → 89 %); accuracy is unchanged. Labels `band_*`, snapshot `dam4`.
+- **One submap for the whole sequence** (`dense_submap_kfs` 100000, `dbg_onesub`): the anchored mesh of that single
+  volume is already as poor as the fused view (18.5 cm median against ~6 cm for 10-keyframe submaps), with no merge
+  involved. Its resampled copy (the fused view of one volume) is a median 3 cm from it: this is the resampling blur.
+- **Space carving off** (`stereo_tsdf` with `space_carving: false`, `dbg_onesub_nocarve`, `nocarve_tsdf`): more
+  complete (+14 points) but less accurate (outlier fragments survive). Carving is not the cause; the experimental
+  preset was removed.
+- **Per surface area** (`dense_anchor_eval.py --area`, one vertex per 5 cm cell, so a surface repeated by
+  overlapping anchors counts once): the scores hardly change. Vertex weighting is not the cause either.
+- Where the poor surface is (`dbg_onesub`, fused): 49 % of the vertices are 20 cm or more from the scan.
+  - 74 % of those lie more than 1 m from the camera path, against 8 % of the accurate ones.
+  - So a long-lived volume builds up long-range stereo surfaces that a 10-keyframe submap does not.
+
+**Conclusion.** Any long-horizon volume on this data has the same 14–20 cm median: the old global map, a single
+whole-run submap, and the fused view. Short volumes have 4.5–8 cm. The cause is long-horizon TSDF fusion of FFS depth
+here, not the anchored maps or their merge, which adds about 3 cm of resampling blur.
+- Step 3 (one volume re-integrated at corrected poses) would inherit this, so it stays unbuilt until the
+  long-horizon issue is understood.
+- Next suspects, not tested: the 8 m range (try 4–5 m for long volumes), the reconstruction weight threshold
+  (`recon_min_weight` 0.1: one ray suffices), no weight cap or decay, and FFS depth error that grows with range.
+- The ExECoSim result in `doc/dense_vdb_gpdf.md` (4.6 cm, one volume) was simulated images with ground-truth poses.
+- Products unchanged: anchored meshes for MeshCSLAM; the fused view (default `dense_fused_view: 1`) for viewing. The
+  fused view is better than the old global map and follows the loop closure.

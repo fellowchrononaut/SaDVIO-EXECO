@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+
 #include "isaeslam/data/features/AFeature2D.h"
 #include "isaeslam/data/features/Point2D.h"
 #include "isaeslam/data/frame.h"
@@ -7,6 +9,8 @@
 #include "isaeslam/data/landmarks/Point3D.h"
 #include "isaeslam/data/mesh/mesh.h"
 #include "isaeslam/data/sensors/Camera.h"
+#include "isaeslam/stereo/AnchoredMaps.h"
+#include "isaeslam/stereo/VDBGPDFMap.h"
 #include "utilities/geometry.h"
 
 namespace isae {
@@ -284,6 +288,232 @@ TEST_F(MeshTest, covTest) {
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(M, Eigen::ComputeFullU | Eigen::ComputeFullV);
     double ratio = svd.singularValues()(0) / svd.singularValues()(1);
     ASSERT_NEAR(ratio,1, 1e-3);
+}
+
+namespace {
+
+AnchoredMapsConfig anchoredConfig(const std::string &name) {
+    AnchoredMapsConfig c;
+    c.mesh_path  = (std::filesystem::temp_directory_path() / name / "mesh.ply").string();
+    c.save_every = 0;
+    c.submap_kfs = 2;
+    return c;
+}
+
+Eigen::Affine3d pose(double x, double yaw) {
+    Eigen::Affine3d T = Eigen::Affine3d::Identity();
+    T.linear()        = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    T.translation()   = Eigen::Vector3d(x, 0.5, 0);
+    return T;
+}
+
+} // namespace
+
+// Anchored maps (doc/dense_anchored_maps.md): a keyframe's geometry, kept in its own frame, is placed at its corrected
+// pose: the loop closure's correction of that keyframe times the odometry pose it was built at
+TEST(AnchoredMapsTest, anchorsArePlacedAtTheirCorrectedPoses) {
+    AnchoredMaps maps(anchoredConfig("anchored_place"));
+    DenseMesh tri;
+    tri.vertices = {Eigen::Vector3d(0, 0, 1), Eigen::Vector3d(1, 0, 1), Eigen::Vector3d(0, 1, 1)};
+    tri.faces    = {Eigen::Vector3i(0, 1, 2)};
+    tri.computeFaceNormals();
+    const Eigen::Affine3d T1 = pose(0, 0), T2 = pose(2, 0.3);
+    maps.addKeyframe(100, 0, 0, T1, tri);
+    maps.addKeyframe(200, 0, 0, T2, tri);
+    Eigen::Affine3d C = Eigen::Affine3d::Identity(); // the loop closure moved keyframe 200 by 0.4 m and 5 deg
+    C.linear()        = Eigen::AngleAxisd(0.087, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    C.translation()   = Eigen::Vector3d(0.4, -0.1, 0);
+    maps.setKeyframeCorrection([&](unsigned long long ts, Eigen::Affine3d &out) {
+        if (ts != 200)
+            return false;
+        out = C;
+        return true;
+    });
+    maps.save();
+    const DenseMesh &g = maps.globalMesh();
+    ASSERT_EQ(g.vertices.size(), 6u);
+    ASSERT_EQ(g.faces.size(), 2u);
+    EXPECT_EQ(g.faces[1], Eigen::Vector3i(3, 4, 5));
+    for (int k = 0; k < 3; k++) {
+        EXPECT_LT((g.vertices[k] - T1 * tri.vertices[k]).norm(), 1e-12) << "no correction: odometry pose";
+        EXPECT_LT((g.vertices[3 + k] - C * T2 * tri.vertices[k]).norm(), 1e-12) << "corrected pose";
+    }
+    EXPECT_LT((g.face_normals[1] - (C * T2).linear() * tri.face_normals[0]).norm(), 1e-12);
+}
+
+// Fused methods: a submap takes submap_kfs keyframes, and a new one starts whenever the odometry world changes
+// (re-initialization: segment, window moved by a loop: epoch), since its keyframes' relative poses must hold
+TEST(AnchoredMapsTest, submapsStartWhenFullOrWhenTheWorldChanges) {
+    AnchoredMaps maps(anchoredConfig("anchored_submaps"));
+    int meshed = 0;
+    const AnchoredMaps::Mesher mesher = [&](AnchoredMaps::Anchor &a) {
+        meshed++;
+        return a.mesh;
+    };
+    Eigen::Affine3d T_a_c;
+    std::vector<int> ids;
+    const int segment[] = {0, 0, 0, 0, 1, 1};
+    const int epoch[]   = {0, 0, 0, 1, 1, 1};
+    for (int k = 0; k < 6; k++)
+        ids.push_back(maps.submapFor(10 * k, segment[k], epoch[k], pose(k, 0.1 * k), T_a_c, mesher).id);
+    // KF 0, 1: submap 0 (full); KF 2: submap 1; KF 3: new epoch, submap 2; KF 4: new segment, submap 3; KF 5: same
+    EXPECT_EQ(ids, (std::vector<int>{0, 0, 1, 2, 3, 3}));
+    EXPECT_EQ(meshed, 3) << "each submap left behind was closed with its final mesh";
+    // The keyframe's camera in the anchor's frame: the relative odometry pose
+    EXPECT_LT((T_a_c.matrix() - (pose(4, 0.4).inverse() * pose(5, 0.5)).matrix()).norm(), 1e-12);
+    maps.closeOpenSubmap(mesher);
+    EXPECT_EQ(meshed, 4);
+}
+
+namespace {
+
+VDBGPDFMapConfig tsdfConfig() {
+    VDBGPDFMapConfig c;
+    c.fusion            = "tsdf";
+    c.sdf_trunc         = 0.1f;
+    c.space_carving     = false;
+    c.voxel_size_global = 0.05f;
+    c.min_scan_range    = 0.05f;
+    c.max_scan_range    = 20.f;
+    c.recon_min_weight  = 0.1f;
+    return c;
+}
+
+// A 2 m x 2 m wall 2 m in front of the origin (z = 2), 1 cm grid, as a camera at the origin sees it
+std::vector<Eigen::Vector3d> wall() {
+    std::vector<Eigen::Vector3d> pts;
+    for (double x = -1; x <= 1; x += 0.01)
+        for (double y = -1; y <= 1; y += 0.01)
+            pts.emplace_back(x, y, 2.0);
+    return pts;
+}
+
+double medianDistanceToPlane(const DenseMesh &m, const Eigen::Affine3d &T) {
+    // distance of the mesh vertices to the wall moved by T (normal T.R z, through T * (0, 0, 2))
+    const Eigen::Vector3d n = T.linear() * Eigen::Vector3d::UnitZ(), c = T * Eigen::Vector3d(0, 0, 2);
+    std::vector<double> d;
+    for (const auto &v : m.vertices)
+        d.push_back(std::abs(n.dot(v - c)));
+    std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+    return d[d.size() / 2];
+}
+
+} // namespace
+
+// Fused view (doc/dense_anchored_maps.md): a submap volume merged into the fused volume at a pose lands there; merged
+// twice at the same pose it is averaged (one surface, not two layers); removed with the same splat it leaves nothing
+TEST(AnchoredMapsTest, volumesMergeAverageAndRemoveExactly) {
+    std::unique_ptr<VDBGPDFMap> sub, fused;
+    try {
+        sub = std::make_unique<VDBGPDFMap>(tsdfConfig());
+    } catch (const std::runtime_error &) {
+        GTEST_SKIP() << "build without VDB-GPDF";
+    }
+    sub->integrate(wall(), Eigen::Vector3d::Zero());
+    fused = std::make_unique<VDBGPDFMap>(tsdfConfig());
+    Eigen::Affine3d T = Eigen::Affine3d::Identity(); // placed 0.37 m and 20 deg away (off the voxel lattice)
+    T.linear()        = Eigen::AngleAxisd(0.35, Eigen::Vector3d(0.3, 1, 0.2).normalized()).toRotationMatrix();
+    T.translation()   = Eigen::Vector3d(0.37, -0.21, 0.13);
+
+    sub->accumulateInto(*fused, T, 1.f);
+    const DenseMesh once = fused->mesh();
+    ASSERT_GT(once.faces.size(), 1000u);
+    EXPECT_LT(medianDistanceToPlane(once, T), 0.02) << "the merged surface is the wall at its new pose";
+
+    sub->accumulateInto(*fused, T, 1.f); // a revisit at the same pose: averaged, the surface does not move
+    const DenseMesh twice = fused->mesh();
+    EXPECT_LT(medianDistanceToPlane(twice, T), 0.02);
+    EXPECT_NEAR(static_cast<double>(twice.faces.size()), static_cast<double>(once.faces.size()),
+                0.02 * once.faces.size())
+        << "one surface, not two layers";
+
+    sub->accumulateInto(*fused, T, -1.f);
+    sub->accumulateInto(*fused, T, -1.f);
+    EXPECT_EQ(fused->activeVoxels(), 0u) << "removal undoes the merge exactly";
+}
+
+namespace {
+
+// A 6 x 5 x 3 m room (walls, floor, ceiling) as a camera at T_w_c sees it: points on its surfaces within 60 deg of
+// the optical axis, in the camera frame
+std::vector<Eigen::Vector3d> roomView(const Eigen::Affine3d &T_w_c) {
+    std::vector<Eigen::Vector3d> pts;
+    const Eigen::Vector3d o = T_w_c.translation();
+    const Eigen::Affine3d T_c_w = T_w_c.inverse();
+    for (double u = -0.6; u <= 0.6; u += 0.004)
+        for (double v = -0.45; v <= 0.45; v += 0.004) {
+            const Eigen::Vector3d dir = T_w_c.linear() * Eigen::Vector3d(u, v, 1).normalized();
+            double best = 1e9;
+            for (int a = 0; a < 3; a++) {
+                const double lo[3] = {-3, -2.5, 0}, hi[3] = {3, 2.5, 3};
+                for (double wall : {lo[a], hi[a]}) {
+                    if (std::abs(dir(a)) < 1e-9)
+                        continue;
+                    const double t = (wall - o(a)) / dir(a);
+                    if (t > 0.1 && t < best)
+                        best = t;
+                }
+            }
+            pts.push_back(T_c_w * (o + best * dir));
+        }
+    return pts;
+}
+
+} // namespace
+
+// Real-data shape of the fused view: two submaps of a room, each integrated from three cameras (TSDF with space
+// carving, as the stereo_tsdf preset) in its own anchor frame, placed and merged. The fused mesh must lie on the
+// placed submap meshes (both are the same room)
+TEST(AnchoredMapsTest, fusedRoomLiesOnThePlacedSubmaps) {
+    VDBGPDFMapConfig c = tsdfConfig();
+    c.space_carving    = true;
+    std::unique_ptr<VDBGPDFMap> fused;
+    try {
+        fused = std::make_unique<VDBGPDFMap>(c);
+    } catch (const std::runtime_error &) {
+        GTEST_SKIP() << "build without VDB-GPDF";
+    }
+    auto cam = [](double x, double yaw) {
+        Eigen::Affine3d T = Eigen::Affine3d::Identity();
+        T.linear() = (Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+                      Eigen::AngleAxisd(-M_PI / 2, Eigen::Vector3d::UnitX()))
+                         .toRotationMatrix(); // optical axis horizontal
+        T.translation() = Eigen::Vector3d(x, 0.3 * x, 1.4);
+        return T;
+    };
+    std::vector<Eigen::Vector3d> union_pts, fused_pts;
+    for (int s = 0; s < 2; s++) {
+        VDBGPDFMap sub(c);
+        const Eigen::Affine3d T_w_anchor = cam(-1.0 + 1.2 * s, 0.4 + 1.9 * s);
+        for (int k = 0; k < 3; k++) {
+            const Eigen::Affine3d T_w_c = cam(-1.0 + 1.2 * s + 0.3 * k, 0.4 + 1.9 * s + 0.25 * k);
+            const Eigen::Affine3d T_a_c = T_w_anchor.inverse() * T_w_c;
+            std::vector<Eigen::Vector3d> pa;
+            for (const auto &p : roomView(T_w_c))
+                pa.push_back(T_a_c * p);
+            sub.integrate(pa, T_a_c.translation());
+        }
+        for (const auto &v : sub.mesh().vertices)
+            union_pts.push_back(T_w_anchor * v);
+        sub.accumulateInto(*fused, T_w_anchor, 1.f);
+    }
+    fused_pts = fused->mesh().vertices;
+    ASSERT_GT(fused_pts.size(), 1000u);
+    // Distance of each mesh's vertices to the true room surfaces
+    auto toRoom = [](const Eigen::Vector3d &p) {
+        return std::min({std::abs(p.x() + 3), std::abs(p.x() - 3), std::abs(p.y() + 2.5), std::abs(p.y() - 2.5),
+                         std::abs(p.z()), std::abs(p.z() - 3)});
+    };
+    auto median = [&](const std::vector<Eigen::Vector3d> &pts) {
+        std::vector<double> d;
+        for (const auto &p : pts)
+            d.push_back(toRoom(p));
+        std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+        return d[d.size() / 2];
+    };
+    const double mu = median(union_pts), mf = median(fused_pts);
+    EXPECT_LT(mu, 0.03) << "placed submap meshes";
+    EXPECT_LT(mf, 0.03) << "fused mesh (union " << mu << ")";
 }
 
 } // namespace isae

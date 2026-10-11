@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <unordered_set>
 #include <unistd.h>  // nice()
 
 namespace isae {
@@ -102,7 +103,9 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
         gcfg.carry_correction            = cfg.gp_register_carry_correction;
         gcfg.depth_weighting             = cfg.gp_register_depth_weighting;
         gcfg.depth_weighting_ref         = cfg.gp_register_depth_ref;
-        _gp_map = std::make_unique<GPGlobalMap>(gcfg);
+        _gp_global_cfg = gcfg;
+        if (!cfg.anchored)
+            _gp_map = std::make_unique<GPGlobalMap>(gcfg);
 
         const std::filesystem::path mesh_path(cfg.gp_global_mesh_path);
         const std::filesystem::path dir = mesh_path.has_parent_path() ? mesh_path.parent_path()
@@ -124,18 +127,13 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
         VDBGPDFMapConfig vcfg;
         loadVDBGPDFPreset(cfg.vdbgpdf_preset_path, vcfg);
         _vdb_cfg = vcfg;
-        if (cfg.submap_kfs <= 0)
+        if (!cfg.anchored)
             _vdb_map = std::make_unique<VDBGPDFMap>(vcfg);
         const std::filesystem::path mesh_path(cfg.vdbgpdf_mesh_path);
         const std::filesystem::path dir = mesh_path.has_parent_path() ? mesh_path.parent_path()
                                                                       : std::filesystem::path(".");
         std::filesystem::create_directories(dir);
-        if (cfg.submap_kfs > 0) {
-            _submap_dir = (dir / "dense_submaps").string();
-            std::filesystem::create_directories(_submap_dir);
-            std::cout << "[DenseMesh] VDB-GPDF submaps of " << cfg.submap_kfs << " keyframes -> " << _submap_dir
-                      << std::endl;
-        }
+
         _vdb_log.open(dir / "dense_vdbgpdf_keyframes.csv", std::ios::trunc);
         _vdb_log << "timestamp_ns,keyframe,points,integrate_ms,x,y,z,qx,qy,qz,qw\n";
         std::cout << "[DenseMesh] VDB-GPDF map on (preset " << cfg.vdbgpdf_preset_path << ", stride "
@@ -182,6 +180,39 @@ MarginalDepthInjector::MarginalDepthInjector(const Eigen::Matrix3d& K_L,
     mcfg.las2_lr_check_px    = cfg.las2_lr_check_px;
     _matcher = createStereoMatcher(mcfg);
 
+    if (cfg.anchored) {
+        AnchoredMapsConfig acfg;
+        acfg.mesh_path  = cfg.anchored_mesh_path;
+        acfg.save_every = cfg.anchored_save_every;
+        acfg.submap_kfs = std::max(1, cfg.submap_kfs);
+        acfg.fused_view      = cfg.fused_view;
+        acfg.fused_mesh_path = cfg.fused_mesh_path;
+        // The fused view: vdbgpdf merges its own submap volumes (same settings); the other methods integrate their
+        // geometry into TSDF chunks first (5 cm voxels, 10 cm truncation, no space carving: a chunk holds geometry
+        // seen from several cameras; up to 8 m from the camera, as the stereo_tsdf preset: the GP estimators keep
+        // stereo points up to 20 m, which made 60-78 M voxels of noise on the EuRoC rooms)
+        acfg.view_from_geometry = cfg.mesh_method != "vdbgpdf";
+        if (cfg.mesh_method == "vdbgpdf") {
+            acfg.view_cfg = _vdb_cfg;
+        } else {
+            acfg.view_cfg.fusion           = "tsdf";
+            acfg.view_cfg.sdf_trunc        = 0.1f;
+            acfg.view_cfg.space_carving    = false;
+            acfg.view_cfg.voxel_size_global = 0.05f;
+            acfg.view_cfg.min_scan_range   = 0.05f;
+            acfg.view_cfg.max_scan_range   = 8.f;
+            acfg.view_cfg.recon_min_weight = 0.1f;
+        }
+        _anchors        = std::make_unique<AnchoredMaps>(acfg);
+        std::cout << "[DenseMesh] anchored maps (" << cfg.mesh_method << ", "
+                  << (fusedMethod() ? "submaps of " + std::to_string(acfg.submap_kfs) + " keyframes"
+                                    : std::string("one anchor per keyframe"))
+                  << ", fused view " << cfg.fused_view << ") -> " << cfg.anchored_mesh_path << std::endl;
+        if (!cfg.keep_all_keyframes)
+            std::cerr << "[DenseMesh] anchored maps without dense_keep_all_keyframes: keyframes may be dropped"
+                      << std::endl;
+    }
+
     // Start worker thread
     _worker = std::thread(&MarginalDepthInjector::workerLoop, this);
 }
@@ -191,19 +222,35 @@ MarginalDepthInjector::~MarginalDepthInjector() {
     _q_cv.notify_all();
     if (_worker.joinable())
         _worker.join();
-    if (_gp_map && _cfg.gp_save_every > 0)
-        _gp_map->savePly(_cfg.gp_global_mesh_path);
-    if (_vdb_map && _cfg.vdbgpdf_mesh_every > 0)
-        writeDenseMeshPly(_vdb_map->mesh(), _cfg.vdbgpdf_mesh_path, "SaDVIO dense VDB-GPDF map");
-    if (!_submaps.empty()) {
-        closeSubmap();
-        writeDenseMeshPly(assembleSubmaps(), _cfg.vdbgpdf_mesh_path, "SaDVIO dense VDB-GPDF submaps");
-    }
+    writeFinal();
+}
+
+void MarginalDepthInjector::finish() {
+    _draining = true;
+    _q_cv.notify_all();
+    if (_worker.joinable())
+        _worker.join();
+    writeFinal();
+}
+
+void MarginalDepthInjector::writeFinal() {
+    std::call_once(_final_once, [this] {
+        if (_gp_map && _cfg.gp_save_every > 0)
+            _gp_map->savePly(_cfg.gp_global_mesh_path);
+        if (_vdb_map && _cfg.vdbgpdf_mesh_every > 0)
+            writeDenseMeshPly(_vdb_map->mesh(), _cfg.vdbgpdf_mesh_path, "SaDVIO dense VDB-GPDF map");
+        if (_anchors && _anchors->size() > 0) {
+            _anchors->closeOpenSubmap([](AnchoredMaps::Anchor& a) {
+                return a.vdb ? a.vdb->mesh() : a.gp ? a.gp->mesh() : a.mesh;
+            });
+            _anchors->finish();
+        }
+    });
 }
 
 void MarginalDepthInjector::setKeyframeCorrection(KeyframeCorrection fn) {
-    std::lock_guard<std::mutex> lock(_corr_mtx);
-    _kf_correction = std::move(fn);
+    if (_anchors)
+        _anchors->setKeyframeCorrection(std::move(fn));
 }
 
 void MarginalDepthInjector::queueFrame(const std::shared_ptr<Frame>& frame,
@@ -268,8 +315,8 @@ void MarginalDepthInjector::workerLoop() {
         QueueItem item;
         {
             std::unique_lock<std::mutex> lock(_q_mtx);
-            _q_cv.wait(lock, [this]{ return !_queue.empty() || !_running; });
-            if (!_running) break;
+            _q_cv.wait(lock, [this]{ return !_queue.empty() || !_running || _draining; });
+            if (!_running || (_draining && _queue.empty())) break;
             item = std::move(_queue.front());
             _queue.pop_front();
         }
@@ -357,9 +404,11 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     // Run mesh estimator based on method — dense pipeline is fully independent
     // of the sparse Mesh3D; injectDensePoints() is never called.
     DenseMesh dense_mesh;
-    if (_cfg.mesh_method == "gp" && _gp_map) {
+    if (_anchors && fusedMethod()) {
+        integrateAnchoredFused(item, disp_float, f_rect, cx_rect, cy_rect, dense_mesh);
+    } else if (_cfg.mesh_method == "gp" && _gp_map) {
         integrateGlobalMap(item, disp_float, f_rect, cx_rect, cy_rect, point_cloud, dense_mesh);
-    } else if (_cfg.mesh_method == "vdbgpdf" && (_vdb_map || _cfg.submap_kfs > 0)) {
+    } else if (_cfg.mesh_method == "vdbgpdf" && _vdb_map) {
         integrateVDBGPDF(item, disp_float, f_rect, cx_rect, cy_rect, dense_mesh);
     } else if (_cfg.mesh_method == "gp") {
         GPMeshEstimator gp_estimator(_gp_cfg);
@@ -375,6 +424,29 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
         dense_mesh = zncc_estimator.estimate(disp_float, gray_L, gray_R,
                                              f_rect, _baseline, cx_rect, cy_rect,
                                              item.T_w_rectcam);
+    }
+
+    if (_anchors && !fusedMethod()) {
+        // Per-keyframe methods: the keyframe is its own anchor; its geometry (the point cloud for "none", 5 cm
+        // voxels) is moved into its camera frame, exactly (the estimators build it at the keyframe's pose)
+        DenseMesh g;
+        if (_cfg.mesh_method == "none") {
+            std::unordered_set<long long> seen;
+            for (const auto& p : point_cloud) {
+                const Eigen::Vector3i k = (p / 0.05).array().floor().cast<int>();
+                const long long key = (static_cast<long long>(k.x()) * 73856093LL) ^
+                                      (static_cast<long long>(k.y()) * 19349663LL) ^
+                                      (static_cast<long long>(k.z()) * 83492791LL);
+                if (seen.insert(key).second)
+                    g.vertices.push_back(p);
+            }
+        } else {
+            g = dense_mesh;
+        }
+        _anchors->addKeyframe(item.frame ? item.frame->getTimestamp() : 0ULL, item.segment, item.epoch,
+                              item.T_w_rectcam, transformMesh(g, item.T_w_rectcam.inverse()));
+        _anchors->keyframeDone(nullptr);
+        dense_mesh = _anchors->globalMesh();
     }
 
     auto t4 = clk::now();
@@ -471,24 +543,6 @@ void MarginalDepthInjector::integrateVDBGPDF(const QueueItem& item, const cv::Ma
     const int str = std::max(1, _cfg.vdbgpdf_stride);
     std::vector<Eigen::Vector3d> points_world;
     points_world.reserve((disp_float.rows / str) * (disp_float.cols / str));
-    if (_cfg.submap_kfs > 0) {
-        std::vector<Eigen::Vector3d> points_cam;
-        points_cam.reserve((disp_float.rows / str) * (disp_float.cols / str));
-        for (int v = 0; v < disp_float.rows; v += str) {
-            const float* row_ptr = disp_float.ptr<float>(v);
-            for (int u = 0; u < disp_float.cols; u += str) {
-                const float disp = row_ptr[u];
-                if (disp <= 0.0f || !std::isfinite(disp))
-                    continue;
-                const double Z = f_rect * _baseline / static_cast<double>(disp);
-                if (Z <= 0.0 || Z > _cfg.max_depth || !std::isfinite(Z))
-                    continue;
-                points_cam.emplace_back((u - cx_rect) * Z / f_rect, (v - cy_rect) * Z / f_rect, Z);
-            }
-        }
-        integrateSubmap(item, points_cam, dense_mesh);
-        return;
-    }
     for (int v = 0; v < disp_float.rows; v += str) {
         const float* row_ptr = disp_float.ptr<float>(v);
         for (int u = 0; u < disp_float.cols; u += str) {
@@ -529,119 +583,67 @@ void MarginalDepthInjector::integrateVDBGPDF(const QueueItem& item, const cv::Ma
               << std::endl;
 }
 
-void MarginalDepthInjector::integrateSubmap(const QueueItem& item, const std::vector<Eigen::Vector3d>& points_cam,
-                                            DenseMesh& dense_mesh) {
-#ifdef ISAESLAM_WITH_VDBGPDF
+void MarginalDepthInjector::integrateAnchoredFused(const QueueItem& item, const cv::Mat& disp_float, double f_rect,
+                                                   double cx_rect, double cy_rect, DenseMesh& dense_mesh) {
     using clk = std::chrono::steady_clock;
     const auto t0 = clk::now();
-    // A new submap every submap_kfs keyframes, and whenever the odometry world changes (re-initialization, window
-    // moved by a loop correction): a submap's keyframes must share one world for their relative poses to hold
-    Submap* cur = _submaps.empty() || !_submaps.back().map ? nullptr : &_submaps.back();
-    if (cur && (cur->n_kf >= _cfg.submap_kfs || cur->segment != item.segment || cur->epoch != item.epoch)) {
-        closeSubmap();
-        cur = nullptr;
+    const bool vdb = _cfg.mesh_method == "vdbgpdf";
+    // Same point selection as the global maps: vdbgpdf every vdbgpdf_stride-th pixel up to max_depth, gp every
+    // pixel up to the GP's max depth; in the rectified camera frame
+    const int str         = vdb ? std::max(1, _cfg.vdbgpdf_stride) : 1;
+    const double max_z    = vdb ? _cfg.max_depth : _gp_cfg.max_depth;
+    std::vector<Eigen::Vector3d> points_cam;
+    points_cam.reserve((disp_float.rows / str) * (disp_float.cols / str));
+    for (int v = 0; v < disp_float.rows; v += str) {
+        const float* row_ptr = disp_float.ptr<float>(v);
+        for (int u = 0; u < disp_float.cols; u += str) {
+            const float disp = row_ptr[u];
+            if (disp <= 0.0f || !std::isfinite(disp))
+                continue;
+            const double Z = f_rect * _baseline / static_cast<double>(disp);
+            if (Z <= 0.0 || Z > max_z || !std::isfinite(Z))
+                continue;
+            points_cam.emplace_back((u - cx_rect) * Z / f_rect, (v - cy_rect) * Z / f_rect, Z);
+        }
     }
-    if (!cur) {
-        Submap s;
-        s.id         = static_cast<int>(_submaps.size());
-        s.anchor_ts  = item.frame ? item.frame->getTimestamp() : 0ULL;
-        s.segment    = item.segment;
-        s.epoch      = item.epoch;
-        s.T_w_anchor = item.T_w_rectcam;
-        s.map        = std::make_unique<VDBGPDFMap>(_vdb_cfg);
-        _submaps.push_back(std::move(s));
-        cur = &_submaps.back();
+
+    const AnchoredMaps::Mesher mesher = [](AnchoredMaps::Anchor& a) {
+        return a.vdb ? a.vdb->mesh() : a.gp ? a.gp->mesh() : a.mesh;
+    };
+    Eigen::Affine3d T_a_c;
+    AnchoredMaps::Anchor& a = _anchors->submapFor(item.frame ? item.frame->getTimestamp() : 0ULL, item.segment,
+                                                  item.epoch, item.T_w_rectcam, T_a_c, mesher);
+    if (vdb) {
+        if (!a.vdb)
+            a.vdb = std::make_unique<VDBGPDFMap>(_vdb_cfg);
+        std::vector<Eigen::Vector3d> points_anchor;
+        points_anchor.reserve(points_cam.size());
+        for (const auto& p : points_cam)
+            points_anchor.push_back(T_a_c * p);
+        a.vdb->integrate(points_anchor, T_a_c.translation());
+    } else {
+        if (!a.gp)
+            a.gp = std::make_unique<GPGlobalMap>(_gp_global_cfg);
+        a.gp->integrate(points_cam, T_a_c); // with dense_gp_register: against this submap only
     }
-    const Eigen::Affine3d T_a_c = cur->T_w_anchor.inverse() * item.T_w_rectcam;
-    std::vector<Eigen::Vector3d> points_anchor;
-    points_anchor.reserve(points_cam.size());
-    for (const auto& p : points_cam)
-        points_anchor.push_back(T_a_c * p);
-    cur->map->integrate(points_anchor, T_a_c.translation());
-    cur->n_kf++;
     ++_integrated;
     const auto t1 = clk::now();
     if (_vdb_log.is_open()) {
         const Eigen::Quaterniond q(item.T_w_rectcam.linear());
         const Eigen::Vector3d& t = item.T_w_rectcam.translation();
         _vdb_log << std::setprecision(10) << (item.frame ? item.frame->getTimestamp() : 0ULL) << "," << _integrated
-                 << "," << points_anchor.size() << ","
+                 << "," << points_cam.size() << ","
                  << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "," << t.x() << ","
                  << t.y() << "," << t.z() << "," << q.x() << "," << q.y() << "," << q.z() << "," << q.w() << "\n";
         _vdb_log.flush();
     }
-    // Marching cubes of the open submap only (closed ones keep their mesh), then the global mesh from all submaps
-    if (_vdb_mesh.faces.empty() || (_cfg.vdbgpdf_mesh_every > 0 && _integrated % _cfg.vdbgpdf_mesh_every == 0)) {
-        cur->mesh = cur->map->mesh();
-        _vdb_mesh = assembleSubmaps();
-        if (_cfg.vdbgpdf_mesh_every > 0 &&
-            !writeDenseMeshPly(_vdb_mesh, _cfg.vdbgpdf_mesh_path, "SaDVIO dense VDB-GPDF submaps"))
-            std::cerr << "[DenseMesh] could not write " << _cfg.vdbgpdf_mesh_path << std::endl;
-    }
-    dense_mesh = _vdb_mesh;
-    const auto ms = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count(); };
-    std::cout << "[DenseMesh] vdbgpdf submap " << cur->id << " kf=" << _integrated << " pts=" << points_anchor.size()
-              << " integrate=" << ms(t0, t1) << "ms mesh=" << ms(t1, clk::now()) << "ms faces=" << _vdb_mesh.faces.size()
-              << std::endl;
-#else
-    (void)item, (void)points_cam, (void)dense_mesh;
-#endif
-}
-
-void MarginalDepthInjector::closeSubmap() {
-    if (_submaps.empty() || !_submaps.back().map)
-        return;
-    Submap& s = _submaps.back();
-    s.mesh    = s.map->mesh();
-    s.map.reset(); // a closed submap keeps only its mesh
-    char name[32];
-    std::snprintf(name, sizeof(name), "/submap_%04d.ply", s.id);
-    if (!writeDenseMeshPly(s.mesh, _submap_dir + name, "SaDVIO dense submap, anchor frame (submaps.csv)"))
-        std::cerr << "[DenseMesh] could not write " << _submap_dir + name << std::endl;
-}
-
-DenseMesh MarginalDepthInjector::assembleSubmaps() {
-    KeyframeCorrection corr;
-    {
-        std::lock_guard<std::mutex> lock(_corr_mtx);
-        corr = _kf_correction;
-    }
-    // submaps.csv: anchor pose in the odometry world it was fused in, and corrected (equal without a correction)
-    std::ofstream csv(_submap_dir + "/submaps.csv", std::ios::trunc);
-    csv << "submap,anchor_timestamp_ns,segment,keyframes,closed,"
-           "x,y,z,qx,qy,qz,qw,corrected_x,corrected_y,corrected_z,corrected_qx,corrected_qy,corrected_qz,corrected_qw\n";
-    auto pose = [&](const Eigen::Affine3d& T) {
-        const Eigen::Quaterniond q(T.linear());
-        csv << "," << T.translation().x() << "," << T.translation().y() << "," << T.translation().z() << ","
-            << q.x() << "," << q.y() << "," << q.z() << "," << q.w();
-    };
-    DenseMesh out;
-    for (const Submap& s : _submaps) {
-        Eigen::Affine3d C = Eigen::Affine3d::Identity();
-        if (corr && !corr(s.anchor_ts, C))
-            C = Eigen::Affine3d::Identity();
-        const Eigen::Affine3d T = C * s.T_w_anchor;
-        csv << std::setprecision(10) << s.id << "," << s.anchor_ts << "," << s.segment << "," << s.n_kf << ","
-            << (s.map ? 0 : 1);
-        pose(s.T_w_anchor);
-        pose(T);
-        csv << "\n";
-        const int base = static_cast<int>(out.vertices.size());
-        for (const auto& v : s.mesh.vertices)
-            out.vertices.push_back(T * v);
-        for (const auto& f : s.mesh.faces)
-            out.faces.push_back(f + Eigen::Vector3i::Constant(base));
-        for (const auto& n : s.mesh.face_normals)
-            out.face_normals.push_back(T.linear() * n);
-        if (s.mesh.vertex_variance.size() == s.mesh.vertices.size())
-            out.vertex_variance.insert(out.vertex_variance.end(), s.mesh.vertex_variance.begin(),
-                                       s.mesh.vertex_variance.end());
-    }
-    if (out.vertex_variance.size() != out.vertices.size())
-        out.vertex_variance.clear();
-    if (out.face_normals.size() != out.faces.size())
-        out.face_normals.clear();
-    return out;
+    // Meshing of the open submap only (closed ones keep their mesh), then the global mesh, every save_every keyframes
+    _anchors->keyframeDone([&](AnchoredMaps::Anchor& o) { o.mesh = mesher(o); });
+    dense_mesh = _anchors->globalMesh();
+    const auto ms = [](auto x, auto y) { return std::chrono::duration_cast<std::chrono::milliseconds>(y - x).count(); };
+    std::cout << "[DenseMesh] " << _cfg.mesh_method << " submap " << a.id << " kf=" << _integrated
+              << " pts=" << points_cam.size() << " integrate=" << ms(t0, t1) << "ms mesh=" << ms(t1, clk::now())
+              << "ms faces=" << dense_mesh.faces.size() << std::endl;
 }
 
 bool MarginalDepthInjector::pollResult(DenseResult& out) {

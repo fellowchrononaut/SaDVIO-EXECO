@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dense submaps placed by the loop closure (dense_submap_kfs): how far the submap anchors are from the ground truth
+"""Historical (first, vdbgpdf-only version; now dense_anchor_eval.py). Dense submaps placed by the loop closure: how far the submap anchors are from the ground truth
 before (odometry pose the submap was fused at) and after the loop closure's correction (log_slam/dense_submaps/
 submaps.csv), each set aligned to the ground truth by one SE3 per segment (ground truth in evaluation only). The anchor
 is the rectified left camera; the ground truth is the body, a fixed lever arm of a few centimetres that both sets share.

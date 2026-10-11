@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Historical: the first, vdbgpdf-only version (snapshot dsm1, log_slam/dense_submaps/). Now: dense_anchored and
+# run_dense_anchored.sh / dense_anchor_eval.py.
 # Dense submaps placed by the loop closure (dense_submap_kfs): SGBM depth, VDB TSDF (stereo_tsdf), submaps of 10 KFs,
 # loop closure on. VIO no prior (output correction) and VIO dense prior (window correction: submaps restart when the
 # window moves), EuRoC (SEQS to choose others). Usage: [SEQS="..."] run_dense_submaps.sh <lane> <part> <parts>

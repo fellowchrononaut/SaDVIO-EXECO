@@ -5,9 +5,12 @@ document is about getting every dense mesh method to follow those corrections. I
 quality and to the MeshCSLAM interface.
 
 Status:
-- Done: submaps for `vdbgpdf` (`dense_submap_kfs`, `doc/loop_closure/LOOP_CLOSURE_LEDGER.md`, 2026-10-10).
-- Next: steps 1 and 2.
+- Done (2026-10-10): steps 1 and 2, for every method. Options `dense_anchored`, `dense_submap_kfs`,
+  `dense_anchored_mesh_path`, `dense_anchored_save_every`, `dense_fused_view`, `dense_fused_mesh_path`. Results:
+  `doc/loop_closure/LOOP_CLOSURE_LEDGER.md`.
 - Later: step 3.
+- The first version (vdbgpdf only, `dense_submap_kfs > 0`, `log_slam/dense_submaps/`) is replaced: `dense_anchored`
+  switches the anchored maps on, and `dense_submap_kfs` (default 10) only sets the submap size.
 
 ## Why the dense map does not follow corrections today
 
@@ -64,6 +67,13 @@ The global mesh, the PLYs, `anchors.csv` and the `dense_mesh` topic are assemble
 - Within a submap the geometry moves rigidly. Blending neighbouring anchors' corrections per vertex would remove the
   seams; that can be added later, for display.
 
+Built as `AnchoredMaps` (`cpp/include/isaeslam/stereo/AnchoredMaps.h`). The injector feeds it:
+- Per-keyframe methods: the estimators still build at the keyframe's pose, and their result is moved into the camera
+  frame (exact). For `none`, the point cloud is kept in 5 cm voxels.
+- Fused methods: each keyframe is integrated into the open submap's volume (`VDBGPDFMap` or `GPGlobalMap`).
+
+The global mesh and `anchors.csv` are rewritten every `dense_anchored_save_every` keyframes.
+
 ### 2. Fused global view (option, on top of 1)
 
 `dense_fused_view` merges the placed submap volumes into one global volume by weighted voxel merging (c-blox /
@@ -81,11 +91,25 @@ submaps, so later loops never leave it inconsistent.
 - Not on every loop: during a revisit, loops close at nearly every keyframe (room2: 429 loops) with small changes.
 - Needs the closed submaps' grids kept. Today a closed submap keeps only its mesh. A sparse VDB TSDF costs a few MB
   per submap.
-- Per method:
-  - TSDF and VDB-GPDF merge their VDB grids (OpenVDB resamples a transformed grid).
-  - The GP global map refits from the placed submaps' points.
-  - Per-keyframe methods have no volume to merge. Their fused view would integrate their placed per-keyframe geometry
-    into a TSDF, which is to be decided when step 2 is built.
+- Per method (as built): the fused view is a VDB volume for every method.
+  - `vdbgpdf` (gpdf or tsdf fusion) merges its own submap volumes, which closed submaps keep for this.
+  - The other methods (zncc, pd, per-keyframe gp, gp global map, none) first integrate their geometry into TSDF
+    chunks of `dense_submap_kfs` keyframes (5 cm voxels, 10 cm truncation, no space carving).
+    - Per-keyframe methods integrate each keyframe's vertices from its own camera.
+    - The GP map integrates each submap's mesh from the submap's first camera.
+  - The chunks are merged the same way. This replaces "the GP map refits": refitting the GP cells cannot be undone
+    for one submap, while a TSDF chunk can be.
+  - So the fused view needs the VDB-GPDF build (`-DISAESLAM_WITH_VDBGPDF=ON`) for every method.
+- Merge (`VDBGPDFMap::accumulateInto`): each voxel of a placed volume is splatted trilinearly onto the fused lattice
+  as a weighted running average, so a rotation leaves no holes. The same splat with a negative weight removes it.
+  A voxel whose weight drops under 0.01 (of one observation) is cleared, which absorbs float32 cancellation (weights
+  reach hundreds).
+- The open submap or chunk is not merged yet. It is added to the fused mesh as its own layer until it closes.
+- Files: `dense_fused_mesh_path`. With `dense_fused_view: 1` it is also what the `dense_mesh` topic shows.
+- End of the run: the SLAM threads never return. `main` (SIGTERM / SIGINT, as batch runs end with `pkill`) and the ROS
+  node (after `rclcpp::spin`) call `MarginalDepthInjector::finish()`, which processes the queued keyframes, closes the
+  last submap, writes the anchors and rebuilds the fused view, then the process exits. Before this, no final dense
+  file was ever written in a batch run.
 
 ### 3. Alternative, later: de-integration and re-integration (BundleFusion style)
 
@@ -104,3 +128,17 @@ From `doc/loop_closure/LOOP_CLOSURE_LEDGER.md`, 2026-10-10:
 - On the EuRoC Vicon rooms with decimetre drift (no prior, V1_03 and V2_02), the mesh moves 3–4 cm closer to the
   Leica scan in median, and 4–6 points more of it lies within 10 cm.
 - On easy sequences the SGBM depth (6–17 cm median) hides the correction.
+
+## Measured with FFS depth (2026-10-10, all methods)
+
+From `doc/loop_closure/LOOP_CLOSURE_LEDGER.md`: EuRoC V1_03 and V2_02, VIO no prior with loop closure, Leica scan.
+- Anchors at corrected poses beat anchors at odometry poses for every method on both sequences: 2–15 points more of
+  the mesh within 10 cm of the scan.
+- The fused view beats the global map it replaces (or ties: vdbgpdf gpdf on V1_03). It loses to the anchored layers
+  at this pose accuracy (~5–9 cm ATE after loops, near the 10 cm TSDF truncation).
+- So MeshCSLAM should take the anchored meshes. The fused view is for viewing and local use.
+- Checked with better poses (VIO dense / sparse prior): the layers improve, the fused view does not. Every
+  long-horizon volume (old global map, one whole-run submap, fused view) stays at 14–20 cm median against 4.5–8 cm
+  for 10-keyframe submaps, so the limit is long-horizon TSDF fusion of FFS depth on this data, not the merge (3 cm
+  resampling blur). Step 3 would inherit it and stays unbuilt until that is understood (ledger, "Fused view with
+  better poses").

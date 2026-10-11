@@ -185,8 +185,16 @@ struct Config {
     int         dense_vdbgpdf_stride     = 2;
     int         dense_vdbgpdf_mesh_every = 5;         // keyframes between mesh extraction + PLY save (0 = never save)
     std::string dense_vdbgpdf_mesh_path  = "log_slam/dense_vdbgpdf_mesh.ply";
-    int         dense_submap_kfs         = 0;         // vdbgpdf: keyframes per submap, fused in its first keyframe's
-                                                      // frame and placed at its loop-corrected pose (0: one global map)
+    // Anchored maps, every dense_mesh_method (doc/dense_anchored_maps.md): geometry kept per anchor keyframe and
+    // placed at its loop-corrected pose; per-keyframe methods anchor each keyframe, fused ones (gp global map,
+    // vdbgpdf) fuse submaps of dense_submap_kfs keyframes
+    bool        dense_anchored            = false;
+    int         dense_submap_kfs          = 10;
+    std::string dense_anchored_mesh_path  = "log_slam/dense_anchored_mesh.ply"; // anchors in <dir>/dense_anchors/
+    int         dense_anchored_save_every = 5;  // keyframes between global mesh saves (0: only at the end)
+    int         dense_fused_view          = 1;  // anchored maps merged into one volume: 0 off, 1 at every save (moved
+                                                // volumes re-projected) + full rebuild at the end, 2 at the end only
+    std::string dense_fused_mesh_path     = "log_slam/dense_fused_mesh.ply";
     std::string dense_vdbgpdf_preset_path;            // resolved from the config folder and dense_vdbgpdf_preset
 
     // Dense primal-dual mesh controls from the inverse-depth optimization paper.

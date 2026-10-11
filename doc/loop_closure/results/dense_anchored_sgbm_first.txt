@@ -1,0 +1,12 @@
+dam2_zncc V1_03 (882 anchors, final rebuild): odometry: 12.2 cm, <5 cm 23%, <10 cm 43%, complete 58% | corrected: 8.3 cm, <5 cm 32%, <10 cm 57%, complete 63% | fused: 16.6 cm, <5 cm 18%, <10 cm 33%, complete 70%
+dam2_zncc V2_02 (708 anchors, final rebuild): odometry: 8.9 cm, <5 cm 31%, <10 cm 54%, complete 69% | corrected: 7.4 cm, <5 cm 37%, <10 cm 61%, complete 69% | fused: 18.9 cm, <5 cm 16%, <10 cm 30%, complete 75%
+dam2_pd V1_03 (893 anchors, final rebuild): odometry: 19.0 cm, <5 cm 15%, <10 cm 30%, complete 64% | corrected: 14.2 cm, <5 cm 21%, <10 cm 39%, complete 69% | fused: 20.0 cm, <5 cm 9%, <10 cm 18%, complete 72%
+dam2_pd V2_02 (712 anchors, final rebuild): odometry: 13.7 cm, <5 cm 22%, <10 cm 40%, complete 69% | corrected: 12.3 cm, <5 cm 27%, <10 cm 45%, complete 71% | fused: 20.0 cm, <5 cm 9%, <10 cm 18%, complete 74%
+dam2_gpkf V1_03 (895 anchors, final rebuild): odometry: 20.0 cm, <5 cm 4%, <10 cm 7%, complete 47% | corrected: 20.0 cm, <5 cm 4%, <10 cm 8%, complete 54% | fused: 20.0 cm, <5 cm 2%, <10 cm 4%, complete 35%
+dam2_gpkf V2_02 (707 anchors, final rebuild): odometry: 20.0 cm, <5 cm 5%, <10 cm 9%, complete 52% | corrected: 20.0 cm, <5 cm 5%, <10 cm 10%, complete 54% | fused: 20.0 cm, <5 cm 3%, <10 cm 5%, complete 43%
+dam2_gpmap V1_03 (90 anchors, final rebuild): odometry: 20.0 cm, <5 cm 1%, <10 cm 2%, complete 20% | corrected: 20.0 cm, <5 cm 1%, <10 cm 2%, complete 24% | fused: 20.0 cm, <5 cm 3%, <10 cm 5%, complete 45%
+dam2_gpmap V2_02 (72 anchors, final rebuild): odometry: 20.0 cm, <5 cm 2%, <10 cm 3%, complete 28% | corrected: 20.0 cm, <5 cm 2%, <10 cm 3%, complete 31% | fused: 20.0 cm, <5 cm 3%, <10 cm 7%, complete 51%
+dam_tsdf V1_03 (90 anchors, final rebuild): odometry: 20.0 cm, <5 cm 13%, <10 cm 26%, complete 64% | corrected: 19.7 cm, <5 cm 17%, <10 cm 32%, complete 72% | fused: 20.0 cm, <5 cm 5%, <10 cm 9%, complete 41%
+dam_tsdf V2_02 (72 anchors, final rebuild): odometry: 20.0 cm, <5 cm 16%, <10 cm 29%, complete 70% | corrected: 20.0 cm, <5 cm 18%, <10 cm 32%, complete 72% | fused: 20.0 cm, <5 cm 5%, <10 cm 8%, complete 33%
+dam_gpdf V1_03 (90 anchors, final rebuild): odometry: 13.3 cm, <5 cm 21%, <10 cm 40%, complete 63% | corrected: 10.1 cm, <5 cm 27%, <10 cm 50%, complete 70% | fused: 20.0 cm, <5 cm 8%, <10 cm 15%, complete 65%
+dam_gpdf V2_02 (72 anchors, final rebuild): odometry: 11.2 cm, <5 cm 25%, <10 cm 46%, complete 80% | corrected: 9.8 cm, <5 cm 28%, <10 cm 51%, complete 80% | fused: 20.0 cm, <5 cm 8%, <10 cm 15%, complete 68%

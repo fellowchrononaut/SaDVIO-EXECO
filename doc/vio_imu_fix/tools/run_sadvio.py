@@ -127,7 +127,7 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
             break
     if proc.poll() is None:
         subprocess.run(['docker', 'exec', CONTAINER, 'pkill', '-f', to_container(cfg_dir)])
-        proc.wait(timeout=30)
+        proc.wait(timeout=600)  # the dense map writes its final files on SIGTERM
     wall = time.time() - t0 - (stall if reason == 'stall' else 0)
     meta = dict(seq=seq, mode=mode, overrides=overrides, end_reason=reason, wall_s=round(wall, 1), binary=binary,
                 cpus=cpus, nice=nice,
