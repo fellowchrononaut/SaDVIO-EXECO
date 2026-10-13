@@ -83,6 +83,10 @@ struct Config {
     double vio_bias_prior_gyr = 0;         //!< frame's accelerometer (m/s^2) / gyroscope (rad/s) bias, as standard
                                            //!< deviations (a turn-on bias); 0: none. Default 0.3 / 0
                                            //!< (doc/vio_imu_fix/IMU_FIX_LEDGER.md, 2026-10-10)
+    int log_pose_covariance = 0;           //!< 1: log the front-end ESKF covariance of every frame (cov_front.csv) and
+                                           //!< the pose covariance of every VIO window optimization (cov_window.csv)
+                                           //!< for consistency (NEES) evaluation. Off by default: it adds up to ~40 ms per
+                                           //!< KF to the window optimization (a live back end could fall behind)
     int mono_essential_fallback = 0;       //!< Mono VO: when PnP fails, pose the frame from the 2D-2D essential matrix
                                            //!< of the tracked features (scale from the landmarks left or the motion)
     int loop_closure = 0;                  //!< 1: loop closure over the KFs that left the window (doc/loop_closure)

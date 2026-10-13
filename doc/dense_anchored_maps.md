@@ -58,7 +58,9 @@ The global mesh, the PLYs, `anchors.csv` and the `dense_mesh` topic are assemble
   coordinates. Their meshes are kept instead of replaced by the next one.
 - **Fused methods** (`gp` global map, `vdbgpdf` gpdf / tsdf): submaps of `dense_submap_kfs` keyframes. Each is fused
   in its first keyframe's frame and placed by it.
-  - A new submap starts at every re-initialization and at every window correction, as `vdbgpdf` does now.
+  - A new submap starts at every re-initialization. At a window correction (the world moved by C) the open submap
+    continues with its anchor re-expressed as C·T_anchor. Until 2026-10-13 it was closed instead: with the dense
+    prior, room1 then broke into submaps of a few keyframes (450 window moves).
   - `dense_gp_register` registers each keyframe against the current submap only.
 - Files: `log_slam/dense_anchors/anchor_NNNN.ply` (geometry in the anchor frame) and `anchors.csv` (anchor timestamp,
   segment, keyframes, closed, odometry pose, corrected pose). These are what the MeshCSLAM map server takes: submap

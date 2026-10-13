@@ -275,6 +275,21 @@ class SLAMCore {
      */
     void logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats);
 
+    /*!
+     * @brief Config log_pose_covariance: append the front-end ESKF estimate T_ref_f of the current frame and its full
+     * covariance (right perturbation, order rotation, translation) to log_slam/cov_front.csv
+     */
+    void logFrontCovariance(const std::shared_ptr<Frame> &ref,
+                            const Eigen::Affine3d &T_ref_f,
+                            const Eigen::MatrixXd &cov,
+                            bool eskf_ok);
+
+    /*!
+     * @brief Config log_pose_covariance: append the pose covariance of the last window optimization
+     * (WindowCovariance) to log_slam/cov_window.csv
+     */
+    void logWindowCovariance(const WindowCovariance &wc);
+
   protected:
     std::shared_ptr<Frame> _frame; //!< Current frame
 
@@ -320,6 +335,8 @@ class SLAMCore {
     // VIO diagnostics
     uint _n_rejected_imu   = 0;     //!< IMU samples rejected by processIMU() (e.g. out of order)
     bool _vio_diag_started = false; //!< Header of log_slam/vio_diag.csv written
+    bool _cov_front_started  = false; //!< Header of log_slam/cov_front.csv written
+    bool _cov_window_started = false; //!< Header of log_slam/cov_window.csv written
     bool _kf_votes_started = false; //!< Header of log_slam/kf_votes.csv written
     bool _results_started  = false; //!< log_slam/results.csv and cov_mat.csv created (once per run)
     int _segment           = 0;     //!< Re-initializations so far: the segment column of results.csv (each segment has

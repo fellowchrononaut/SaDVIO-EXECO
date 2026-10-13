@@ -98,7 +98,7 @@ struct MarginalDepthConfig {
     // Anchored maps (every mesh method, doc/dense_anchored_maps.md): the geometry is kept per anchor keyframe, in
     // its frame, and the global mesh places every anchor at its loop-corrected pose. Per-keyframe methods (zncc, pd,
     // per-keyframe gp, none) anchor each keyframe; fused methods (gp global map, vdbgpdf) fuse submaps of submap_kfs
-    // keyframes (a new one also at every re-initialization and window correction)
+    // keyframes (a new one also at every re-initialization; a window correction re-expresses the open one)
     bool        anchored            = false;
     int         submap_kfs          = 10;
     std::string anchored_mesh_path  = "log_slam/dense_anchored_mesh.ply"; // anchors in <its dir>/dense_anchors/
@@ -146,9 +146,13 @@ class MarginalDepthInjector {
     using KeyframeCorrection = AnchoredMaps::KeyframeCorrection;
     void setKeyframeCorrection(KeyframeCorrection fn);
 
-    // Anchored maps: the SLAM moved its window (loop closure window correction): keyframes queued from now on are in
-    // another odometry world, so the next one starts a new submap
-    void worldMoved() { ++_world_epoch; }
+    // The SLAM moved its window by C (loop closure window correction): keyframes queued from now on are in a world
+    // moved by C. Anchored maps re-express their open submap in it instead of starting a new one
+    void worldMoved(const Eigen::Affine3d& C) {
+        if (_anchors)
+            _anchors->worldMoved(C); // before the epoch is visible to queueFrame
+        ++_world_epoch;
+    }
 
     // Anchored maps, for the ROS map interface: null without dense_anchored. Its outbox is thread-safe
     AnchoredMaps* anchoredMaps() { return _anchors.get(); }

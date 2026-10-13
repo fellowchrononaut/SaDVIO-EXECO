@@ -1934,3 +1934,26 @@ fallback turns it into a scale jump inside one segment, against odometry edges t
 
 Follow-up, not built: mark a keyframe posed by the fallback as a scale break, so that the pose graph's odometry edges
 across it get a loose scale σ. The odometry would keep the fallback's continuity, and the loop closure its free scale.
+
+**Correction (2026-10-13): more runs; scale breaks tried and removed.** Mono VO varies hugely from run to run. With
+the same binary and config, MH_01 gave 0.25 m and 2.80 m; the `lcm1` and current binaries side by side, 6 sequences
+× 2 runs each (`bis_lcm1`, `bis_sb1`), scatter the same way. Two runs per sequence cannot tell configurations apart:
+- the fallback's first A/B (0.68 vs 0.69, loop closure off) was inconclusive;
+- the comparison between `lc_mono7` and `fin_vo_mono` above came from two different batches.
+
+Pooled, with 4–8 runs per sequence, Sim3 loop closure on (medians of the per-sequence medians, 18 sequences):
+
+| | odometry | loop-closed | resets per run |
+|---|---|---|---|
+| fallback off (`lc_mono7`, `sb0_vo_mono`, `bis_*`; 4–8 runs) | 0.514 | **0.306** | 3.3 |
+| fallback on, scale breaks (`sb1_vo_mono`, 6 runs) | 0.756 | 0.576 | 1.0 |
+| fallback on, no breaks (`fin_vo_mono`, 2 runs) | 0.714 | 0.534 | 0.9 |
+
+- With breaks, against off: 14 of 18 sequences worse, 2 better (sign test p = 0.004).
+- Breaks against no breaks: 10 better, 7 worse (p = 0.63), i.e. no effect.
+- So the fallback does hurt, but through the odometry itself (0.51 → 0.76 m), not by conflicting with the Sim3 graph.
+  The explanation given above (scale jumps against stiff odometry edges) is withdrawn.
+- The scale break (fallback poses flagged, Sim3 odometry edges across them with a loose scale σ 0.5) was built and
+  unit-tested: on a synthetic jump to 0.6 scale the mean error went 0.39 → 0.10 m. It brought nothing on real data,
+  so it was removed again. `mono_essential_fallback` stays 0.
+- Method: mono VO comparisons need at least 4–6 runs per sequence, compared per sequence (sign test).

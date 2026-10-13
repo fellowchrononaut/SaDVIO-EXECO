@@ -45,7 +45,8 @@ class AnchoredMaps {
     struct Anchor {
         int id = 0;
         unsigned long long ts = 0;       // anchor keyframe
-        int segment = 0, epoch = 0;      // odometry world it was built in (re-initializations, window corrections)
+        int segment = 0, epoch = 0;      // odometry world of its anchor (segment: re-initializations; epoch: window
+                                         // corrections, which move the world by a known transform)
         Eigen::Affine3d T_w_anchor = Eigen::Affine3d::Identity(); // odometry pose of the anchor frame
         int n_kf = 0;
         bool closed = false;
@@ -61,10 +62,11 @@ class AnchoredMaps {
     // Per-keyframe methods: the keyframe's geometry in its own (rectified camera) frame; closed at once
     void addKeyframe(unsigned long long ts, int segment, int epoch, const Eigen::Affine3d& T_w_cam, DenseMesh mesh_cam);
 
-    // Fused methods: the open submap this keyframe goes into. When the current one is full or was built in another
-    // odometry world it is closed (mesher gives its final mesh) and a new one opened. T_a_c: the keyframe's camera in
-    // the submap's anchor frame. The caller creates the submap's volume when it is new (vdb / gp empty) and
-    // integrates into it
+    // Fused methods: the open submap this keyframe goes into. When the current one is full or from another segment
+    // (a re-initialization: an unrelated world) it is closed (mesher gives its final mesh) and a new one opened. A
+    // window correction does not close it: the anchor is re-expressed in the keyframe's epoch (worldMoved). T_a_c:
+    // the keyframe's camera in the submap's anchor frame. The caller creates the submap's volume when it is new
+    // (vdb / gp empty) and integrates into it
     using Mesher = std::function<DenseMesh(Anchor&)>;
     Anchor& submapFor(unsigned long long ts, int segment, int epoch, const Eigen::Affine3d& T_w_cam,
                       Eigen::Affine3d& T_a_c, const Mesher& mesher);
@@ -86,6 +88,12 @@ class AnchoredMaps {
     void finish();
 
     size_t size() const { return _anchors.size(); }
+
+    // The SLAM moved its window by C (loop closure window correction): poses of the next epoch are C times the
+    // previous epoch's. Thread-safe; called before the keyframes of the new epoch are queued
+    void worldMoved(const Eigen::Affine3d& C);
+    // A pose of epoch `from` expressed in epoch `to`
+    Eigen::Affine3d epochMove(int from, int to);
 
     // Outbox for publishers (the ROS map interface; off by default so that nothing piles up without a consumer).
     // A closed anchor's geometry once, in its anchor frame, with its pose at that time; and every anchor's corrected
@@ -138,6 +146,8 @@ class AnchoredMaps {
     std::vector<Closed> _closed_out;
     std::vector<Pose> _poses_out;
     unsigned _poses_version = 0;
+    std::mutex _epoch_mtx;
+    std::vector<Eigen::Affine3d> _epoch_cum{Eigen::Affine3d::Identity()}; // epoch e's world = _epoch_cum[e] * epoch 0's
 };
 
 DenseMesh transformMesh(const DenseMesh& m, const Eigen::Affine3d& T);

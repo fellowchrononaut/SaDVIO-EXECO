@@ -67,7 +67,7 @@ void AnchoredMaps::addGeometryToView(const Anchor& a) {
     if (a.mesh.vertices.empty())
         return;
     View* v = _views.empty() || _views.back().closed ? nullptr : &_views.back();
-    if (v && (v->n_kf >= _cfg.submap_kfs || v->segment != a.segment || v->epoch != a.epoch)) {
+    if (v && (v->n_kf >= _cfg.submap_kfs || v->segment != a.segment)) {
         v->closed = true;
         v         = nullptr;
     }
@@ -83,7 +83,9 @@ void AnchoredMaps::addGeometryToView(const Anchor& a) {
     // The geometry in the chunk's frame, integrated from the anchor's camera (its own keyframe's camera for the
     // per-keyframe methods, the submap's first camera for the GP map)
     // Thinned to half a voxel first (dense GP meshes have tens of thousands of vertices per keyframe)
-    const Eigen::Affine3d T_v_a = _anchors[v->anchor]->T_w_anchor.inverse() * a.T_w_anchor;
+    // (the chunk's anchor re-expressed in this anchor's epoch, if a window correction came in between)
+    const Anchor& va            = *_anchors[v->anchor];
+    const Eigen::Affine3d T_v_a = (epochMove(va.epoch, a.epoch) * va.T_w_anchor).inverse() * a.T_w_anchor;
     const double cell           = 0.5 * _cfg.view_cfg.voxel_size_global;
     std::unordered_set<long long> seen;
     std::vector<Eigen::Vector3d> pts;
@@ -105,8 +107,9 @@ AnchoredMaps::Anchor& AnchoredMaps::submapFor(unsigned long long ts, int segment
                                               const Eigen::Affine3d& T_w_cam, Eigen::Affine3d& T_a_c,
                                               const Mesher& mesher) {
     Anchor* cur = _anchors.empty() || _anchors.back()->closed ? nullptr : _anchors.back().get();
-    // A submap's keyframes must share one odometry world for their relative poses to hold
-    if (cur && (cur->n_kf >= _cfg.submap_kfs || cur->segment != segment || cur->epoch != epoch)) {
+    // A submap's keyframes must share one segment (a re-initialization's world is unrelated to the last one); a window
+    // correction moved the world by a known transform, so the submap goes on with its anchor re-expressed
+    if (cur && (cur->n_kf >= _cfg.submap_kfs || cur->segment != segment)) {
         closeOpenSubmap(mesher);
         cur = nullptr;
     }
@@ -120,9 +123,22 @@ AnchoredMaps::Anchor& AnchoredMaps::submapFor(unsigned long long ts, int segment
         _anchors.push_back(std::move(a));
         cur = _anchors.back().get();
     }
-    T_a_c = cur->T_w_anchor.inverse() * T_w_cam;
+    T_a_c = (epochMove(cur->epoch, epoch) * cur->T_w_anchor).inverse() * T_w_cam;
     cur->n_kf++;
     return *cur;
+}
+
+void AnchoredMaps::worldMoved(const Eigen::Affine3d& C) {
+    std::lock_guard<std::mutex> lock(_epoch_mtx);
+    _epoch_cum.push_back(C * _epoch_cum.back());
+}
+
+Eigen::Affine3d AnchoredMaps::epochMove(int from, int to) {
+    std::lock_guard<std::mutex> lock(_epoch_mtx);
+    const int n = static_cast<int>(_epoch_cum.size());
+    if (from == to || from < 0 || to < 0 || from >= n || to >= n)
+        return Eigen::Affine3d::Identity();
+    return _epoch_cum[to] * _epoch_cum[from].inverse();
 }
 
 void AnchoredMaps::closeOpenSubmap(const Mesher& mesher) {

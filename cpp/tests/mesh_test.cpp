@@ -341,28 +341,34 @@ TEST(AnchoredMapsTest, anchorsArePlacedAtTheirCorrectedPoses) {
     EXPECT_LT((g.face_normals[1] - (C * T2).linear() * tri.face_normals[0]).norm(), 1e-12);
 }
 
-// Fused methods: a submap takes submap_kfs keyframes, and a new one starts whenever the odometry world changes
-// (re-initialization: segment, window moved by a loop: epoch), since its keyframes' relative poses must hold
-TEST(AnchoredMapsTest, submapsStartWhenFullOrWhenTheWorldChanges) {
+// Fused methods: a submap takes submap_kfs keyframes; a re-initialization (new segment: an unrelated world) starts a
+// new one. A window correction (new epoch: the world moved by a known C) does not: the submap goes on, with its anchor
+// re-expressed in the new epoch, so the keyframe's pose in the anchor frame stays the true relative pose
+TEST(AnchoredMapsTest, submapsSpanWindowCorrectionsButNotReinitializations) {
     AnchoredMaps maps(anchoredConfig("anchored_submaps"));
     int meshed = 0;
     const AnchoredMaps::Mesher mesher = [&](AnchoredMaps::Anchor &a) {
         meshed++;
         return a.mesh;
     };
+    Eigen::Affine3d C = Eigen::Affine3d::Identity(); // the window correction between KF 0 and KF 1
+    C.linear()        = Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    C.translation()   = Eigen::Vector3d(0.5, -0.3, 0.1);
     Eigen::Affine3d T_a_c;
-    std::vector<int> ids;
-    const int segment[] = {0, 0, 0, 0, 1, 1};
-    const int epoch[]   = {0, 0, 0, 1, 1, 1};
-    for (int k = 0; k < 6; k++)
-        ids.push_back(maps.submapFor(10 * k, segment[k], epoch[k], pose(k, 0.1 * k), T_a_c, mesher).id);
-    // KF 0, 1: submap 0 (full); KF 2: submap 1; KF 3: new epoch, submap 2; KF 4: new segment, submap 3; KF 5: same
-    EXPECT_EQ(ids, (std::vector<int>{0, 0, 1, 2, 3, 3}));
-    EXPECT_EQ(meshed, 3) << "each submap left behind was closed with its final mesh";
-    // The keyframe's camera in the anchor's frame: the relative odometry pose
-    EXPECT_LT((T_a_c.matrix() - (pose(4, 0.4).inverse() * pose(5, 0.5)).matrix()).norm(), 1e-12);
+    // KF 0 in epoch 0; the window moves by C; KF 1 and KF 2 are in epoch 1 (their poses are C times the old world's)
+    EXPECT_EQ(maps.submapFor(0, 0, 0, pose(0, 0), T_a_c, mesher).id, 0);
+    maps.worldMoved(C);
+    const Eigen::Affine3d T1 = C * pose(1, 0.1);
+    EXPECT_EQ(maps.submapFor(10, 0, 1, T1, T_a_c, mesher).id, 0) << "a window correction does not close the submap";
+    EXPECT_LT((T_a_c.matrix() - (pose(0, 0).inverse() * pose(1, 0.1)).matrix()).norm(), 1e-12)
+        << "relative pose across the correction: the anchor re-expressed as C T_anchor";
+    EXPECT_EQ(maps.submapFor(20, 0, 1, C * pose(2, 0.2), T_a_c, mesher).id, 1) << "submap 0 full (2 KFs)";
+    EXPECT_EQ(maps.submapFor(30, 1, 1, pose(3, 0.3), T_a_c, mesher).id, 2) << "a re-initialization closes it";
+    EXPECT_EQ(maps.submapFor(40, 1, 1, pose(4, 0.4), T_a_c, mesher).id, 2);
+    EXPECT_EQ(meshed, 2) << "each submap left behind was closed with its final mesh";
+    EXPECT_LT((T_a_c.matrix() - (pose(3, 0.3).inverse() * pose(4, 0.4)).matrix()).norm(), 1e-12);
     maps.closeOpenSubmap(mesher);
-    EXPECT_EQ(meshed, 4);
+    EXPECT_EQ(meshed, 3);
 }
 
 namespace {

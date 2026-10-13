@@ -39,6 +39,23 @@ struct VIOptimStats {
 };
 
 /*!
+ * @brief Covariance of the poses of the last visual-inertial window optimization (evaluation logging only, config
+ * log_pose_covariance): the joint marginal of the newest, previous and oldest window frames, with the landmarks
+ * Schur-eliminated and the gauge freedoms (null space) left out by a pseudo-inverse. It is in the error of the pose
+ * parameter blocks, T_f_w <- T_f_w [Exp(w), t] with (w, t) per frame, at the poses T_f_w of the solution (before
+ * restoreGauge). A frame held constant has zero rows.
+ */
+struct WindowCovariance {
+    bool valid = false;
+    unsigned long long ts[3]   = {0, 0, 0};  //!< Timestamps of the newest, previous and oldest frame
+    Eigen::Affine3d T_f_w[3];                //!< Their poses at the solution
+    Eigen::Matrix<double, 18, 18> cov;       //!< Joint covariance of their pose errors
+    int n_states = 0, n_landmarks = 0;       //!< Tangent sizes of the frame states and of the landmarks
+    int n_null   = 0;                        //!< Eigenvalues of the reduced information matrix treated as zero
+    double min_eig = 0, max_eig = 0;         //!< Smallest kept and largest eigenvalue
+};
+
+/*!
  * \brief Abstract class for optimization pipeline based on CERES.
  *
  * This class provides methods for optimizing frames, landmarks, and local maps.
@@ -74,6 +91,16 @@ class AOptimizer {
      * @brief Diagnostics of the last visual-inertial window optimization
      */
     const VIOptimStats &getLastVIStats() const { return _last_vi_stats; }
+
+    /*!
+     * @brief Compute the pose covariance of every visual-inertial window optimization (config log_pose_covariance)
+     */
+    void setLogWindowCovariance(bool enable) { _log_window_cov = enable; }
+
+    /*!
+     * @brief Pose covariance of the last visual-inertial window optimization (valid false if not computed)
+     */
+    const WindowCovariance &getLastWindowCovariance() const { return _last_window_cov; }
 
     /*!
      * @brief True if a preintegration factor can link fi to fj: fj's preintegration starts at fi, spans at
@@ -394,6 +421,14 @@ class AOptimizer {
     std::array<double, 6> _prior_diag = {0, 0, 0, 0, 0, 0}; //!< Diagnostics of the dense prior of the problem
 
     VIOptimStats _last_vi_stats; //!< Diagnostics of the last visual-inertial window optimization
+
+    /*!
+     * @brief Fill _last_window_cov from the solved window problem (if enabled). Call after the solve, before the
+     * states are updated from the parameter blocks. frame_vector: newest first.
+     */
+    void computeWindowCovariance(ceres::Problem &problem, const std::vector<std::shared_ptr<Frame>> &frame_vector);
+    bool _log_window_cov = false;
+    WindowCovariance _last_window_cov;
 
     bool _enable_sparsif = false;                           //!< enable sparsification of the marginalization
     double _bias_prior_acc = 0;     //!< absolute bias prior without a marginalization prior (see setBiasPrior)

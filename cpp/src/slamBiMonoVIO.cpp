@@ -517,16 +517,19 @@ bool SLAMBiMonoVIO::frontEndStep() {
 
         Eigen::MatrixXd cov = Eigen::MatrixXd::Identity(6, 6);
         Eigen::Affine3d T_last_curr, T_w_f;
+        bool eskf_ok = false; // the ESKF update was applied (logged with its covariance)
         T_last_curr = getLastKF()->getWorld2FrameTransform() * _frame->getFrame2WorldTransform();
         ESKFEstimator eskf;
         const Eigen::Affine3d T_pnp = T_last_curr;
-        eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
+        eskf_ok = eskf.estimateTransformBetween(getLastKF(), _frame, _matches_in_time_lmk["pointxd"], T_last_curr, cov);
         if (!plausibleUpdate(T_pnp, T_last_curr)) {
             std::cerr << "ESKF update rejected (implausible jump), PnP pose kept" << std::endl;
             T_last_curr = T_pnp;
+            eskf_ok     = false;
         }
         T_w_f = getLastKF()->getFrame2WorldTransform() * T_last_curr;
         _frame->setdTCov(cov);
+        logFrontCovariance(getLastKF(), T_last_curr, cov, eskf_ok);
         _frame->setWorld2FrameTransform(T_w_f.inverse());
 
         float optim_dt   = isae::timer::silentToc();
@@ -756,6 +759,7 @@ bool SLAMBiMonoVIO::backEndStep() {
             _slam_param->getOptimizerBack()->localMapVIOptimization(_local_map, _local_map->getFixedFrameNumber());
         }
         logVIODiag(_frame_to_optim, _slam_param->getOptimizerBack()->getLastVIStats());
+        logWindowCovariance(_slam_param->getOptimizerBack()->getLastWindowCovariance());
 
         // Vector6d dV = geometry::se3_RTtoVec6d(
         //     _frame_to_optim->getWorld2FrameTransform() * T_w_f.inverse());

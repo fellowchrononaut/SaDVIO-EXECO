@@ -38,7 +38,8 @@ topics then stay off.
 Anchors (`doc/dense_anchored_maps.md`):
 - Per-keyframe methods (zncc, pd, per-keyframe gp, none) have one anchor per keyframe.
 - Fused methods (gp global map, vdbgpdf) have one per submap of `dense_submap_kfs` keyframes. A submap closes when it
-  is full, at a re-initialization, or when a loop moves the window.
+  is full or at a re-initialization. When a loop moves the window, the open submap is re-expressed in the moved world
+  and continues.
 
 With `dense_anchored` and the interface on, the viewer's `dense_mesh` (the global or fused mesh) is in `map`. Loop closure
 markers (`loop_traj`, `loop_edges`, `loop_new`) are in `map` when the interface is on, and in `world` otherwise.

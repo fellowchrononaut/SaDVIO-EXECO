@@ -670,7 +670,7 @@ The mono VO fallback was on in this matrix; it has since been reverted. Table: `
 | VIO sparse prior | 0.111 | **0.033** | ~0.032 |
 | stereo VO | 0.163 | **0.050** | V2_03: 37 resets, 0.27 m |
 | mono VIO | 0.166 | **0.103** | ~0.12; MH_01/MH_02/V1_03 still 0.36–1.09 m |
-| mono VO | 0.714 | 0.534 | **regression from the fallback**: 0.465 → 0.191 without it (`lc_mono7`); fallback off again |
+| mono VO | 0.714 | 0.534 | fallback on in this matrix. Without it, pooled over 4–8 runs per sequence: 0.514 → **0.306** (`IMU_FIX_LEDGER.md`, correction of 2026-10-13); fallback off again |
 
 The other configurations are as good as or better than before. The bias prior gives VIO no prior its first V2_03 run
 without a failure.
@@ -711,3 +711,37 @@ Follow-ups:
   re-anchor the open submap (`T_w_anchor := C T_w_anchor`) and continue it.
 - Mono VO: the essential-matrix fallback as a scale break in the Sim3 graph (`IMU_FIX_LEDGER.md`).
 - The open question of long-horizon TSDF fusion (fused view, above).
+
+## 2026-10-13 — Anchored submaps continue across window corrections
+
+A window correction moves the odometry world by a known C. The open submap no longer closes there:
+- `MarginalDepthInjector::worldMoved(C)` passes C to `AnchoredMaps::worldMoved`, which keeps the cumulative transform
+  of every epoch.
+- A keyframe of a later epoch is put into the open submap through the anchor re-expressed in that epoch:
+  `T_a_c = (move(epoch_anchor -> epoch_kf) T_w_anchor)^-1 T_w_c`. The fused view's TSDF chunks work the same way.
+- Only a re-initialization (an unrelated world) still closes a submap.
+- Placement does not change: the anchor keeps its hand-over pose, and `keyframeCorrection` is relative to it.
+
+Test: `AnchoredMapsTest.submapsSpanWindowCorrectionsButNotReinitializations` checks that the relative pose across a
+correction is exact and that a re-initialization still splits.
+
+Runs (snapshot `sb1`, labels `reanc_*`), VIO dense prior, FFS:
+
+| run | window moves | anchors before → now | corrected anchors, median per area, before → now |
+|---|---|---|---|
+| VDB TSDF V1_03 | 11 | 98 → 89 | 5.1 → 5.5 cm |
+| VDB TSDF V2_02 | 26 | 90 → 72 | 6.8 → 7.1 cm |
+| VDB-GPDF V1_03 | 14 | 98 → 91 | 6.4 → 6.1 cm |
+| VDB-GPDF V2_02 | 29 | 97 → 71 | 6.5 → 6.8 cm |
+| VDB TSDF room1 (SGBM, count only) | 438 | 515 → 122 | – |
+
+- Submap counts are back to about one per `dense_submap_kfs` keyframes. Accuracy is unchanged within run-to-run noise
+  (±0.4 cm; these are separate runs).
+- The TSDF fused view on V2_02 gains completeness (65 → 72 %).
+- For MeshCSLAM this means about 4× fewer anchor messages on room1-like runs.
+
+**Mono VO numbers: correction (2026-10-13).** Mono VO varies hugely from run to run (MH_01: 0.25 m and 2.80 m with the
+same binary). The Sim3 section's medians (0.438 → 0.255) come from one batch of 2 runs per sequence. Pooled over 4–8
+runs per sequence, fallback off: odometry 0.514 → loop-closed 0.306 (medians of per-sequence medians). The paired
+statement holds: within each run, the loop-closed trajectory beats its own odometry. For mono VO, compare
+configurations with at least 4–6 runs per sequence.

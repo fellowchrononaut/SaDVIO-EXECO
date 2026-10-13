@@ -174,6 +174,8 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
         yaml_file["reinit_carry_max_age_vo"] ? yaml_file["reinit_carry_max_age_vo"].as<double>() : 2.0;
     _config.vio_bias_prior_acc = yaml_file["vio_bias_prior_acc"] ? yaml_file["vio_bias_prior_acc"].as<double>() : 0.3;
     _config.vio_bias_prior_gyr = yaml_file["vio_bias_prior_gyr"] ? yaml_file["vio_bias_prior_gyr"].as<double>() : 0;
+    _config.log_pose_covariance =
+        yaml_file["log_pose_covariance"] ? yaml_file["log_pose_covariance"].as<int>() : 0;
     _config.mono_essential_fallback =
         yaml_file["mono_essential_fallback"] ? yaml_file["mono_essential_fallback"].as<int>() : 0;
     _config.loop_closure     = yaml_file["loop_closure"] ? yaml_file["loop_closure"].as<int>() : 0;
@@ -568,5 +570,6 @@ void isae::SLAMParameters::createOptimizer() {
                                           no_prior ? _config.vio_bias_prior_gyr : 0);
         _optimizer_backend->setBiasPrior(no_prior ? _config.vio_bias_prior_acc : 0,
                                          no_prior ? _config.vio_bias_prior_gyr : 0);
+        _optimizer_backend->setLogWindowCovariance(_config.log_pose_covariance == 1);
     }
 }

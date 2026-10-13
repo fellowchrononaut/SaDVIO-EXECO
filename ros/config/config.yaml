@@ -59,6 +59,7 @@ mono_essential_fallback: 0
 ## bias), so that they stay physical when vision is weak; 0: none
 vio_bias_prior_acc: 0.3     # m/s^2 (fixes the V2_03 bias runaway; median ATE 0.146 -> 0.129 m over 18 sequences)
 vio_bias_prior_gyr: 0       # rad/s
+log_pose_covariance: 0     # 1: log the ESKF covariance of every frame (cov_front.csv) and the VIO window pose covariance (cov_window.csv) for NEES checks; evaluation only, adds up to ~40 ms per KF
 
 ## Loop closure over the keyframes that left the window (doc/loop_closure): a separate pose graph (6-DoF, Sim3 in
 ## mono VO), the corrected trajectory goes to log_slam/results_loop.csv (final) and results_loop_online.csv (as

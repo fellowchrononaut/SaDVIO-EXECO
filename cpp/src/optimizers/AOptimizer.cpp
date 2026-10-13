@@ -1,4 +1,7 @@
 #include "isaeslam/optimizers/AOptimizer.h"
+#include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
+#include <unordered_set>
 
 namespace {
 
@@ -566,6 +569,7 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
     recordCostsPerType(problem);
     if (!summary.IsSolutionUsable())
         return discardFailedSolve(summary);
+    computeWindowCovariance(problem, frame_vector);
 
     // Update state
     for (auto &frame_posepar : _map_frame_posepar) {
@@ -615,7 +619,107 @@ bool AOptimizer::localMapVIOptimization(std::shared_ptr<isae::LocalMap> &local_m
     return true;
 }
 
+void AOptimizer::computeWindowCovariance(ceres::Problem &problem,
+                                         const std::vector<std::shared_ptr<Frame>> &frame_vector) {
+    _last_window_cov.valid = false;
+    if (!_log_window_cov || frame_vector.size() < 2)
+        return;
+
+    // Free parameter blocks: the frame states (poses, velocities, biases, time offset) first, then the landmarks
+    std::unordered_set<const double *> lmk_blocks;
+    for (auto &lmk_ptpar : _map_lmk_ptpar)
+        lmk_blocks.insert(lmk_ptpar.second.values());
+    for (auto &lmk_posepar : _map_lmk_posepar)
+        lmk_blocks.insert(lmk_posepar.second.values());
+    std::vector<double *> all_blocks, order, lmk_order;
+    problem.GetParameterBlocks(&all_blocks);
+    for (double *b : all_blocks) {
+        if (problem.IsParameterBlockConstant(b))
+            continue;
+        (lmk_blocks.count(b) ? lmk_order : order).push_back(b);
+    }
+    std::unordered_map<const double *, int> col;
+    int n = 0;
+    for (double *b : order) {
+        col[b] = n;
+        n += problem.ParameterBlockTangentSize(b);
+    }
+    const int n_s = n;
+    for (double *b : lmk_order)
+        n += problem.ParameterBlockTangentSize(b);
+    const int n_l = n - n_s;
+    order.insert(order.end(), lmk_order.begin(), lmk_order.end());
+
+    // Jacobian of the (robustified) problem at the solution, information matrix H = J^T J
+    ceres::Problem::EvaluateOptions eval_options;
+    eval_options.parameter_blocks    = order;
+    eval_options.apply_loss_function = true;
+    eval_options.num_threads         = 4;
+    ceres::CRSMatrix crs;
+    if (!problem.Evaluate(eval_options, nullptr, nullptr, nullptr, &crs))
+        return;
+    Eigen::Map<const Eigen::SparseMatrix<double, Eigen::RowMajor>> J(
+        crs.num_rows, crs.num_cols, (int)crs.values.size(), crs.rows.data(), crs.cols.data(), crs.values.data());
+    const Eigen::SparseMatrix<double> H = Eigen::SparseMatrix<double>(J.transpose() * J);
+
+    // Landmarks eliminated by the Schur complement (a tiny damping keeps barely observed landmarks solvable)
+    Eigen::MatrixXd S = Eigen::MatrixXd(H.topLeftCorner(n_s, n_s));
+    if (n_l > 0) {
+        Eigen::SparseMatrix<double> H_ll = H.bottomRightCorner(n_l, n_l);
+        for (int i = 0; i < n_l; i++)
+            H_ll.coeffRef(i, i) += 1e-9;
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt(H_ll);
+        if (ldlt.info() != Eigen::Success)
+            return;
+        const Eigen::MatrixXd H_ls = Eigen::MatrixXd(H.bottomLeftCorner(n_l, n_s));
+        S -= H_ls.transpose() * ldlt.solve(H_ls);
+    }
+
+    // Pseudo-inverse: the unobservable directions (yaw and position of the window without a prior that holds them)
+    // get no covariance; the covariance of quantities independent of them (relative poses) is the same in any gauge
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(0.5 * (S + S.transpose()));
+    if (es.info() != Eigen::Success)
+        return;
+    const Eigen::VectorXd &ev = es.eigenvalues();
+    const double tol          = 1e-10 * std::max(ev.maxCoeff(), 0.0);
+    Eigen::VectorXd ev_inv    = Eigen::VectorXd::Zero(n_s);
+    int n_null                = 0;
+    double min_kept           = ev.maxCoeff();
+    for (int i = 0; i < n_s; i++) {
+        if (ev(i) > tol) {
+            ev_inv(i) = 1.0 / ev(i);
+            min_kept  = std::min(min_kept, ev(i));
+        } else {
+            n_null++;
+        }
+    }
+    const Eigen::MatrixXd S_inv = es.eigenvectors() * ev_inv.asDiagonal() * es.eigenvectors().transpose();
+
+    // Joint covariance of the newest, previous and oldest frame poses
+    const std::shared_ptr<Frame> frames[3] = {frame_vector.at(0), frame_vector.at(1), frame_vector.back()};
+    WindowCovariance &wc                   = _last_window_cov;
+    wc.cov.setZero();
+    for (int i = 0; i < 3; i++) {
+        wc.ts[i]                  = frames[i]->getTimestamp();
+        PoseParametersBlock &pose = _map_frame_posepar.at(frames[i]);
+        wc.T_f_w[i]               = frames[i]->getWorld2FrameTransform() * pose.getPose();
+        auto ci                   = col.find(pose.values());
+        for (int j = 0; j < 3; j++) {
+            auto cj = col.find(_map_frame_posepar.at(frames[j]).values());
+            if (ci != col.end() && cj != col.end())
+                wc.cov.block<6, 6>(6 * i, 6 * j) = S_inv.block<6, 6>(ci->second, cj->second);
+        }
+    }
+    wc.n_states    = n_s;
+    wc.n_landmarks = n_l;
+    wc.n_null      = n_null;
+    wc.min_eig     = min_kept;
+    wc.max_eig     = ev.maxCoeff();
+    wc.valid       = true;
+}
+
 bool AOptimizer::discardFailedSolve(const ceres::Solver::Summary &summary) {
+    _last_window_cov.valid = false;
     std::cerr << "Window optimization failed, states kept: " << summary.message << std::endl;
     _map_frame_posepar.clear();
     _map_lmk_ptpar.clear();

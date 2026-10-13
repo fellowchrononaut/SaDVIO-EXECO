@@ -572,6 +572,59 @@ bool SLAMCore::inertialInitAccepted(double scale) {
     return true;
 }
 
+void SLAMCore::logFrontCovariance(const std::shared_ptr<Frame> &ref,
+                                  const Eigen::Affine3d &T_ref_f,
+                                  const Eigen::MatrixXd &cov,
+                                  bool eskf_ok) {
+
+    if (!_slam_param->_config.log_pose_covariance || !ref || cov.rows() != 6 || cov.cols() != 6)
+        return;
+
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+
+    std::ofstream fw("log_slam/cov_front.csv", _cov_front_started ? std::ofstream::app : std::ofstream::trunc);
+    if (!_cov_front_started) {
+        fw << "timestamp (ns), ref_kf_timestamp (ns), eskf_ok, T_ref_f(00..23) row-major x12, "
+           << "cov(rot, trans) row-major x36\n";
+        _cov_front_started = true;
+    }
+    fw << std::setprecision(17) << _frame->getTimestamp() << "," << ref->getTimestamp() << "," << eskf_ok;
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 4; c++)
+            fw << "," << T_ref_f.matrix()(r, c);
+    for (int r = 0; r < 6; r++)
+        for (int c = 0; c < 6; c++)
+            fw << "," << cov(r, c);
+    fw << "\n";
+}
+
+void SLAMCore::logWindowCovariance(const WindowCovariance &wc) {
+
+    if (!_slam_param->_config.log_pose_covariance || !wc.valid)
+        return;
+
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+
+    std::ofstream fw("log_slam/cov_window.csv", _cov_window_started ? std::ofstream::app : std::ofstream::trunc);
+    if (!_cov_window_started) {
+        fw << "ts_newest (ns), ts_previous (ns), ts_oldest (ns), n_states, n_landmarks, n_null, min_eig, max_eig, "
+           << "T_f_w(00..23) row-major x12 for newest, previous, oldest, cov 18x18 row-major (per frame: w, t)\n";
+        _cov_window_started = true;
+    }
+    fw << std::setprecision(17) << wc.ts[0] << "," << wc.ts[1] << "," << wc.ts[2] << "," << wc.n_states << ","
+       << wc.n_landmarks << "," << wc.n_null << "," << wc.min_eig << "," << wc.max_eig;
+    for (int i = 0; i < 3; i++)
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 4; c++)
+                fw << "," << wc.T_f_w[i].matrix()(r, c);
+    for (int r = 0; r < 18; r++)
+        for (int c = 0; c < 18; c++)
+            fw << "," << wc.cov(r, c);
+    fw << "\n";
+}
+
 void SLAMCore::logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats) {
 
     if (!kf || !kf->getIMU())
@@ -818,7 +871,7 @@ void SLAMCore::applyLoopCorrection() {
     // The marginalization priors move with the window: their cost for the moved states is the one they had
     _slam_param->getOptimizerBack()->transformPriors(C);
     if (_depth_injector)
-        _depth_injector->worldMoved(); // dense submaps: the next keyframe starts a submap in the new world
+        _depth_injector->worldMoved(C); // anchored dense maps: the open submap goes on in the moved world
     std::cout << "Loop closure: window moved by " << C.translation().norm() << " m, "
               << Eigen::AngleAxisd(C.rotation()).angle() * 180 / M_PI << " deg" << std::endl;
 }

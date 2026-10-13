@@ -145,6 +145,7 @@ bool AngularAdjustmentCERESAnalytic::localMapVIOptimizationTd(std::shared_ptr<is
     recordCostsPerType(problem);
     if (!summary.IsSolutionUsable())
         return discardFailedSolve(summary);
+    computeWindowCovariance(problem, frame_vector);
 
     // Update state
     for (auto &frame_posepar : _map_frame_posepar) {
