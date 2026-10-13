@@ -219,7 +219,8 @@ void VDBVolume::Integrate(
 void VDBVolume::Integrate(
     const std::vector<Eigen::Vector3d> &points,
     const std::vector<openvdb::Vec3i> &colors, const Eigen::Vector3d &origin,
-    const std::function<float(float)> &weighting_function) {
+    const std::function<float(float)> &weighting_function,
+    const std::vector<float> *point_weights) {
   if (points.empty()) {
     std::cerr << "PointCloud provided is empty\n";
     return;
@@ -266,7 +267,8 @@ void VDBVolume::Integrate(
       const auto sdf = ComputeSDF(origin, point, voxel_center);
       if (sdf > -sdf_trunc_) {
         const float tsdf = std::min(sdf_trunc_, sdf);
-        const float weight = weighting_function(sdf);
+        // SaDVIO: optional per-point weight (range weighting)
+        const float weight = weighting_function(sdf) * (point_weights ? (*point_weights)[i] : 1.0f);
         const float last_weight = weights_acc.getValue(voxel);
         const float last_tsdf = tsdf_acc.getValue(voxel);
         const float new_weight = weight + last_weight;

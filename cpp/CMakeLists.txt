@@ -109,6 +109,10 @@ install(
 add_executable(isaeslam ./main.cpp)
 target_link_libraries(isaeslam ${PROJECT_NAME})
 
+# Offline replay of the dense map from a keyframe dump (EXECO_DENSE_DUMP), for fusion experiments
+add_executable(dense_replay ./tools/dense_replay.cpp)
+target_link_libraries(dense_replay ${PROJECT_NAME})
+
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------

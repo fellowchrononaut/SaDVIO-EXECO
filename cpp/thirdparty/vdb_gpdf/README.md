@@ -34,6 +34,8 @@ The ROS 2 node (`vdb_gpdf_mapping/`), its messages and the `3dparty/` submodules
 4. `GenerateVoxelsToUpdate`: a NaN PCL normal (degenerate neighbourhood) is replaced by the viewing
    direction, the upstream `surface_normal_method: 1` normal. Without this, NaN query points reach the
    PCL KD-tree and abort the process (seen with SaDVIO stereo points and the RGB-D preset).
+5. The projective TSDF `Integrate` takes an optional per-point weight vector, multiplied into each point's weight
+   (SaDVIO's range weighting, `VDBGPDFMapConfig::range_weight_ref`). Without it the behaviour is unchanged.
 
 Otherwise the algorithm is unchanged. Known upstream behaviour kept as is: `CreateLocalDisantceField` reads one
 colour per input point even when colour is disabled, so callers pass a colour vector of the same size

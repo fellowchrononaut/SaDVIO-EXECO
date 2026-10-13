@@ -170,6 +170,7 @@ class MarginalDepthInjector {
     struct QueueItem {
         cv::Mat img_L, img_R;
         Eigen::Affine3d T_w_rectcam;
+        Eigen::Affine3d T_w_f = Eigen::Affine3d::Identity(); // the frame's pose at queue time (dense dump)
         std::shared_ptr<Frame> frame;
         std::shared_ptr<Mesh3D> mesh;
         int segment = 0;
@@ -179,6 +180,9 @@ class MarginalDepthInjector {
 
     void workerLoop();
     void processItem(const QueueItem& item);
+    // EXECO_DENSE_DUMP=<dir>: write each processed keyframe's depth points and poses there (offline replay,
+    // doc/loop_closure/tools/dense_replay.cpp)
+    void dumpKeyframe(const QueueItem& item, const cv::Mat& disp_float, double f_rect, double cx_rect, double cy_rect);
 
     // Stereo rectification maps (computed once)
     cv::Mat _map_L_x, _map_L_y, _map_R_x, _map_R_y;

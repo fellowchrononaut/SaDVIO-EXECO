@@ -1,0 +1,70 @@
+# dense_replay_eval.py (all surface, 5 cm cells; bands by distance from the ground-truth camera path)
+V2_02 gt_single.ply: 17.2 cm, <5 cm 22%, <10 cm 35%, complete 55% (206263 cells)
+V2_02 gt_nocarve.ply: 20.0 cm, <5 cm 18%, <10 cm 29%, complete 73% (386987 cells)
+V2_02 gt_range4.ply: 4.0 cm, <5 cm 57%, <10 cm 78%, complete 51% (81028 cells)
+V2_02 gt_range4_nocarve.ply: 10.4 cm, <5 cm 35%, <10 cm 49%, complete 52% (145716 cells)
+V2_02 gt_minw3.ply: 16.3 cm, <5 cm 23%, <10 cm 37%, complete 55% (196268 cells)
+V2_02 gt_trunc05.ply: 18.4 cm, <5 cm 16%, <10 cm 30%, complete 35% (138117 cells)
+V2_02 gt_trunc20.ply: 16.6 cm, <5 cm 29%, <10 cm 42%, complete 64% (181586 cells)
+V2_02 gt_chunk10.ply: 12.0 cm, <5 cm 24%, <10 cm 44%, complete 76% (679440 cells)
+V2_02 gt_single.ply: 17.2 cm, <5 cm 22%, <10 cm 35%, complete 55% (206263 cells) | 0-1.5 m: 5.0 cm, 79% complete | 1.5-3 m: 20.0 cm, 47% complete | 3-99 m: 20.0 cm, 29% complete
+V2_02 gt_range4.ply: 4.0 cm, <5 cm 57%, <10 cm 78%, complete 51% (81028 cells) | 0-1.5 m: 2.8 cm, 86% complete | 1.5-3 m: 5.1 cm, 40% complete | 3-99 m: 11.7 cm, 7% complete
+V2_02 gt_rw2e4.ply: 12.0 cm, <5 cm 31%, <10 cm 46%, complete 63% (182357 cells) | 0-1.5 m: 3.5 cm, 88% complete | 1.5-3 m: 15.7 cm, 56% complete | 3-99 m: 17.3 cm, 31% complete
+V2_02 gt_rw2e4_mw03.ply: 8.8 cm, <5 cm 37%, <10 cm 53%, complete 60% (146858 cells) | 0-1.5 m: 3.3 cm, 88% complete | 1.5-3 m: 11.3 cm, 51% complete | 3-99 m: 14.2 cm, 28% complete
+V2_02 gt_rw2e4_mw1.ply: 6.1 cm, <5 cm 45%, <10 cm 64%, complete 56% (112964 cells) | 0-1.5 m: 3.0 cm, 87% complete | 1.5-3 m: 7.8 cm, 47% complete | 3-99 m: 12.6 cm, 21% complete
+V2_02 gt_rw2e4_t20.ply: 7.1 cm, <5 cm 42%, <10 cm 57%, complete 67% (141017 cells) | 0-1.5 m: 2.3 cm, 88% complete | 1.5-3 m: 10.3 cm, 61% complete | 3-99 m: 19.1 cm, 40% complete
+V2_02 gt_chunk10.ply: 12.0 cm, <5 cm 24%, <10 cm 44%, complete 76% (679440 cells) | 0-1.5 m: 9.0 cm, 91% complete | 1.5-3 m: 13.1 cm, 70% complete | 3-99 m: 20.0 cm, 68% complete
+== V2_02
+gt_single.ply: 17.2 cm, <5 cm 22%, <10 cm 35%, complete 55% (206263 cells) | 0-1.5 m: 5.0 cm, 79% complete | 1.5-3 m: 20.0 cm, 47% complete | 3-99 m: 20.0 cm, 29% complete
+gt_rw2e4_t20.ply: 7.1 cm, <5 cm 42%, <10 cm 57%, complete 67% (141017 cells) | 0-1.5 m: 2.3 cm, 88% complete | 1.5-3 m: 10.3 cm, 61% complete | 3-99 m: 19.1 cm, 40% complete
+gt_chunk10.ply: 12.0 cm, <5 cm 24%, <10 cm 44%, complete 76% (679440 cells) | 0-1.5 m: 9.0 cm, 91% complete | 1.5-3 m: 13.1 cm, 70% complete | 3-99 m: 20.0 cm, 68% complete
+gt_chunk10_w.ply: 10.5 cm, <5 cm 27%, <10 cm 48%, complete 75% (597460 cells) | 0-1.5 m: 9.7 cm, 91% complete | 1.5-3 m: 10.7 cm, 69% complete | 3-99 m: 12.6 cm, 64% complete
+loop_single_w.ply: 6.9 cm, <5 cm 42%, <10 cm 57%, complete 67% (141043 cells) | 0-1.5 m: 2.5 cm, 89% complete | 1.5-3 m: 10.4 cm, 61% complete | 3-99 m: 17.0 cm, 42% complete
+loop_merge10.ply: 20.0 cm, <5 cm 20%, <10 cm 31%, complete 60% (240754 cells) | 0-1.5 m: 5.3 cm, 83% complete | 1.5-3 m: 20.0 cm, 52% complete | 3-99 m: 20.0 cm, 38% complete
+loop_merge10_w.ply: 6.4 cm, <5 cm 43%, <10 cm 59%, complete 67% (135162 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 8.4 cm, 60% complete | 3-99 m: 15.3 cm, 47% complete
+== V1_03
+gt_single.ply: 10.9 cm, <5 cm 30%, <10 cm 47%, complete 58% (169182 cells) | 0-1.5 m: 2.6 cm, 80% complete | 1.5-3 m: 9.2 cm, 55% complete | 3-99 m: 20.0 cm, 56% complete
+gt_single_w.ply: 8.7 cm, <5 cm 36%, <10 cm 54%, complete 57% (133479 cells) | 0-1.5 m: 2.5 cm, 83% complete | 1.5-3 m: 7.2 cm, 55% complete | 3-99 m: 20.0 cm, 41% complete
+gt_chunk10.ply: 9.8 cm, <5 cm 29%, <10 cm 51%, complete 71% (458288 cells) | 0-1.5 m: 5.0 cm, 84% complete | 1.5-3 m: 9.0 cm, 69% complete | 3-99 m: 20.0 cm, 73% complete
+gt_chunk10_w.ply: 10.0 cm, <5 cm 29%, <10 cm 50%, complete 71% (444094 cells) | 0-1.5 m: 6.7 cm, 86% complete | 1.5-3 m: 9.3 cm, 69% complete | 3-99 m: 20.0 cm, 67% complete
+loop_single_w.ply: 7.5 cm, <5 cm 36%, <10 cm 57%, complete 62% (132568 cells) | 0-1.5 m: 3.5 cm, 83% complete | 1.5-3 m: 6.3 cm, 59% complete | 3-99 m: 20.0 cm, 51% complete
+loop_merge10_w.ply: 7.0 cm, <5 cm 38%, <10 cm 59%, complete 62% (127145 cells) | 0-1.5 m: 3.9 cm, 84% complete | 1.5-3 m: 6.0 cm, 59% complete | 3-99 m: 20.0 cm, 51% complete
+V1_03 loop_merge10.ply: 14.7 cm, <5 cm 26%, <10 cm 42%, complete 62% (193056 cells) | 0-1.5 m: 4.4 cm, 83% complete | 1.5-3 m: 10.6 cm, 59% complete | 3-99 m: 20.0 cm, 63% complete
+V1_03 loop_merge10_w.ply: 7.0 cm, <5 cm 38%, <10 cm 59%, complete 62% (127145 cells) | 0-1.5 m: 3.9 cm, 84% complete | 1.5-3 m: 6.0 cm, 59% complete | 3-99 m: 20.0 cm, 51% complete
+V1_03 gt_chunk10.ply: 9.8 cm, <5 cm 29%, <10 cm 51%, complete 71% (458288 cells) | 0-1.5 m: 5.0 cm, 84% complete | 1.5-3 m: 9.0 cm, 69% complete | 3-99 m: 20.0 cm, 73% complete
+[1]-  Fini                    lane 8-15 "1.5 2" > $S/tune_a.log 2>&1
+[2]+  Fini                    lane 16-23 "3" > $S/tune_b.log 2>&1
+    $T 8-15 $q tune_r1.5_e4_t15 --poses loop --chunk 10 --merge --range-weight 1.5 --range-exp 4 --trunc 0.15;
+    $T 16-23 $q tune_r1.5_e4_t30 --poses loop --chunk 10 --merge --range-weight 1.5 --range-exp 4 --trunc 0.3;
+# tuning (fused view, loop poses, merged 10-keyframe chunks)
+== V2_02
+loop_merge10.ply: 20.0 cm, <5 cm 20%, <10 cm 31%, complete 60% (240754 cells) | 0-1.5 m: 5.3 cm, 83% complete | 1.5-3 m: 20.0 cm, 52% complete | 3-99 m: 20.0 cm, 38% complete
+tune_r1.5_e3.ply: 7.1 cm, <5 cm 41%, <10 cm 57%, complete 67% (141397 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 9.9 cm, 60% complete | 3-99 m: 16.9 cm, 47% complete
+tune_r1.5_e4.ply: 4.8 cm, <5 cm 51%, <10 cm 70%, complete 63% (108562 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 5.5 cm, 54% complete | 3-99 m: 11.3 cm, 45% complete
+tune_r1.5_e6.ply: 3.6 cm, <5 cm 62%, <10 cm 82%, complete 55% (79748 cells) | 0-1.5 m: 3.0 cm, 87% complete | 1.5-3 m: 3.8 cm, 44% complete | 3-99 m: 8.6 cm, 21% complete
+tune_r2_e3.ply: 10.1 cm, <5 cm 36%, <10 cm 50%, complete 68% (162599 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 15.5 cm, 61% complete | 3-99 m: 20.0 cm, 48% complete
+tune_r2_e4.ply: 6.4 cm, <5 cm 43%, <10 cm 59%, complete 67% (135162 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 8.4 cm, 60% complete | 3-99 m: 15.3 cm, 47% complete
+tune_r2_e6.ply: 4.1 cm, <5 cm 57%, <10 cm 76%, complete 60% (94781 cells) | 0-1.5 m: 3.0 cm, 88% complete | 1.5-3 m: 4.4 cm, 50% complete | 3-99 m: 9.3 cm, 40% complete
+tune_r3_e3.ply: 13.4 cm, <5 cm 33%, <10 cm 46%, complete 68% (175693 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 19.7 cm, 61% complete | 3-99 m: 20.0 cm, 48% complete
+tune_r3_e4.ply: 11.5 cm, <5 cm 35%, <10 cm 48%, complete 68% (169490 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 17.3 cm, 61% complete | 3-99 m: 20.0 cm, 49% complete
+tune_r3_e6.ply: 6.5 cm, <5 cm 43%, <10 cm 58%, complete 68% (137191 cells) | 0-1.5 m: 2.9 cm, 88% complete | 1.5-3 m: 8.4 cm, 60% complete | 3-99 m: 14.8 cm, 49% complete
+== V1_03
+loop_merge10.ply: 14.7 cm, <5 cm 26%, <10 cm 42%, complete 62% (193056 cells) | 0-1.5 m: 4.4 cm, 83% complete | 1.5-3 m: 10.6 cm, 59% complete | 3-99 m: 20.0 cm, 63% complete
+tune_r1.5_e3.ply: 7.2 cm, <5 cm 38%, <10 cm 58%, complete 62% (128869 cells) | 0-1.5 m: 3.8 cm, 83% complete | 1.5-3 m: 6.0 cm, 59% complete | 3-99 m: 20.0 cm, 52% complete
+tune_r1.5_e4.ply: 5.9 cm, <5 cm 43%, <10 cm 67%, complete 61% (111313 cells) | 0-1.5 m: 3.8 cm, 83% complete | 1.5-3 m: 5.5 cm, 59% complete | 3-99 m: 20.0 cm, 50% complete
+tune_r1.5_e6.ply: 4.9 cm, <5 cm 51%, <10 cm 80%, complete 59% (89834 cells) | 0-1.5 m: 4.1 cm, 83% complete | 1.5-3 m: 4.8 cm, 57% complete | 3-99 m: 9.2 cm, 39% complete
+tune_r2_e3.ply: 8.3 cm, <5 cm 35%, <10 cm 54%, complete 62% (139062 cells) | 0-1.5 m: 3.9 cm, 84% complete | 1.5-3 m: 6.4 cm, 59% complete | 3-99 m: 20.0 cm, 52% complete
+tune_r2_e4.ply: 7.0 cm, <5 cm 38%, <10 cm 59%, complete 62% (127145 cells) | 0-1.5 m: 3.9 cm, 84% complete | 1.5-3 m: 6.0 cm, 59% complete | 3-99 m: 20.0 cm, 51% complete
+tune_r2_e6.ply: 5.6 cm, <5 cm 45%, <10 cm 71%, complete 61% (104547 cells) | 0-1.5 m: 4.1 cm, 84% complete | 1.5-3 m: 5.3 cm, 59% complete | 3-99 m: 16.6 cm, 49% complete
+tune_r3_e3.ply: 9.8 cm, <5 cm 32%, <10 cm 50%, complete 62% (148602 cells) | 0-1.5 m: 3.9 cm, 83% complete | 1.5-3 m: 6.8 cm, 60% complete | 3-99 m: 20.0 cm, 52% complete
+tune_r3_e4.ply: 9.0 cm, <5 cm 33%, <10 cm 52%, complete 62% (144113 cells) | 0-1.5 m: 3.9 cm, 83% complete | 1.5-3 m: 6.5 cm, 60% complete | 3-99 m: 20.0 cm, 52% complete
+tune_r3_e6.ply: 7.3 cm, <5 cm 37%, <10 cm 57%, complete 62% (130776 cells) | 0-1.5 m: 4.0 cm, 84% complete | 1.5-3 m: 6.2 cm, 59% complete | 3-99 m: 20.0 cm, 51% complete
+# truncation
+== V2_02
+tune_r1.5_e4_t15.ply: 5.2 cm, <5 cm 49%, <10 cm 67%, complete 63% (115891 cells) | 0-1.5 m: 2.6 cm, 88% complete | 1.5-3 m: 6.6 cm, 54% complete | 3-99 m: 11.5 cm, 40% complete
+tune_r1.5_e4.ply: 4.8 cm, <5 cm 51%, <10 cm 70%, complete 63% (108562 cells) | 0-1.5 m: 2.8 cm, 88% complete | 1.5-3 m: 5.5 cm, 54% complete | 3-99 m: 11.3 cm, 45% complete
+tune_r1.5_e4_t30.ply: 4.6 cm, <5 cm 53%, <10 cm 72%, complete 62% (101907 cells) | 0-1.5 m: 3.4 cm, 87% complete | 1.5-3 m: 4.6 cm, 53% complete | 3-99 m: 10.4 cm, 46% complete
+== V1_03
+tune_r1.5_e4_t15.ply: 6.5 cm, <5 cm 40%, <10 cm 62%, complete 62% (123347 cells) | 0-1.5 m: 3.7 cm, 84% complete | 1.5-3 m: 6.2 cm, 60% complete | 3-99 m: 20.0 cm, 53% complete
+tune_r1.5_e4.ply: 5.9 cm, <5 cm 43%, <10 cm 67%, complete 61% (111313 cells) | 0-1.5 m: 3.8 cm, 83% complete | 1.5-3 m: 5.5 cm, 59% complete | 3-99 m: 20.0 cm, 50% complete
+tune_r1.5_e4_t30.ply: 5.4 cm, <5 cm 46%, <10 cm 73%, complete 61% (100016 cells) | 0-1.5 m: 4.2 cm, 81% complete | 1.5-3 m: 5.1 cm, 59% complete | 3-99 m: 20.0 cm, 49% complete

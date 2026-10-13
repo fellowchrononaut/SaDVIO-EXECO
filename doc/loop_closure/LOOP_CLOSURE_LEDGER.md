@@ -745,3 +745,99 @@ same binary). The Sim3 section's medians (0.438 → 0.255) come from one batch o
 runs per sequence, fallback off: odometry 0.514 → loop-closed 0.306 (medians of per-sequence medians). The paired
 statement holds: within each run, the loop-closed trajectory beats its own odometry. For mono VO, compare
 configurations with at least 4–6 runs per sequence.
+
+## 2026-10-13 — Long-horizon TSDF fusion: cause found (range noise and constant weights)
+
+Tools:
+- `EXECO_DENSE_DUMP=<dir>` dumps every dense keyframe's points and poses (`MarginalDepthInjector::dumpKeyframe`).
+- `cpp/tools/dense_replay.cpp` re-integrates a dump offline at chosen poses: odometry, loop-corrected, or EuRoC
+  ground truth (analysis only, never in the SLAM). It builds one volume or chunks, layered or merged, with any TSDF
+  setting. `tools/run_dense_replay.sh` runs it pinned in the container.
+- `tools/dense_replay_eval.py` scores a whole mesh against the Leica scan.
+- `tools/depth_error_by_range.py` gives the stereo error by range.
+- Dumps: V1_03 and V2_02, VIO sparse prior, FFS, `stereo_tsdf` (label `dump_tsdf`).
+- Results: `results/dense_long_horizon_replays.txt`.
+
+**Scoring correction.** `dense_anchor_eval.py` samples the same number of vertices per anchor. That under-weights
+large anchors (the far, noisy surface) and scored the anchored layers about 5 cm too well: 12.0 cm instead of 7.3 cm
+on the same mesh. `dense_replay_eval.py` counts all of a mesh's surface once (5 cm cells), completeness is measured
+on the scan within 4 m of the ground-truth path, and both are split by distance from the path. The comparisons of
+layers vs fused view above that used `dense_anchor_eval.py` overstate the layers.
+
+**Findings, V2_02** (one volume with ground-truth poses unless stated; median, within 5 / 10 cm, complete):
+- **Not the odometry.** Ground-truth poses give the same as odometry for 10-keyframe chunks (12.0 vs 12.1 cm). One
+  ground-truth volume for the whole run is still worse (17.2 cm, 55 %) than the chunks (12.0 cm, 76 %).
+- **Not a stereo bias.** The signed error along the ray has a median within ±0.8 cm at every range. Its spread grows
+  steeply with range: median |error| 1.8 cm at 1–2 m, 5.5 at 3–4 m, 10.5 at 5–6 m, 11 cm at 6–8 m. More than half the
+  points are beyond 3 m.
+- **Range is the lever.** A 4 m cap gives 4.0 cm, 57 / 78 %, but coverage of surfaces more than 3 m from the path
+  falls from 29 % to 7 %. A cap is not acceptable: drones would have to fly closer, and coverage feeds MeshVLPR and
+  MeshCSLAM.
+- **Not space carving.** Without carving: 20 cm, more complete (73 %); with a 4 m cap, carving clearly helps (4.0 vs
+  10.4 cm). Not the meshing weight threshold either (3 observations: 16.3 cm).
+- **Truncation** 0.05 m is worse (18.4 cm, 35 %), 0.2 m slightly better (16.6 cm, 64 %).
+- **Range weighting** (vendored TSDF `Integrate` takes per-point weights; `VDBGPDFMapConfig::range_weight_ref` and
+  `range_weight_exp`, weight min(1, (ref / range)^exp), default off):
+  - (2 m / r)² gives 16.7 cm;
+  - (2 m / r)⁴, the 1/σ² of stereo, gives 12.0 cm, 31 / 46 %, 63 %;
+  - with 0.2 m truncation: 7.1 cm, 42 / 57 %, 67 %, better than the default in every band (near 2.3 cm / 88 %
+    against 5.0 / 79 %; 1.5–3 m 10.3 / 61 % against 20 / 47 %; beyond 3 m 19.1 / 40 % against 20 / 29 %).
+  - Lowering the meshing threshold (0.01) brings the far junk back.
+
+**Fused view and layers with the weighting** (loop-corrected SLAM poses, chunks of 10 keyframes):
+
+| | V2_02 | V1_03 |
+|---|---|---|
+| fused view (merged chunks), default | 20 cm, 31 % within 10 cm, 60 % complete | (in-SLAM, earlier scorer: 14–16 cm) |
+| fused view, weighted (2 m / r)⁴ + 0.2 m truncation | **6.4 cm, 59 %, 67 %** | **7.0 cm, 59 %, 62 %** |
+| layers, default (ground truth) | 12.0 cm, 44 %, 76 % | 9.8 cm, 51 %, 71 % |
+| layers, weighted (ground truth) | 10.5 cm, 48 %, 75 % | 10.0 cm, 50 %, 71 % |
+| one volume, weighted: loop poses / ground truth | 6.9 / 7.1 cm | 7.5 / 8.7 cm |
+
+- The weighting turns the fused view from the worst product into the most accurate, ahead of the layers.
+- The layers keep more coverage (76 / 71 % against 67 / 62 %), and the most far surface (beyond 3 m from the path:
+  64–73 % against 47–51 %).
+- Far coverage under the weighting is mixed. V2_02 gains (29 → 40 % for one volume, 38 → 47 % for the fused view).
+  V1_03's single volume loses it (56 → 41 %).
+- SLAM poses do as well as ground truth.
+
+Proposed, pending the user's decision: `stereo_tsdf` with `range_weight_ref: 2`, `range_weight_exp: 4`,
+`sdf_trunc: 0.2`; MeshCSLAM keeps the anchored layers; check far coverage on a large scene (ExECoSim / RealSense).
+
+V1_03 far coverage, the fused view (loop poses, merged 10-keyframe chunks) without and with the weighting:
+- Overall: 14.7 cm, 42 % within 10 cm, 62 % complete → 7.0 cm, 59 %, 62 %.
+- Near surfaces (≤ 1.5 m from the path): 4.4 cm / 83 % → 3.9 / 84 %.
+- 1.5–3 m: 10.6 / 59 % → 6.0 / 59 %.
+- Beyond 3 m: 20 cm / 63 % → 20 cm / 51 %.
+- Total coverage is unchanged. The weighting drops 12 points of far surface that is at least 20 cm off the scan in
+  both versions (median capped at 20 cm). On V2_02 far coverage rose instead (38 → 47 %).
+
+**Decided (user, 2026-10-13): `stereo_tsdf` gets range weighting and `sdf_trunc: 0.2`; tuned below (2026-10-14) to `range_weight_ref: 1.5`, `range_weight_exp: 4`.**
+- `stereo_tsdf_fast` (10 cm voxels) is unchanged: the weighting is untested at that voxel size.
+- The fused view's TSDF chunks for the per-keyframe methods (zncc, pd, gp: `MarginalDepthInjector`'s `view_cfg`)
+  are not weighted yet.
+- Far coverage is still to be checked on a large scene (ExECoSim / RealSense); the Vicon rooms are small.
+
+**Tuning (2026-10-14).** Fused view (loop poses, merged 10-keyframe chunks) on both dumps. Reference 1.5 / 2 / 3 m ×
+exponent 3 / 4 / 6 at 0.2 m truncation, then truncation 0.15 / 0.3 m for the chosen pair (`tune_*` replays,
+`results/dense_long_horizon_replays.txt`). Median / within 10 cm / complete / coverage beyond 3 m from the path:
+
+| weighting | V2_02 | V1_03 |
+|---|---|---|
+| none | 20 cm / 31 % / 60 % / 38 % | 14.7 / 42 % / 62 % / 63 % |
+| 3 m ^4 | 11.5 / 48 / 68 / 49 | 9.0 / 52 / 62 / 52 |
+| 2 m ^4 (first choice) | 6.4 / 59 / 67 / 47 | 7.0 / 59 / 62 / 51 |
+| 3 m ^6 | 6.5 / 58 / 68 / 49 | 7.3 / 57 / 62 / 51 |
+| **1.5 m ^4 (chosen)** | **4.8 / 70 / 63 / 45** | **5.9 / 67 / 61 / 50** |
+| 2 m ^6 | 4.1 / 76 / 60 / 40 | 5.6 / 71 / 61 / 49 |
+| 1.5 m ^6 | 3.6 / 82 / 55 / 21 | 4.9 / 80 / 59 / 39 |
+| 1.5 m ^4, truncation 0.15 m | 5.2 / 67 / 63 / 40 | 6.5 / 62 / 62 / 53 |
+| 1.5 m ^4, truncation 0.3 m | 4.6 / 72 / 62 / 46 (near 3.4 cm) | 5.4 / 73 / 61 / 49 (near 4.2 cm) |
+
+1.5 m ^4 with 0.2 m truncation is better than the first choice on both sequences: 1.1–1.6 cm more accurate, 8–11
+points more within 10 cm. It costs 4 / 1 points of coverage and 1–2 of far coverage, and it fits the measured noise
+(flat about 1.7 cm below ~1.5 m, steep beyond).
+- Steeper settings trade coverage away: 1.5 m ^6 halves the far surface on V2_02.
+- 0.3 m truncation helps the overall median but costs accuracy on near surfaces.
+
+**`stereo_tsdf`: `range_weight_ref: 1.5`, `range_weight_exp: 4`, `sdf_trunc: 0.2`.**

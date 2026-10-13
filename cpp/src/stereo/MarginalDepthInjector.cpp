@@ -2,6 +2,7 @@
 #include "isaeslam/data/sensors/ASensor.h"
 #include <opencv2/core/eigen.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -287,6 +288,7 @@ void MarginalDepthInjector::queueFrame(const std::shared_ptr<Frame>& frame,
     item.img_L       = std::move(img_L);
     item.img_R       = std::move(img_R);
     item.T_w_rectcam = T_w_rectcam;
+    item.T_w_f       = frame->getFrame2WorldTransform();
     item.frame       = frame;
     item.mesh        = mesh;
     item.segment     = segment;
@@ -400,6 +402,7 @@ void MarginalDepthInjector::processItem(const QueueItem& item) {
     }
 
     auto t3 = clk::now();
+    dumpKeyframe(item, disp_float, f_rect, cx_rect, cy_rect);
 
     // Run mesh estimator based on method — dense pipeline is fully independent
     // of the sparse Mesh3D; injectDensePoints() is never called.
@@ -644,6 +647,44 @@ void MarginalDepthInjector::integrateAnchoredFused(const QueueItem& item, const 
     std::cout << "[DenseMesh] " << _cfg.mesh_method << " submap " << a.id << " kf=" << _integrated
               << " pts=" << points_cam.size() << " integrate=" << ms(t0, t1) << "ms mesh=" << ms(t1, clk::now())
               << "ms faces=" << dense_mesh.faces.size() << std::endl;
+}
+
+void MarginalDepthInjector::dumpKeyframe(const QueueItem& item, const cv::Mat& disp_float, double f_rect,
+                                         double cx_rect, double cy_rect) {
+    static const char* dir = std::getenv("EXECO_DENSE_DUMP");
+    if (!dir || !item.frame)
+        return;
+    // Points as the VDB map takes them (every vdbgpdf_stride-th pixel, depth up to max_depth), rectified camera
+    // frame, float32. File: uint64 ts, int32 segment, int32 epoch, double[16] T_w_rectcam, double[16] T_w_f
+    // (column-major, odometry at queue time), uint32 n, float32[3 n]
+    const int str = std::max(1, _cfg.vdbgpdf_stride);
+    std::vector<float> pts;
+    for (int v = 0; v < disp_float.rows; v += str) {
+        const float* row_ptr = disp_float.ptr<float>(v);
+        for (int u = 0; u < disp_float.cols; u += str) {
+            const float disp = row_ptr[u];
+            if (disp <= 0.0f || !std::isfinite(disp))
+                continue;
+            const double Z = f_rect * _baseline / static_cast<double>(disp);
+            if (Z <= 0.0 || Z > _cfg.max_depth || !std::isfinite(Z))
+                continue;
+            pts.push_back(static_cast<float>((u - cx_rect) * Z / f_rect));
+            pts.push_back(static_cast<float>((v - cy_rect) * Z / f_rect));
+            pts.push_back(static_cast<float>(Z));
+        }
+    }
+    std::filesystem::create_directories(dir);
+    const unsigned long long ts = item.frame->getTimestamp();
+    std::ofstream f(std::string(dir) + "/kf_" + std::to_string(ts) + ".bin", std::ios::binary | std::ios::trunc);
+    const int32_t seg = item.segment, ep = item.epoch;
+    const uint32_t n  = static_cast<uint32_t>(pts.size() / 3);
+    f.write(reinterpret_cast<const char*>(&ts), sizeof(ts));
+    f.write(reinterpret_cast<const char*>(&seg), sizeof(seg));
+    f.write(reinterpret_cast<const char*>(&ep), sizeof(ep));
+    f.write(reinterpret_cast<const char*>(item.T_w_rectcam.matrix().data()), 16 * sizeof(double));
+    f.write(reinterpret_cast<const char*>(item.T_w_f.matrix().data()), 16 * sizeof(double));
+    f.write(reinterpret_cast<const char*>(&n), sizeof(n));
+    f.write(reinterpret_cast<const char*>(pts.data()), pts.size() * sizeof(float));
 }
 
 bool MarginalDepthInjector::pollResult(DenseResult& out) {

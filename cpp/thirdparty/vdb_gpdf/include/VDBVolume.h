@@ -186,10 +186,12 @@ public:
 
     /// @brief Integrates a new (globally aligned) PointCloud into the current
     /// gsdf_ volume.
+    /// SaDVIO: point_weights (optional, one per point) multiplies each point's weight (range weighting)
     void Integrate(const std::vector<Eigen::Vector3d> &points,
                     const std::vector<openvdb::Vec3i> &colors,
                     const Eigen::Vector3d &origin,
-                    const std::function<float(float)> &weighting_function);
+                    const std::function<float(float)> &weighting_function,
+                    const std::vector<float> *point_weights = nullptr);
 
     /// @brief Integrates a new (globally aligned) PointCloud into the current
     /// gsdf_ volume.

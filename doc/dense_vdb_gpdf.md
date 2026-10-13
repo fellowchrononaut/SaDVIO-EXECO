@@ -80,8 +80,11 @@ Presets use the upstream parameter names (flat, or the upstream ROS 2
 * `lidar.yaml` — upstream `vdb_gpdf_mapping_newer_college.yaml`: 10 cm voxels, λ = 100, range 1-50 m.
 * `stereo.yaml` — the D455 preset with `max_scan_range: 8.0` (4 m in upstream; 8 m raises F@10 from
   38 to 57 on FFS, 20 m adds nothing), `fusion: gpdf`.
-* `stereo_tsdf.yaml` — `stereo.yaml` with `fusion: tsdf` (5 cm voxels, `sdf_trunc` 0.1 m, space
-  carving): the best stereo mesh in section 5.
+* `stereo_tsdf.yaml` — `stereo.yaml` with `fusion: tsdf` (5 cm voxels, space carving): the best stereo mesh in
+  section 5. Since 2026-10-14 it also weights each point by min(1, (1.5 m / range)^4) and truncates at 0.2 m (was
+  0.1 m, no weighting, which the section 5 numbers used). Stereo depth noise grows with range, and with constant
+  weights long-lived volumes degraded. The details are in `doc/loop_closure/LOOP_CLOSURE_LEDGER.md` ("Long-horizon
+  TSDF fusion").
 
 Each keyframe's fused pose is logged to `dense_vdbgpdf_keyframes.csv` next to the mesh
 (timestamp, points, integration time, position, quaternion).

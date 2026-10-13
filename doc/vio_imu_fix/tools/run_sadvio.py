@@ -161,13 +161,15 @@ def main():
     ap.add_argument('--cpus', default='', help='pin the binary to these cores (taskset list, e.g. 8-15)')
     ap.add_argument('--nice', type=int, default=0, help='run the binary at this nice level')
     ap.add_argument('--kf-features', action='store_true', help='log the KF features (log_slam/kf_features.csv)')
+    ap.add_argument('--env', action='append', default=[], help='environment variable for the binary, KEY=VALUE '
+                    '(e.g. EXECO_DENSE_DUMP=dense_dump: relative paths are in the run folder)')
     a = ap.parse_args()
     overrides = dict(kv.split('=', 1) for kv in a.set)
     if a.seq in SEQ_DATASET:
         overrides.setdefault('dataset_id', SEQ_DATASET[a.seq])
     for i in range(a.first, a.first + a.runs):
         run_once(EVAL / 'runs' / a.label / a.seq / a.mode / f'run_{i:02d}', a.seq, a.mode, overrides,
-                 a.stall, a.timeout, a.bin, ('-e', 'EXECO_KF_FEATURES_LOG=1') if a.kf_features else (), a.cpus, a.nice)
+                 a.stall, a.timeout, a.bin, (('-e', 'EXECO_KF_FEATURES_LOG=1') if a.kf_features else ()) + tuple(x for kv in a.env for x in ('-e', kv)), a.cpus, a.nice)
 
 
 if __name__ == '__main__':

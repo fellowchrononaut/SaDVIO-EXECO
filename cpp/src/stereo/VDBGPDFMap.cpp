@@ -46,6 +46,8 @@ void loadVDBGPDFPreset(const std::string& path, VDBGPDFMapConfig& c) {
     get("smooth_param", c.smooth_param);
     get("min_scan_range", c.min_scan_range);
     get("max_scan_range", c.max_scan_range);
+    get("range_weight_ref", c.range_weight_ref);
+    get("range_weight_exp", c.range_weight_exp);
     get("fill_holes", c.fill_holes);
     get("recon_min_weight", c.recon_min_weight);
     get("debug_print", c.debug_print);
@@ -58,6 +60,7 @@ void loadVDBGPDFPreset(const std::string& path, VDBGPDFMapConfig& c) {
 #ifdef ISAESLAM_WITH_VDBGPDF
 
 #include "VDBVolume.h"
+#include <algorithm>
 #include <cmath>
 #include "utils.h"
 #include <iostream>
@@ -120,7 +123,14 @@ void VDBGPDFMap::integrate(const std::vector<Eigen::Vector3d>& points_world, con
     // upstream indexes colors[i] for every point (CreateLocalDisantceField), so pass one (unused) colour each
     const std::vector<openvdb::Vec3i> colors(pts.size(), openvdb::Vec3i(0, 0, 0));
     if (_cfg.fusion == "tsdf") {
-        _impl->volume.Integrate(pts, colors, origin, common::WeightFunction::constant_weight);
+        std::vector<float> w;
+        if (_cfg.range_weight_ref > 0) {
+            w.reserve(pts.size());
+            for (const auto& p : pts)
+                w.push_back(std::min(1.0f, static_cast<float>(std::pow(_cfg.range_weight_ref / (p - origin).norm(),
+                                                                        _cfg.range_weight_exp))));
+        }
+        _impl->volume.Integrate(pts, colors, origin, common::WeightFunction::constant_weight, w.empty() ? nullptr : &w);
         return;
     }
     // Integrate appends to these outputs, so they must be fresh for every scan (as in the upstream mapper)

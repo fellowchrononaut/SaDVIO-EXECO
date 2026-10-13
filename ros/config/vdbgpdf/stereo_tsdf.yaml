@@ -1,11 +1,18 @@
 # SaDVIO stereo preset using the projective TSDF path upstream keeps for its VDBFusion comparison
-# (fusion: tsdf; only sdf_trunc, space_carving, voxel_size_global, the ranges and recon_min_weight apply).
+# (fusion: tsdf; only sdf_trunc, space_carving, voxel_size_global, the ranges, range weighting and recon_min_weight
+# apply).
 # Best mesh on ExECoSim FFS depth, see doc/dense_vdb_gpdf.md. Other keys as stereo.yaml.
 fusion: tsdf
 min_scan_range: 0.1 # Ignore points closer than this value (meters) (default 0.4)
 max_scan_range: 8.0 # SaDVIO: 4.0 in the D455 preset; 8 m doubles F@10 on ExECoSim FFS depth (doc/dense_vdb_gpdf.md)
 fill_holes: true
-sdf_trunc: 0.1 # this param is for vdbfusion comparison
+sdf_trunc: 0.2 # SaDVIO 2026-10-13: 0.2 m with range weighting (0.1 before; doc/loop_closure/LOOP_CLOSURE_LEDGER.md)
+# SaDVIO 2026-10-13: weight each point by min(1, (range_weight_ref / range)^range_weight_exp): stereo depth noise grows
+# with range (flat ~1.7 cm below ~1.5 m on EuRoC FFS, ~11 cm at 6-8 m), and with constant weights the many far, noisy
+# points ruined long-lived volumes (fused view, global map: 15-20 cm median against the EuRoC scan; 1.5 m ^4: 4.8-5.9
+# cm, coverage within 1-4 points; tuned over 1.5/2/3 m x ^3/4/6 and truncation 0.15/0.2/0.3 m). 0: off
+range_weight_ref: 1.5
+range_weight_exp: 4.0
 space_carving: true # this param is for vdbfusion comparison
 distance_method: 0
 voxel_size_local: 0.02

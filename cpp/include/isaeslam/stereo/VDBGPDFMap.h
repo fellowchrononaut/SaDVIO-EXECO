@@ -44,6 +44,10 @@ struct VDBGPDFMapConfig {
     // upstream mapper-level settings
     float  min_scan_range   = 0.1f;   // metres from the sensor origin
     float  max_scan_range   = 20.0f;
+    // SaDVIO, "tsdf" only: range weighting, each point's weight min(1, (range_weight_ref / range)^range_weight_exp)
+    // (stereo depth noise grows with range; constant weights let the many far, noisy points dominate). 0: off
+    float  range_weight_ref = 0.0f;
+    float  range_weight_exp = 2.0f;
     bool   fill_holes       = true;
     float  recon_min_weight = 0.1f;
     bool   debug_print      = false;
