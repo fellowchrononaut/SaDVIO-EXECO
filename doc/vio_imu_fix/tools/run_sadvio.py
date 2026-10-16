@@ -60,7 +60,7 @@ for _v in ('001', '012'):
 SEQUENCES['MH_01_drop'] = 'euroc/MH_01_easy_drop/mav0'        # 65 s and 100 s for 1.5 s, 140 s for 3 s
 SEQ_DATASET['MH_01_drop'] = '"eth"'
 SEQUENCES['room1_drop'] = 'tumvi/dataset-room1_512_16_drop/mav0'  # 45 s and 85 s for 1.5 s, 115 s for 3 s
-MODES      = ('bimono', 'bimonovio', 'mono', 'monovio', 'nofov')
+MODES      = ('bimono', 'bimonovio', 'mono', 'monovio', 'nofov', 'nofovvio')
 
 
 def to_container(p: Path) -> str:
@@ -144,9 +144,13 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
     result_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(run_dir), str(result_dir))
     for d in [run_dir.parent, *run_dir.parent.parents]:
-        if d == SCRATCH.parent or any(d.iterdir()):
+        # another lane with the same label may remove or fill these folders at the same time
+        try:
+            if d == SCRATCH.parent or any(d.iterdir()):
+                break
+            d.rmdir()
+        except (FileNotFoundError, OSError):
             break
-        d.rmdir()
     print(f'  {result_dir.relative_to(EVAL)}: {reason}, ~{wall:.0f} s')
     return meta
 

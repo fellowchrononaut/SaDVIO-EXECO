@@ -474,4 +474,103 @@ TEST_F(ResidualTest, reprojTestDoubleSphere) {
     delete cost_fct;
 }
 
+namespace {
+// Two frames with two cameras each (front, and back-to-back with a 3 cm offset as on a 360 camera), and landmarks seen
+// by one camera in both frames (nofovvio, ESKFEstimator::estimateTransformBetweenCameras)
+struct TwoCameraScene {
+    std::shared_ptr<Frame> f1, f2;
+    Eigen::Affine3d dT_true; // T_f1_f2
+    vec_match matches_cam0, matches_cam1;
+    std::vector<std::shared_ptr<Point3D>> landmarks; // the features only hold weak pointers to them
+
+    TwoCameraScene() {
+        Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
+        K(0, 0) = K(1, 1) = 200;
+        K(0, 2) = K(1, 2) = 400;
+        Eigen::Affine3d T_c1_f = makePose(Eigen::Vector3d(0, M_PI, 0), Eigen::Vector3d(0.0, 0.0, -0.03));
+        const Eigen::Affine3d T_w_f1 = makePose(Eigen::Vector3d(0.2, -0.1, 0.3), Eigen::Vector3d(1.0, 2.0, 0.5));
+        dT_true                      = makePose(Eigen::Vector3d(0.03, -0.05, 0.02), Eigen::Vector3d(0.10, -0.04, 0.06));
+
+        std::vector<std::shared_ptr<Camera>> cams;
+        for (std::shared_ptr<Frame> *f : {&f1, &f2}) {
+            std::shared_ptr<Camera> c0 = std::make_shared<Camera>(cv::Mat::zeros(800, 800, CV_8U), K);
+            std::shared_ptr<Camera> c1 = std::make_shared<Camera>(cv::Mat::zeros(800, 800, CV_8U), K);
+            *f                         = std::make_shared<Frame>();
+            (*f)->init(std::vector<std::shared_ptr<ImageSensor>>{c0, c1}, 0);
+            c0->setFrame2SensorTransform(Eigen::Affine3d::Identity());
+            c1->setFrame2SensorTransform(T_c1_f);
+            cams.push_back(c0);
+            cams.push_back(c1);
+        }
+        f1->setWorld2FrameTransform(T_w_f1.inverse());
+        f2->setWorld2FrameTransform((T_w_f1 * dT_true).inverse());
+
+        // Landmarks 2-6 m in front of each camera of frame 1, kept if both frames' camera sees them
+        std::srand(7u);
+        for (int c = 0; c < 2; c++) {
+            int n = 0;
+            while (n < 30) {
+                const Eigen::Vector3d dir(Eigen::Vector3d::Random().x() * 0.8, Eigen::Vector3d::Random().y() * 0.8, 1);
+                const double depth    = 4 + 2 * Eigen::Vector3d::Random().x();
+                const Eigen::Affine3d T_w_cam = T_w_f1 * cams[c]->getFrame2SensorTransform().inverse();
+                Eigen::Affine3d T_w_lmk       = Eigen::Affine3d::Identity();
+                T_w_lmk.translation()         = T_w_cam * (dir.normalized() * depth);
+                Eigen::Vector2d p1, p2;
+                if (!cams[c]->project(T_w_lmk, f1->getWorld2FrameTransform(), Eigen::Matrix2d::Identity(), p1, NULL, NULL) ||
+                    !cams[2 + c]->project(
+                        T_w_lmk, f2->getWorld2FrameTransform(), Eigen::Matrix2d::Identity(), p2, NULL, NULL))
+                    continue;
+                std::shared_ptr<AFeature> a = std::make_shared<Point2D>(std::vector<Eigen::Vector2d>{p1});
+                std::shared_ptr<AFeature> b = std::make_shared<Point2D>(std::vector<Eigen::Vector2d>{p2});
+                cams[c]->addFeature("pointxd", a);
+                cams[2 + c]->addFeature("pointxd", b);
+                a->computeBearingVectors();
+                b->computeBearingVectors();
+                std::shared_ptr<Point3D> lmk = std::make_shared<Point3D>();
+                lmk->init(T_w_lmk, {a, b});
+                landmarks.push_back(lmk);
+                (c == 0 ? matches_cam0 : matches_cam1).push_back({a, b});
+                n++;
+            }
+        }
+    }
+};
+} // namespace
+
+TEST(ESKFMultiCameraTest, oneCameraMatchesTheSingleCameraUpdate) {
+
+    // With the matches of one camera, the body-frame filter is the camera-frame filter in other error coordinates,
+    // for the camera with an offset and a half-turn rotation. The corrections are applied as [Exp(theta), rho], which
+    // moves between the two error frames exactly only to first order: for a ~0.04 correction the two estimates and
+    // covariances agree to second order (~1e-6)
+    TwoCameraScene scene;
+    const Eigen::Affine3d dT0 =
+        scene.dT_true * makePose(Eigen::Vector3d(0.01, 0.02, -0.01), Eigen::Vector3d(0.02, -0.01, 0.015));
+    Eigen::Affine3d dT_single = dT0, dT_multi = dT0;
+    Eigen::MatrixXd cov_single, cov_multi;
+    ESKFEstimator eskf;
+    ASSERT_TRUE(eskf.estimateTransformBetween(scene.f1, scene.f2, scene.matches_cam1, dT_single, cov_single));
+    ASSERT_TRUE(eskf.estimateTransformBetweenCameras(scene.f1, scene.f2, scene.matches_cam1, dT_multi, cov_multi));
+    EXPECT_GT(rightDiff(dT0, dT_single).norm(), 1e-3); // the update did use the observations
+    EXPECT_LT(rightDiff(dT_single, dT_multi).norm(), 1e-5);
+    EXPECT_LT((cov_single - cov_multi).cwiseAbs().maxCoeff(), 1e-5);
+}
+
+TEST(ESKFMultiCameraTest, twoCamerasRecoverTheMotion) {
+
+    // Exact observations in both cameras: the update moves a perturbed guess onto the true motion
+    TwoCameraScene scene;
+    vec_match all = scene.matches_cam0;
+    all.insert(all.end(), scene.matches_cam1.begin(), scene.matches_cam1.end());
+    const Eigen::Affine3d dT0 =
+        scene.dT_true * makePose(Eigen::Vector3d(0.01, 0.02, -0.01), Eigen::Vector3d(0.02, -0.01, 0.015));
+    Eigen::Affine3d dT = dT0;
+    Eigen::MatrixXd cov;
+    ESKFEstimator eskf;
+    ASSERT_TRUE(eskf.estimateTransformBetweenCameras(scene.f1, scene.f2, all, dT, cov));
+    const double err0 = rightDiff(scene.dT_true, dT0).norm(), err = rightDiff(scene.dT_true, dT).norm();
+    EXPECT_LT(err, 0.1 * err0) << "initial " << err0 << ", final " << err;
+    EXPECT_TRUE(cov.allFinite());
+}
+
 } // namespace isae

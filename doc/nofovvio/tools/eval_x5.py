@@ -22,6 +22,8 @@ With a measured scale (M_PER_UNIT below, or --m-per-unit), also:
   ate_m              ATE in true metres (ate_ref_units x m_per_unit)
   vio_scale_ratio    VIO length / true length = 1 / (scale_ref_per_m x m_per_unit); 1 for a metric VIO; with the range
                      of the measured scale as vio_scale_ratio_range
+  ate_gravity_m      ATE in metres after a gravity-only alignment (heading about gravity and a translation; no scale,
+                     no roll / pitch): the estimate's metric, gravity-aligned world against the metric reference
 --until T keeps the reference frames before T s (e.g. to leave out the end of VID_012, where tracking is lost and the
 IMU-only propagation diverges); the alignment and every metric then use those frames only.
 
@@ -35,9 +37,10 @@ from pathlib import Path
 import numpy as np
 
 DATA = Path('/home/deos/s.jois/EXECO/Simulator_Validation/SaD_VIO_data/insta360x5')
-# Measured metres per reference unit: (value, low, high). VID_012: GUTWrap's two 1 x 1 x 0.5 m boxes in the arena
-# (VID_012/cube_corners_VID_012.csv, 2026-10-16). VID_001: not measured yet.
-M_PER_UNIT = {'VID_012': (1.37, 1.31, 1.45)}
+# Measured metres per reference unit: (value, low, high). VID_012: GUTWrap's two 1 x 1 x 0.5 m boxes in the arena, v2
+# from the SfM points on their printed side walls (VID_012/cube_corners_VID_012.csv, 2026-10-16; v1, 1.37 from the
+# splat's top faces, was biased by soft edges). VID_001: not measured yet.
+M_PER_UNIT = {'VID_012': (1.525, 1.507, 1.545)}
 
 
 def quat_to_R(w, x, y, z):
@@ -84,13 +87,30 @@ def umeyama(src, dst):
     return s, R, mu_d - s * R @ mu_s
 
 
-def metric(cap, m_per_unit, ate, s):
+# SaDVIO world (z up) -> reference world axes (down = +y): rotation of +90 deg about x
+R_ZUP_TO_YDOWN = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])
+
+
+def gravity_only_ate(P_ref_m, P_est):
+    """RMS error after the heading (rotation about the reference's vertical y axis) and translation that best map the
+    estimate (SaDVIO world, z up, metres) onto the metric reference"""
+    Q = P_est @ R_ZUP_TO_YDOWN.T
+    p, q = P_ref_m - P_ref_m.mean(0), Q - Q.mean(0)
+    phi = np.arctan2((p[:, 0] * q[:, 2] - p[:, 2] * q[:, 0]).sum(), (p[:, 0] * q[:, 0] + p[:, 2] * q[:, 2]).sum())
+    c, s = np.cos(phi), np.sin(phi)
+    Ry = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    e = p - q @ Ry.T
+    return float(np.sqrt((e ** 2).sum(1).mean()))
+
+
+def metric(cap, m_per_unit, ate, s, P_ref, P_est):
     m = (m_per_unit, m_per_unit, m_per_unit) if m_per_unit else M_PER_UNIT.get(cap)
     if not m:
         return {}
     return dict(m_per_unit=m[0], m_per_unit_range=[m[1], m[2]], ate_m=round(ate * m[0], 4),
                 vio_scale_ratio=round(1 / (s * m[0]), 4),
-                vio_scale_ratio_range=[round(1 / (s * m[2]), 4), round(1 / (s * m[1]), 4)])
+                vio_scale_ratio_range=[round(1 / (s * m[2]), 4), round(1 / (s * m[1]), 4)],
+                ate_gravity_m=round(gravity_only_ate(P_ref * m[0], P_est), 4))
 
 
 def main():
@@ -140,7 +160,7 @@ def main():
                    gravity_deg=round(float(np.degrees(np.arccos(np.clip(down @ [0, 1, 0], -1, 1)))), 3),
                    err_median=round(float(np.median(e)), 4), err_max=round(float(e.max()), 4),
                    t_err_max_s=round(pairs[int(e.argmax())][2] * 1e-9, 3),
-                   **metric(cap, a.m_per_unit, ate, s),
+                   **metric(cap, a.m_per_unit, ate, s, P_ref, P_est),
                    ref_path_length_ref_units=round(float(np.linalg.norm(np.diff(P_ref, axis=0), axis=1).sum()), 3),
                    t_first_s=round(pairs[0][2] * 1e-9, 3), t_last_s=round(pairs[-1][2] * 1e-9, 3))
     (a.run / a.out).write_text(json.dumps(out, indent=1))

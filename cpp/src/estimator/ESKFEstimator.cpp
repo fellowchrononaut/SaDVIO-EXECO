@@ -119,6 +119,43 @@ Eigen::Vector3d ESKFEstimator::updateVelocity(const Eigen::Matrix3d &R_w_f1,
     return v_pred + K * errv;
 }
 
+void ESKFEstimator::imuUpdate(const std::shared_ptr<Frame> &frame1,
+                              const std::shared_ptr<Frame> &frame2,
+                              Eigen::Affine3d &dT,
+                              Eigen::Matrix<double, 6, 6> &P) {
+    if (!frame2->getIMU() || frame1 != frame2->getIMU()->getLastKF())
+        return;
+
+    double dt          = (frame2->getTimestamp() - frame1->getTimestamp()) * 1e-9;
+    Eigen::Matrix3d R1 = frame1->getFrame2WorldTransform().rotation();
+
+    // Update velocity
+    Eigen::Vector3d v_cst =
+        (frame2->getFrame2WorldTransform().translation() - frame1->getFrame2WorldTransform().translation()) / dt;
+    Eigen::Vector3d vu = updateVelocity(R1,
+                                        v_cst,
+                                        frame1->getIMU()->getVelocity(),
+                                        frame2->getIMU()->getDeltaV(),
+                                        frame2->getIMU()->getCov().block(3, 3, 3, 3),
+                                        dt);
+    frame2->getIMU()->setVelocity(vu);
+
+    // Update translation
+    Eigen::Vector3d deltaP_est =
+        dT.translation() - R1.transpose() * frame1->getIMU()->getVelocity() * dt - 0.5 * R1.transpose() * g * dt * dt;
+    Eigen::Vector3d errt = frame2->getIMU()->getDeltaP() - deltaP_est;
+    Eigen::Matrix3d Kt =
+        P.block(3, 3, 3, 3) * (P.block(3, 3, 3, 3) + 1000 * frame2->getIMU()->getCov().block(6, 6, 3, 3)).inverse();
+    dT.translation()    = dT.translation() + Kt * errt;
+    P.block(3, 3, 3, 3) = (Eigen::Matrix3d::Identity() - Kt) * P.block(3, 3, 3, 3);
+
+    // Update rotation (convention e = DeltaR ominus R)
+    Eigen::Matrix3d P_rot         = P.block(0, 0, 3, 3);
+    dT.affine().block(0, 0, 3, 3) = updateRotation(
+        dT.linear(), frame2->getIMU()->getDeltaR(), P_rot, 1000 * frame2->getIMU()->getCov().block(0, 0, 3, 3));
+    P.block(0, 0, 3, 3) = P_rot;
+}
+
 bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> &frame1,
                                                    const std::shared_ptr<Frame> &frame2,
                                                    vec_match &matches,
@@ -171,40 +208,7 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
     P.block(3, 3, 3, 3)           = Eigen::Matrix3d::Identity();
 
     // Perform a first update with IMU in VIO case
-    if (frame2->getIMU()) {
-        if (frame1 == frame2->getIMU()->getLastKF()) {
-
-            double dt          = (frame2->getTimestamp() - frame1->getTimestamp()) * 1e-9;
-            Eigen::Matrix3d R1 = frame1->getFrame2WorldTransform().rotation();
-
-            // Update velocity
-            Eigen::Vector3d v_cst =
-                (frame2->getFrame2WorldTransform().translation() - frame1->getFrame2WorldTransform().translation()) /
-                dt;
-            Eigen::Vector3d vu = updateVelocity(R1,
-                                                v_cst,
-                                                frame1->getIMU()->getVelocity(),
-                                                frame2->getIMU()->getDeltaV(),
-                                                frame2->getIMU()->getCov().block(3, 3, 3, 3),
-                                                dt);
-            frame2->getIMU()->setVelocity(vu);
-
-            // Update translation
-            Eigen::Vector3d deltaP_est = dT.translation() - R1.transpose() * frame1->getIMU()->getVelocity() * dt -
-                                         0.5 * R1.transpose() * g * dt * dt;
-            Eigen::Vector3d errt = frame2->getIMU()->getDeltaP() - deltaP_est;
-            Eigen::Matrix3d Kt   = P.block(3, 3, 3, 3) *
-                                 (P.block(3, 3, 3, 3) + 1000 * frame2->getIMU()->getCov().block(6, 6, 3, 3)).inverse();
-            dT.translation()    = dT.translation() + Kt * errt;
-            P.block(3, 3, 3, 3) = (Eigen::Matrix3d::Identity() - Kt) * P.block(3, 3, 3, 3);
-
-            // Update rotation (convention e = DeltaR ominus R)
-            Eigen::Matrix3d P_rot         = P.block(0, 0, 3, 3);
-            dT.affine().block(0, 0, 3, 3) = updateRotation(
-                dT.linear(), frame2->getIMU()->getDeltaR(), P_rot, 1000 * frame2->getIMU()->getCov().block(0, 0, 3, 3));
-            P.block(0, 0, 3, 3) = P_rot;
-        }
-    }
+    imuUpdate(frame1, frame2, dT, P);
 
     // Init the transformation
     Eigen::Affine3d T_cam1_f1   = matches.at(0).first->getSensor()->getFrame2SensorTransform();
@@ -241,6 +245,76 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
     const Eigen::Matrix<double, 6, 6> J_cam_dT = cameraToFrameErrorJacobian(T_cam2_cam1, T_cam2_f2);
     covdT                                      = J_cam_dT * P * J_cam_dT.transpose();
     dT                                         = T_cam1_f1.inverse() * T_cam2_cam1.inverse() * T_cam2_f2;
+
+    return true;
+}
+
+bool ESKFEstimator::estimateTransformBetweenCameras(const std::shared_ptr<Frame> &frame1,
+                                                    const std::shared_ptr<Frame> &frame2,
+                                                    vec_match &matches,
+                                                    Eigen::Affine3d &dT,
+                                                    Eigen::MatrixXd &covdT) {
+    if (matches.size() < 5)
+        return false;
+
+    // Landmarks in frame 1's body frame; each observation keeps the camera of frame 2 that made it
+    const Eigen::Affine3d T_f1_w = frame1->getWorld2FrameTransform();
+    std::vector<Eigen::Vector3d> p3d_vector;
+    std::vector<Eigen::Vector2d> p2d_vector;
+    std::vector<Eigen::Affine3d> T_cam2_f2_vector;
+    for (auto &m : matches) {
+        std::shared_ptr<ALandmark> lmk = m.first->getLandmark().lock();
+        if (!lmk || !lmk->isInitialized())
+            continue;
+        // A ray too far from the optical axis for x / z (wide-angle KB4 cameras only) is not used here
+        Eigen::Vector3d ray_cam2 = m.second->getBearingVectors().at(0);
+        if (!geometry::planarRayUsable(ray_cam2))
+            continue;
+        p3d_vector.push_back(T_f1_w * lmk->getPose().translation());
+        p2d_vector.push_back(Eigen::Vector2d(ray_cam2.x() / ray_cam2.z(), ray_cam2.y() / ray_cam2.z()));
+        T_cam2_f2_vector.push_back(m.second->getSensor()->getFrame2SensorTransform());
+    }
+
+    Eigen::Matrix3d intrinsic     = Eigen::Matrix3d::Identity();
+    Eigen::Matrix2d R             = 0.1 * Eigen::Matrix2d::Identity();
+    Eigen::Matrix<double, 6, 6> P = Eigen::Matrix<double, 6, 6>::Identity();
+
+    // Perform a first update with IMU in VIO case
+    imuUpdate(frame1, frame2, dT, P);
+
+    // The state is the body motion T_f2_f1 = dT^-1 (right perturbation): an observation in camera s of frame 2 sees
+    // T_s_f2 T_f2_f1, whose right perturbation is the state's. The IMU step's covariance moves to this error with the
+    // single-camera Jacobians at identity extrinsics
+    Eigen::Affine3d T_f2_f1                     = dT.inverse();
+    const Eigen::Matrix<double, 6, 6> J_imu_f   = imuToCameraErrorJacobian(dT, Eigen::Affine3d::Identity());
+    P                                           = J_imu_f * P * J_imu_f.transpose();
+
+    for (uint i = 0; i < p3d_vector.size(); ++i) {
+
+        // Projection
+        const Eigen::Affine3d T_cam2_f1 = T_cam2_f2_vector[i] * T_f2_f1;
+        Eigen::Vector2d proj;
+        Eigen::MatrixXd J_T, J_p;
+        std::tie(proj, J_T, J_p) = jac_projection(
+            intrinsic, p3d_vector.at(i), T_cam2_f1.linear(), T_cam2_f1.translation(), Eigen::Vector3d::Zero());
+        Eigen::Vector2d err = p2d_vector[i] - proj;
+
+        // Kalman Equations
+        Eigen::Matrix<double, 6, 2> K  = P * J_T.transpose() * (J_T * P * J_T.transpose() + R).inverse();
+        Eigen::Matrix<double, 6, 1> dx = K * err;
+        P                              = (Eigen::Matrix<double, 6, 6>::Identity() - K * J_T) * P;
+
+        // Update
+        Eigen::Affine3d dtau            = Eigen::Affine3d::Identity();
+        dtau.translation()              = dx.bottomRows<3>();
+        dtau.affine().block(0, 0, 3, 3) = geometry::exp_so3(dx.topRows<3>());
+        T_f2_f1                         = T_f2_f1 * dtau;
+    }
+
+    // Covariance of the right perturbation dT E(xi) of the estimate (order: rotation, translation)
+    const Eigen::Matrix<double, 6, 6> J_f_dT = cameraToFrameErrorJacobian(T_f2_f1, Eigen::Affine3d::Identity());
+    covdT                                    = J_f_dT * P * J_f_dT.transpose();
+    dT                                       = T_f2_f1.inverse();
 
     return true;
 }

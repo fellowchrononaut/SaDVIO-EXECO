@@ -24,6 +24,17 @@ class ESKFEstimator : public APoseEstimator {
                                   Eigen::MatrixXd &covdT) override;
 
     /*!
+     * @brief As estimateTransformBetween, with matches from several cameras of the frames (non-overlapping lenses,
+     * nofovvio): the state is the body motion and each observation is projected through its own camera's
+     * extrinsics. The single-camera version takes the extrinsics of the first match for all of them.
+     */
+    bool estimateTransformBetweenCameras(const std::shared_ptr<Frame> &frame1,
+                                         const std::shared_ptr<Frame> &frame2,
+                                         vec_match &matches,
+                                         Eigen::Affine3d &dT,
+                                         Eigen::MatrixXd &covdT);
+
+    /*!
      * @brief Refine the triangulation of the landmarks with an ESKF BEWARE: currently being tested
      */
     bool refineTriangulation(std::shared_ptr<Frame> &frame);
@@ -82,6 +93,16 @@ class ESKFEstimator : public APoseEstimator {
                                           const Eigen::Vector3d &dV,
                                           const Eigen::Matrix3d &cov_dv,
                                           double dt);
+
+  private:
+    /*!
+     * @brief IMU step of the update (VIO, when frame 1 is frame 2's preintegration KF): velocity of frame 2, then
+     * translation and rotation of dT = T_f1_f2 with their covariance P (order: rotation, translation)
+     */
+    static void imuUpdate(const std::shared_ptr<Frame> &frame1,
+                          const std::shared_ptr<Frame> &frame2,
+                          Eigen::Affine3d &dT,
+                          Eigen::Matrix<double, 6, 6> &P);
 };
 
 } // namespace isae

@@ -439,8 +439,9 @@ bool SLAMCore::shouldInsertKeyframe(std::shared_ptr<Frame> &f) {
 
     // Case when many landmarks has been lost => KF voted
     // In mono mode we include also the non triangulated features to avoid poor triangulation
-    // Else we just consider the triangulated landmarks
-    if (_slam_param->_config.slam_mode == "mono" || _slam_param->_config.slam_mode == "monovio") {
+    // Else we just consider the triangulated landmarks. nofovvio initializes as monovio (on camera 0)
+    const std::string &mode = _slam_param->_config.slam_mode;
+    if (mode == "mono" || mode == "monovio" || mode == "nofovvio") {
         if (n_matches < _min_lmk_number) { // n_matches already counts the landmark matches
             f->setKeyFrame();
             logKfVote(f, n_matches, n_matches_lmk, "few_lmk");
@@ -489,6 +490,23 @@ void SLAMCore::logKfFeatures(const std::shared_ptr<Frame> &kf) {
         const int status = !lmk ? 0 : lmk->isResurected() ? 2 : lmk->isInitialized() ? 1 : 3;
         const Eigen::Vector2d pt = feat->getPoints().at(0);
         fw << kf->getTimestamp() << "," << pt.x() << "," << pt.y() << "," << status << "\n";
+    }
+
+    // nofovvio: camera 1 is tracked on its own, its features go to log_slam/kf_features_cam1.csv (same format)
+    if (_slam_param->_config.slam_mode == "nofovvio" && kf->getSensors().size() > 1) {
+        std::ofstream fw1("log_slam/kf_features_cam1.csv", _kf_features_cam1_started ? std::ofstream::app
+                                                                                       : std::ofstream::trunc);
+        if (!_kf_features_cam1_started) {
+            fw1 << "kf_timestamp (ns), u, v, status\n";
+            _kf_features_cam1_started = true;
+        }
+        fw1 << std::fixed << std::setprecision(1);
+        for (const auto &feat : kf->getSensors().at(1)->getFeatures()["pointxd"]) {
+            const auto lmk = feat->getLandmark().lock();
+            const int status = !lmk ? 0 : lmk->isResurected() ? 2 : lmk->isInitialized() ? 1 : 3;
+            const Eigen::Vector2d pt = feat->getPoints().at(0);
+            fw1 << kf->getTimestamp() << "," << pt.x() << "," << pt.y() << "," << status << "\n";
+        }
     }
 }
 
@@ -923,8 +941,10 @@ void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
         const bool vio_dense_prior = cfg.slam_mode == "bimonovio" && cfg.marginalization == 1 && !cfg.sparsification;
         opt.correct_window         = cfg.slam_mode != "mono" &&
                              (cfg.loop_correct_window == 1 ||
-                              (cfg.loop_correct_window == -1 && (vio_dense_prior || cfg.slam_mode == "monovio")));
-        opt.window_gravity = cfg.slam_mode == "monovio" || cfg.slam_mode == "bimonovio";
+                              (cfg.loop_correct_window == -1 &&
+                               (vio_dense_prior || cfg.slam_mode == "monovio" || cfg.slam_mode == "nofovvio")));
+        opt.window_gravity =
+            cfg.slam_mode == "monovio" || cfg.slam_mode == "bimonovio" || cfg.slam_mode == "nofovvio";
         std::atomic_store(&_loop_closure, std::make_shared<LoopClosure>(opt)); // read by viewer threads
         if (_depth_injector) {
             // Dense submaps are placed at their anchor keyframes' corrected poses (the callback keeps the loop

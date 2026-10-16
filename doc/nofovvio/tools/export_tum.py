@@ -12,7 +12,8 @@ Writes in <run>/log_slam/:
   trajectory_tum.txt   per frame: "t tx ty tz qx qy qz qw" (t in s), pose of --frame (body: the SLAM frame, the IMU in
                        VIO modes; cam0: camera 0, through the dataset's T_BS)
   keyframes_tum.txt    the keyframes' final poses, same format
-  run_summary.json     final dt_imu_cam (estimate_td), last IMU biases (vio_diag.csv), the T_BS used, counts
+  run_summary.json     final dt_imu_cam (estimate_td; else the dataset's value, dt_imu_cam_estimated false), last
+                       IMU biases (vio_diag.csv), the T_BS used, counts
 
 usage: export_tum.py <run dir> [--frame body|cam0]
 """
@@ -54,6 +55,14 @@ def tum_line(ts, T):
     q = quat_xyzw(T[:3, :3])
     t = T[:3, 3]
     return f'{ts * 1e-9:.9f} {t[0]:.6f} {t[1]:.6f} {t[2]:.6f} {q[0]:.9f} {q[1]:.9f} {q[2]:.9f} {q[3]:.9f}'
+
+
+def dataset_text(run):
+    """The run's dataset YAML (config/dataset/<dataset_id>.yaml), or '' if missing"""
+    cfg = (run / 'config/config.yaml').read_text()
+    m = re.search(r'^dataset_id\s*:\s*"?([^"\s]+)"?', cfg, re.M)
+    ds = run / 'config/dataset' / f'{m.group(1)}.yaml' if m else None
+    return ds.read_text() if ds and ds.exists() else ''
 
 
 def dataset_T_BS(run):
@@ -106,6 +115,12 @@ def main():
     td = re.findall(r'Global time offset : ([-0-9.eE+]+)', stdout)
     if td:
         summary['dt_imu_cam_final_s'] = float(td[-1])
+        summary['dt_imu_cam_estimated'] = True
+    else:  # estimate_td off: the dataset's value was used throughout
+        m = re.search(r'^\s*dt_imu_cam\s*:\s*([-0-9.eE+]+)', dataset_text(a.run), re.M)
+        if m:
+            summary['dt_imu_cam_final_s'] = float(m.group(1))
+            summary['dt_imu_cam_estimated'] = False
     diag = log / 'vio_diag.csv'
     if diag.exists():
         rows = diag.read_text().splitlines()

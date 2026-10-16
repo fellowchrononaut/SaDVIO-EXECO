@@ -232,14 +232,14 @@ class SLAMCore {
     /*!
      * @brief Consecutive frames without visual pose estimate after which the SLAM re-initializes: config
      * max_lost_frames, or the mode default. VO: 5. Stereo VIO: 20 (~1 s at 20 Hz; the IMU carries the pose through
-     * short visual dropouts such as motion blur, where a reset threw the whole state away). Mono VIO: 10 (its velocity
-     * and scale are less certain; a longer IMU-only stretch gave no measured benefit).
+     * short visual dropouts such as motion blur, where a reset threw the whole state away). Mono VIO and nofovvio: 10
+     * (its velocity and scale are less certain; a longer IMU-only stretch gave no measured benefit).
      */
     int maxLostFrames() const {
         if (_slam_param->_config.max_lost_frames > 0)
             return _slam_param->_config.max_lost_frames;
         const std::string &mode = _slam_param->_config.slam_mode;
-        return mode == "bimonovio" ? 20 : mode == "monovio" ? 10 : 5;
+        return mode == "bimonovio" ? 20 : (mode == "monovio" || mode == "nofovvio") ? 10 : 5;
     }
 
     /*!
@@ -383,10 +383,12 @@ class SLAMCore {
 
     /*!
      * @brief If EXECO_KF_FEATURES_LOG is set, append the point features of a KF handed to the back end to
-     * log_slam/kf_features.csv (pixel position in camera 0 and landmark status, as in the ROS image_kps view)
+     * log_slam/kf_features.csv (pixel position in camera 0 and landmark status, as in the ROS image_kps view); in
+     * nofovvio, camera 1's to log_slam/kf_features_cam1.csv
      */
     void logKfFeatures(const std::shared_ptr<Frame> &kf);
-    bool _kf_features_started = false; //!< Header of log_slam/kf_features.csv written
+    bool _kf_features_started      = false; //!< Header of log_slam/kf_features.csv written
+    bool _kf_features_cam1_started = false; //!< Header of log_slam/kf_features_cam1.csv written (nofovvio)
 
     // Profiling variables
     uint _nframes;
@@ -485,8 +487,42 @@ class SLAMMonoVIO : public SLAMCore {
      */
     void IMUprofiling();
 
-  private:
+  protected:
     std::shared_ptr<IMU> _last_IMU; //!< Last IMU processed by the SLAM
+};
+
+/*!
+ * @brief A SLAM class for two non-overlapping cameras + IMU (nofovvio; doc/nofovvio/NOFOVVIO_LEDGER.md, item 3.1),
+ * e.g. the back-to-back fisheye lenses of a 360 camera
+ *
+ * Initialization is monovio's on camera 0 (visual-only map, then the inertial initialization fixes the scale and the
+ * gravity): camera 1 joins once the map is metric, so its landmarks, triangulated over time through its extrinsics,
+ * are metric from the start. Each camera is tracked in time on its own (no matching between them); the frame pose is
+ * one ESKF update over the landmarks of both (ESKFEstimator::estimateTransformBetweenCameras). The back end is
+ * monovio's: the window optimization takes every observation through its own camera.
+ */
+class SLAMNonOverlappingFovVIO : public SLAMMonoVIO {
+
+  public:
+    SLAMNonOverlappingFovVIO(std::shared_ptr<SLAMParameters> slam_param) : SLAMMonoVIO(slam_param) {}
+
+    bool init() override;
+    bool frontEndStep() override;
+
+  private:
+    typed_vec_match _matches_in_time_cam1;     //!< Matches between the last KF and _frame on camera 1
+    typed_vec_match _matches_in_time_cam1_lmk; //!< Matches with landmarks between the last KF and _frame on camera 1
+
+    //! Remove the features of _frame on both cameras that are neither tracked nor outlier-free
+    void outlierRemovalBothCameras();
+
+    //! Triangulate the landmarks of both cameras' tracks in time
+    void initLandmarksBothCameras(std::shared_ptr<Frame> &f);
+
+    //! The KF vote of shouldInsertKeyframe (thresholds and log), on the tracks of both cameras: parallax with each
+    //! camera's rotation compensated, counts summed (mono rule: a KF when the tracks, with or without landmarks, fall
+    //! under the minimum)
+    bool shouldInsertKeyframeBothCameras(std::shared_ptr<Frame> &f);
 };
 
 /*!

@@ -42,20 +42,21 @@ Rules for this work:
 - [ ] 2.3 `nofov` with KB4 against the double-sphere baseline.
 
 ### 3. `nofovvio` mode
-- [ ] 3.0 VIO scale on VID_012: `monovio` lengths are ×1.13 the true ones (×1.11–1.15 over 5 runs; 1.05–1.20 over
-  the boxes' scale range), beyond the ±5 % of the measurement. Find the cause before 3.3: IMU noise (TUM-VI
-  placeholders), `estimate_td`, rolling shutter (6.1), accelerometer scale (|a| 9.87 m/s², +0.6 % only), VIO init.
-- [ ] 3.1 `SLAMNonOverlappingFovVIO`, derived from `SLAMBiMonoVIO`: the `nofov` front end (per-camera tracking and
-  landmarks, no stereo matching between the lenses) on the VIO back end (IMU initialization, pre-integration, bias
-  prior, marginalization, `estimate_td`). Mode validation in `slamParameters`.
-- [ ] 3.2 Sanity check: EuRoC stereo run as non-overlapping, against `bimonovio`.
-- [ ] 3.3 VID_001 and VID_012:
+- [x] 3.0 VIO scale on VID_012: `monovio` lengths were ×1.13 against GUTWrap's first box scale (1.37 m/unit). Time
+  offset, IMU noise, time windows and rotation speed ruled out a VIO cause; GUTWrap's v2 measurement (1.525 m/unit,
+  ±1.3 %) puts the VIO at ×1.000–1.031. Closed 2026-10-16: the error was in the reference scale.
+- [x] 3.1 `SLAMNonOverlappingFovVIO` (`slam_mode: nofovvio`), derived from `SLAMMonoVIO` (not `SLAMBiMonoVIO`: its
+  initialization needs stereo depth between overlapping cameras): `monovio`'s initialization on camera 0, then both
+  cameras tracked in time on their own, one ESKF update over both cameras' landmarks, `monovio`'s back end. Mode
+  validation in `slamParameters`. Details in the log (2026-10-16).
+- [x] 3.2 Sanity check: EuRoC stereo run as non-overlapping, against `bimonovio` (log, 2026-10-16).
+- [x] 3.3 VID_001 and VID_012 (results in the log, 2026-10-16):
   - ATE after Sim(3), and after gravity-only alignment;
   - completion without re-initialization;
   - scale against a measured distance; gravity within 1°;
   - runtime at full and half resolution.
-- [ ] 3.4 Outputs: per-frame TUM poses in a gravity-aligned metric world, final td and biases, window pose
-  covariance (`log_pose_covariance`), and the camera–IMU extrinsics as used.
+- [x] 3.4 Outputs: per-frame TUM poses in a gravity-aligned metric world, final td and biases, window pose
+  covariance (`log_pose_covariance`), and the camera–IMU extrinsics as used (`export_tum.py`, log 2026-10-16).
 
 ### 4. Loop closure with two lenses
 - [ ] 4.1 Cross-lens candidates (the rear lens sees what the front lens saw on the way out), enabled only with two
@@ -258,4 +259,164 @@ Rules for this work:
   - Replay: VID_012's reference is now drawn in metres (1.37 m per unit), with the VIO aligned without scale, so the
     scale error shows (SE3 KF ATE 0.663 m; Sim3 ATE 0.066 m on the metrics card). VID_001 unchanged (scaled to the
     VIO). Deck rebuilt; the README says so.
+- 2026-10-16, GUTWrap (`gutwrap-50`) on item 3.0: X5 rolling-shutter readout 21.244 ms per frame (INSV metadata
+  and Insta360's lens profile, both captures; direction not stated); exposure 1/60 s (VID_012). IMU white noise
+  from the recordings' 150–450 Hz PSD: gyro 3.8–6.1e-5 rad/s/√Hz, accel 2.8e-4–1.3e-3 m/s²/√Hz (lower bounds if
+  the IMU filters internally); suggested VIO values ×5: gyro 2.5e-4, accel 3.5e-3 (ours: 1.6e-4 / 2.8e-3, TUM-VI).
+  Random walks need ~1 h static. Their box scale is less certain than ±5 %: box A's top came out 11 % non-square;
+  they offer a multi-view measurement (triangulated corners or mesh edges). Also: Insta360's factory dual-lens
+  calibration (`offset_v3`) is in the metadata, not decoded.
+- 2026-10-16, item 3.0 tests (VID_012, `monovio`, 2 runs each):
+  - `estimate_td=1` (`x5_s30_td`): td converges to −4.97 / −4.86 ms (the YAML has −5 ms); VIO scale ×1.133 /
+    ×1.116. Not the cause.
+  - GUTWrap's noise values (`x5_s30_gwimu`, test YAML `insta360x5_vid_012_gwimu.yaml`): ×1.130 / ×1.127 (before
+    46.9 s; run_01 diverges in the arena-exit tail). ATE before 46.9 s 0.078 / 0.085 m (baseline 0.054–0.079). Not
+    the cause.
+  - Local scale in 10 s windows (Sim3 per window, 9 runs, 3 configurations): ×1.10–1.15 in every window of every
+    run, mean ×1.114–1.139 per window, already ×1.12 in the first window (3–13 s); no growth over time, no link to
+    rotation speed (window mean |ω| 0.40–0.56 rad/s; correlation −0.4 over 7 overlapping windows, not significant).
+  - Reading: a VIO scale error from noise, td, initialization or rolling shutter would vary between runs and over
+    time; this factor is constant across runs, settings and time. The IMU is metric (|a| 9.87 m/s², gyro–camera
+    rotation residual 0.04°, td consistent), so the factor most likely sits in the reference's 1.37 m/unit, which
+    the VIO puts at ~1.55. Next: GUTWrap's multi-view box measurement (user's go needed); rolling shutter (6.1) on
+    hold until then.
+- 2026-10-16, user decisions: GUTWrap is doing the multi-view box measurement. GUTWrap's IMU white-noise values
+  (gyro 2.5e-4, accel 3.5e-3) are now in both X5 YAMLs; the random walks stay TUM-VI placeholders. The test YAML
+  `insta360x5_vid_012_gwimu.yaml` is deleted. Milestone-1 note drafted in `doc/nofovvio/notes/SaDVIO_reply_1.md`,
+  waiting on the user's review before it goes to `GUTWrap_Discussion/`. Next: 3.1.
+- 2026-10-16, revised VID_012 scale from GUTWrap (`gutwrap-50`, `cube_corners_VID_012.csv` v2, README): 1.525 m per
+  SfM unit (1.507–1.545, ±1.3 %), from the SfM points on the boxes' printed side walls (track ≥ 3, wall plane = median
+  of its points, ~1 cm scatter): widths A 0.6560 × 0.6563, B 0.6634 × 0.6474 units, mean 0.6558 ± 0.0056 units per
+  metre. v1 (1.37) segmented the box tops in the splat's rendered depth, where soft edges made them look larger.
+  - Applied (user's go): `eval_x5.M_PER_UNIT` VID_012 = (1.525, 1.507, 1.545); rear T_BS translation in both X5
+    YAMLs = [0.025173, 0.00029, 0.013185] m (2.84 cm; 2.81–2.88); replay and deck rebuilt (VID_012 KF ATE SE3
+    0.093 m, Sim3 0.074 m, VIO scale ×1.011).
+  - Rescored VID_012 (m, Sim3):
+
+    | run | ATE | ATE before 46.9 s | VIO scale (×) | over the scale range |
+    |---|---|---|---|---|
+    | x5_B 00 | 0.855 | 0.080 | 1.031 | 1.018–1.043 |
+    | x5_B 01 | 0.102 | 0.084 | 1.000 | 0.987–1.012 |
+    | x5_B 02 | 0.088 | 0.077 | 1.009 | 0.996–1.022 |
+    | x5_B 03 | 0.123 | 0.087 | 1.013 | 1.000–1.025 |
+    | x5_B_viewer 00 | 0.074 | 0.060 | 1.012 | 0.999–1.024 |
+    | x5_s30_td 00 | 0.091 | 0.086 | 1.018 | 1.004–1.030 |
+    | x5_s30_td 01 | 0.111 | 0.110 | 1.002 | 0.989–1.014 |
+    | x5_s30_gwimu 00 | 0.131 | 0.087 | 1.016 | 1.002–1.028 |
+    | x5_s30_gwimu 01 | 1.808 | 0.094 | 1.110 (tail; 1.012 before 46.9 s) | — |
+
+  - Item 3.0 closed; rolling shutter (6.1) is not needed for the scale. Earlier tables in this log at 1.37 m/unit are
+    superseded (metres there are ×0.898 of the true values).
+- 2026-10-16, item 3.1, `nofovvio` (`cpp/src/slamNonOverlappingFovVIO.cpp`, class in `slamCore.h`):
+  - Initialization: `SLAMMonoVIO::init()` on camera 0 (visual-only map, then the inertial initialization fixes scale
+    and gravity); camera 1 detects on the last KF once the map is metric, so its landmarks, triangulated over time
+    through its extrinsics, are metric from the start. Camera 1 is unused during the ~3 s of initialization.
+  - Front end (as `monovio`'s, for both cameras): KLT per camera, essential / PnP RANSAC per camera (outliers),
+    epipolar filtering per camera, one ESKF update over both cameras' landmarks
+    (`ESKFEstimator::estimateTransformBetweenCameras`: body-frame state, each observation through its own camera's
+    extrinsics; the single-camera version uses the first match's camera for all), IMU-only pose when both cameras
+    together have ≤ 5 tracks, KF vote on both cameras (parallax with each camera's rotation compensated, mono rule),
+    landmark init and map-landmark recovery on both cameras. Back end: `monovio`'s (the window optimizer takes each
+    observation through its own camera).
+  - Shared code, behaviour unchanged for the other modes: `ESKFEstimator`'s IMU step moved into a helper
+    (`imuUpdate`) used by both updates; `SLAMMonoVIO::_last_IMU` protected; `nofovvio` added where the modes are
+    listed (config validation: VIO, needs 2 cameras, loop_graph_dof 4 allowed; IMU loading; loop-closure window
+    options as `monovio`; mesher on both cameras as `nofov`; `max_lost_frames` default 10 as `monovio`; both
+    `main.cpp`; `run_sadvio.py`).
+  - Tests (`residual_test.cpp`): `ESKFMultiCameraTest.oneCameraMatchesTheSingleCameraUpdate` (one camera with a 3 cm
+    offset and a half turn: same estimate and covariance as the single-camera update to second order, ~1e-6 for a
+    ~0.04 correction; the corrections are [Exp(θ), ρ], which change error frames exactly only to first order) and
+    `twoCamerasRecoverTheMotion` (back-to-back cameras, exact observations). Suite: 104 / 105 (the flaky
+    `LineFeatureMatching`).
+  - Smoke runs (`nfv_smoke`): VID_012 (masks, 960 px) completes, no re-initialization and no "Not enough tracked"
+    frame (`monovio` lost tracking at the arena exit): Sim3 ATE 0.086 m (0.079 before 46.9 s), VIO scale ×1.010,
+    gravity 0.24°, rotation RMS 0.69°, max error 0.18 m, coverage 0.953. EuRoC V1_01: no reset, ATE 0.073 m.
+- 2026-10-16, item 3.2 (`nfv_euroc`, default config, 2 runs per mode, `eval_traj.py`):
+
+  | | `bimonovio` | `monovio` | `nofovvio` |
+  |---|---|---|---|
+  | V1_01 ATE (m) | 0.052 / 0.065 | 0.237 / 0.207 | 0.120 / 0.133 |
+  | MH_01 ATE (m) | 0.116 / 0.119 | 1.044 / 0.212 | 0.146 / 0.107 |
+  | resets | 0 | 0 | 0 |
+  | RPE 1 s (m), V1_01 / MH_01 | 0.052 / 0.016 | 0.055 / 0.04–0.13 | 0.051 / 0.017 |
+  | wall (s), V1_01 / MH_01 | 16 / 20 | 16 / 20 | 26 / 34 |
+
+  `nofovvio` runs on a pinhole pair with no reset, much better than one camera, as good as stereo VIO on MH_01 and
+  between the two on V1_01: it never matches points between the cameras (by design), and on EuRoC's overlapping
+  pair that matching is what gives stereo VIO its depth. ~1.6× the time (two cameras tracked). The rotation RMS
+  (~5° on V1_01 for every mode) is the evaluation's GT-orientation convention, common to all modes.
+- 2026-10-16, item 3.3 (in progress), `nofovvio` on the X5:
+  - Bug found and fixed: `SLAMCore::shouldInsertKeyframe` (used by the `monovio` initialization that `nofovvio`
+    reuses) applied the mono landmark rule only for `mono` / `monovio`; under `nofovvio` the initialization voted KFs
+    much more often, the 10 initialization KFs spanned too little motion, and the inertial initialization was rejected
+    (scale undetermined, sigma log scale 0.11–0.36 > 0.1) until 21.7 s of VID_001's 25.8 s (coverage 0.13–0.19).
+    `nofovvio` now takes the mono rule there. `monovio` with GUTWrap's noise values initializes at once on VID_001
+    (sigma 0.036–0.044), so the noise change was not the cause. EuRoC (3.2) ran before the fix: to redo.
+  - VID_012 (5 runs, 960 px; `nfv_smoke`, `nfv_x5`, `nfv_x5b`): all complete, no re-initialization, no IMU-only
+    frame; Sim3 ATE 0.058–0.086 m (before 46.9 s: 0.057–0.080), VIO scale ×1.005–1.017, gravity 0.24–0.28°.
+    1920 px (`nfv_x5_full`, 1 run): 0.082 m (0.047 before 46.9 s), scale ×1.001; 96 s for 47.7 s of video.
+  - VID_001: with VID_012's rig (current YAML) `nofovvio` is behind the front lens alone. Diagnostics:
+    - Rear lens alone (`monovio` on a lens-swapped view, `scratch/x5_rear/` symlinks, `*_rear.yaml` variants): VID_001
+      0.154 / 0.123 units (as good as the front lens); VID_012 0.21 / 0.56 units, tracking lost 3 times (white walls).
+    - Lens time offsets (`estimate_td` per lens): VID_001 front −2.0 ms, rear −2.4 ms; VID_012 front −4.9 ms, rear
+      −5.2 ms. No offset between the lenses. (VID_001's YAML has 0; the estimate is ~−2 ms.)
+    - Rig translation (6 runs each, ATE in units): VID_012's rig 0.218 0.211 0.211 0.119 0.208 0.161 (mean 0.188);
+      VID_001's own Metashape rig direction scaled to 2.84 cm, body [0.028166, −0.000781, 0.003557] m: 0.167 0.139
+      0.178 0.165 0.130 0.149 (mean 0.155); rotation-only rig (2 runs) 0.133 / 0.255; `monovio` front (7 runs) mean
+      0.149. The two SfM rigs disagree by ~22° in direction (VID_012: 13 mm sideways; VID_001: 3.6 mm, almost along
+      the optical axis); a 2–3 cm baseline is weakly determined in either reconstruction.
+  - Runtime: `nofovvio` and `monovio` take the same wall time on the X5 (76 s for VID_012, 42 s for VID_001 at
+    960 px), so the runs are bound by reading and decoding two 1920 px PNGs per frame, not by the SLAM.
+- 2026-10-16, item 3.3 results and decisions:
+  - Rig: VID_001's rear T_BS translation is now its own Metashape rig direction at the 2.84 cm measured on VID_012
+    ([0.028166, −0.000781, 0.003557] m); VID_012 keeps its COLMAP rig. With VID_001's direction, VID_012 was the same
+    before the arena exit (mean 0.068 vs 0.067 m over 5 runs each) but 2 of 5 runs diverged in the last second (0 of 5
+    with its own rig): each capture's rig estimate goes with its own intrinsics. Diagnostic YAMLs, the lens-swapped
+    view and its `run_sadvio.py` entries are removed.
+  - Final results, 960 px, masks, GUTWrap's IMU white noise:
+
+    | | VID_012 (metres, 1.525 m/unit) | VID_001 (SfM units) |
+    |---|---|---|
+    | `nofovvio` runs | 5 | 7 |
+    | complete, no re-initialization | 5 / 5 | 7 / 7 |
+    | Sim3 ATE | 0.058–0.086 m | 0.130–0.229 (mean 0.165) |
+    | ATE before 46.9 s | 0.057–0.080 m | — |
+    | gravity-only ATE | 0.090–0.126 m | — |
+    | VIO scale | ×1.005–1.017 | — |
+    | gravity vs reference | 0.24–0.28° | 0.1–0.5° |
+    | frames on the IMU alone ("Not enough tracked") | 0 | 0 |
+    | `monovio` (front lens) for comparison | Sim3 0.074–0.123 m, 1 of 5 diverged at the exit | mean 0.149 (7 runs) |
+
+    1920 px, VID_012 (1 run): Sim3 0.082 m (0.047 before 46.9 s), scale ×1.001, 96 s for 47.7 s of video (960 px:
+    76 s, the same as `monovio`: bound by reading two 1920 px PNGs per frame).
+  - Reading: on VID_012 two lenses keep tracking through the arena exit, where the front lens alone loses it; the ATE
+    is otherwise the same. On VID_001 the front lens alone is slightly better; the rig translation, weakly determined
+    in both reconstructions, is the limiting input.
+  - EuRoC (3.2) after the KF-rule fix (`nfv_euroc2`): V1_01 0.084 / 0.097 m (was 0.120 / 0.133), MH_01 0.107 /
+    0.124 m; no reset.
+- 2026-10-16, item 3.4: a `nofovvio` run with `log_pose_covariance: 1` (`nfv_out`) writes `cov_window.csv` (window
+  pose covariance, newest / previous / oldest KF, 18×18) and `cov_front.csv` (per-frame ESKF covariance) besides the
+  usual logs; `export_tum.py` gives the per-frame TUM poses (cam0 or body), the biases and the T_BS used, and now the
+  dataset's `dt_imu_cam` with `dt_imu_cam_estimated: false` when `estimate_td` is off.
+- 2026-10-16, `run_sadvio.py`: two lanes with the same label could race on removing the shared empty scratch folders
+  (one lane crashed after its first run); the cleanup now tolerates it.
+- 2026-10-16, regression subset before the `nofovvio` commit: `doc/loop_closure/tools/run_final_matrix.sh` (new env
+  options PREFIX and SEQS) with snapshot `nf2` (current code), 6 shipped configurations × room1, MH_01, V1_01,
+  V2_03 × 2 runs, labels `reg_nf2_*`, against `fin_*` (snapshot `fin1`, 2026-10-10). No crash; VIO configurations
+  within run-to-run noise on window and loop-closed ATE. Two cells differ from `fin1`: `vo_mono` V2_03 (resets 17 / 15
+  vs 5 / 6, ATE better: 0.37 / 0.39 vs 1.34 / 1.18 m) and `vio_noprior` V2_03 (loop ATE 0.24 / 0.28 vs 0.16 / 0.21 m).
+  The pre-`nofovvio` snapshot `nf1` gives the same (`reg_nf1_*`: resets 18 / 19, ATE 0.34 / 1.10; loop 0.31 / 0.26):
+  today's changes are neutral, and the shift predates them (commits after `fin1`). `vo_mono` is known to be noisy
+  (older open item); the V2_03 reset count is worth a look later.
+- 2026-10-16, replay: each X5 capture also shows a `nofovvio` run (purple, `nfv_viewer` runs: VID_012 Sim3 0.062 m,
+  VID_001 0.162 units), with the rear lens's video and keypoints in its panel. `logKfFeatures` writes camera 1's
+  features to `log_slam/kf_features_cam1.csv` in `nofovvio` (EXECO_KF_FEATURES_LOG only). Viewer: third run slot
+  `nfv`, per-run video and camera label; `build_x5_replay.py --nfv`. Deck rebuilt.
+- 2026-10-16, loop closure in the `nofov` modes (before 4.1): the loop closure is attached to every mode (the local
+  map's discard callback), `nofov` and `nofovvio` included, on camera 0 only (`LoopClosure::addKeyframe`), and its
+  verification drops rays more than ~78° off the axis (fisheye-safe). Test (`nfv_lc`, `nofovvio`, `loop_closure: 1`,
+  bag of words, 1 run per capture): runs complete; VID_012 88 candidates, VID_001 6, none accepted. Descriptor matches
+  between the candidate's landmarks and the query's keypoints: median 1, max 7 (verification needs 12 PnP inliers each
+  way), 0 inliers. ATE with the loop-closed output: VID_012 0.113 m, VID_001 0.168 units (no correction applied).
+  So on the X5 the matching itself fails, before any cross-lens question: the first thing to look at in 4.1.
 

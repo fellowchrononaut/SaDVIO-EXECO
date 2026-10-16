@@ -51,7 +51,8 @@ void ADataProvider::loadSensorsConfiguration(const std::string &path) {
         _stereo_sync_tol_ns = 20.0 * 1e6; // 20ms default
 
     // Load IMU
-    bool vio_mode = (_slam_config.slam_mode == "bimonovio" || _slam_config.slam_mode == "monovio");
+    bool vio_mode = (_slam_config.slam_mode == "bimonovio" || _slam_config.slam_mode == "monovio" ||
+                     _slam_config.slam_mode == "nofovvio");
     if (config["imu"] && vio_mode) {
         this->loadIMUConfig(config["imu"]);
     }

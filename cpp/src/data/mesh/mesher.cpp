@@ -85,7 +85,7 @@ void Mesher::run() {
             // calls std::terminate() and kills the whole process (exit code -6).
             try {
                 _mesh_3d->updateMesh(this->createMesh2D(_curr_kf->getSensors().at(0)), _curr_kf);
-                if (_slam_mode == "nofov" && _curr_kf->getSensors().size() > 1)
+                if ((_slam_mode == "nofov" || _slam_mode == "nofovvio") && _curr_kf->getSensors().size() > 1)
                     _mesh_3d->updateMesh(this->createMesh2D(_curr_kf->getSensors().at(1)), _curr_kf);
             } catch (const std::exception& e) {
                 std::cerr << "[Mesher] skipping KF due to exception: " << e.what() << std::endl;

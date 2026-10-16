@@ -33,6 +33,8 @@ int main(int argc, char **argv) {
         SLAM = std::make_shared<isae::SLAMBiMonoVIO>(slam_param);
     else if (slam_param->_config.slam_mode == "monovio")
         SLAM = std::make_shared<isae::SLAMMonoVIO>(slam_param);
+    else if (slam_param->_config.slam_mode == "nofovvio")
+        SLAM = std::make_shared<isae::SLAMNonOverlappingFovVIO>(slam_param);
 
     if (slam_param->_config.multithreading) {
 

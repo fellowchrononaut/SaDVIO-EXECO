@@ -39,19 +39,20 @@
 std::vector<std::string>
 isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std::string> &warnings) {
     std::vector<std::string> errors;
-    const std::vector<std::string> modes      = {"bimono", "mono", "nofov", "bimonovio", "monovio"};
+    const std::vector<std::string> modes      = {"bimono", "mono", "nofov", "bimonovio", "monovio", "nofovvio"};
     const std::vector<std::string> optimizers = {"Analytic", "Numeric", "AngularAnalytic"};
     auto known = [](const std::vector<std::string> &list, const std::string &v) {
         return std::find(list.begin(), list.end(), v) != list.end();
     };
 
     if (!known(modes, cfg.slam_mode))
-        errors.push_back("unknown slam_mode '" + cfg.slam_mode + "' (bimono, mono, nofov, bimonovio, monovio)");
+        errors.push_back("unknown slam_mode '" + cfg.slam_mode + "' (bimono, mono, nofov, bimonovio, monovio, nofovvio)");
     if (!known(optimizers, cfg.optimizer))
         errors.push_back("unknown optimizer '" + cfg.optimizer + "' (Analytic, Numeric, AngularAnalytic)");
 
-    const bool vio    = (cfg.slam_mode == "bimonovio" || cfg.slam_mode == "monovio");
-    const bool stereo = (cfg.slam_mode == "bimono" || cfg.slam_mode == "bimonovio" || cfg.slam_mode == "nofov");
+    const bool vio    = (cfg.slam_mode == "bimonovio" || cfg.slam_mode == "monovio" || cfg.slam_mode == "nofovvio");
+    const bool stereo = (cfg.slam_mode == "bimono" || cfg.slam_mode == "bimonovio" || cfg.slam_mode == "nofov" ||
+                         cfg.slam_mode == "nofovvio");
     if (vio && !has_imu)
         errors.push_back("slam_mode '" + cfg.slam_mode + "' needs an imu block in the dataset yaml");
     if (stereo && ncam < 2)
@@ -107,7 +108,7 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
                              cfg.loop_detector + ")");
         if (cfg.loop_graph_dof != 0 && cfg.loop_graph_dof != 4 && cfg.loop_graph_dof != 6 && cfg.loop_graph_dof != 7)
             errors.push_back("loop_graph_dof must be 0 (automatic: 7 in mono, else 6), 4, 6 or 7");
-        if (cfg.loop_graph_dof == 4 && cfg.slam_mode != "monovio" && cfg.slam_mode != "bimonovio")
+        if (cfg.loop_graph_dof == 4 && !vio)
             errors.push_back("loop_graph_dof 4 needs an IMU (roll and pitch observable)");
         if (cfg.loop_graph_dof == 7 && cfg.slam_mode != "mono")
             errors.push_back("loop_graph_dof 7 (Sim3) is for slam_mode mono (the other modes have a metric scale)");
