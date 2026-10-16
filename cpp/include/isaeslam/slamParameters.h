@@ -108,6 +108,9 @@ struct Config {
     int contrast_enhancer;       //!< integer to choose the contrast enhancement algorithm
     float clahe_clip;            //!< Clip of CLAHE (useful only if it is chosen for contrast enhancement)
     float downsampling;          //!< Float to reduce the size of the image (0,5 = half the size of the img)
+    int use_masks = 0;           //!< 1: per-image masks from <dataset>/mav0/camN/mask/<image file name> (offline reader;
+                                 //!< non-zero = keep), 0: whole images
+    int mask_image_circle = 1;   //!< KB4 cameras: 1 masks out everything beyond the lens' image circle (max_theta_deg)
     int marginalization;         //!< 0 no marginalization, 1 marginalization
     bool sparsification;         //!< 0 no sparsification, 1 sparsification
     std::string pose_estimator;  //!< Type of pose estimator

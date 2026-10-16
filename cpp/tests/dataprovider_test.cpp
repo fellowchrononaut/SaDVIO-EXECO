@@ -48,7 +48,8 @@ class DataProviderTest : public testing::Test {
 
     void TearDown() override { std::filesystem::remove_all(_dir); }
 
-    std::shared_ptr<ADataProvider> makeProvider(const std::string &slam_mode) {
+    std::shared_ptr<ADataProvider> makeProvider(const std::string &slam_mode, double downsampling = 1,
+                                                int use_masks = 0) {
         std::string yaml = (_dir / "dataset.yaml").string();
         std::ofstream f(yaml);
         for (int i = 0; i < 2; i++)
@@ -67,7 +68,8 @@ class DataProviderTest : public testing::Test {
         Config cfg;
         cfg.slam_mode         = slam_mode;
         cfg.contrast_enhancer = 0;
-        cfg.downsampling      = 1;
+        cfg.downsampling      = downsampling;
+        cfg.use_masks         = use_masks;
         return std::make_shared<ADataProvider>(yaml, cfg);
     }
 
@@ -119,6 +121,39 @@ TEST_F(DataProviderTest, imuAndImagesMergedInTimeOrder) {
         double k = double(_cam_stamps[i] + 2 * _ms - _t0) / double(5 * _ms);
         EXPECT_NEAR((f->getIMU()->getAcc() - k * Eigen::Vector3d(1, 2, 3)).norm(), 0, 1e-9);
         EXPECT_NEAR((f->getIMU()->getGyr() - 0.1 * k * Eigen::Vector3d(1, 1, 1)).norm(), 0, 1e-9);
+    }
+}
+
+// Per-image masks (doc/nofovvio/NOFOVVIO_LEDGER.md): with use_masks, read from camN/mask/<image file name>, binarized
+// (non-zero = keep), resampled with the image; a missing mask means the whole image. Without use_masks (the default),
+// every image keeps the default all-keep mask, even when the dataset has mask files
+TEST_F(DataProviderTest, perImageMasksFollowTheImages) {
+    // Without mask folders: the default mask
+    for (const auto &f : readAll(makeProvider("bimono")))
+        for (const auto &cam : f->getSensors())
+            EXPECT_EQ(cv::countNonZero(cam->getMask()), cam->getMask().rows * cam->getMask().cols);
+
+    // cam0's first image: left half masked (0), right half 200 (kept); cam1's first image: no mask file
+    for (const char *sub : {"mav0/cam0/mask", "mav0/cam1/mask"})
+        std::filesystem::create_directories(_dir / sub);
+    cv::Mat m(16, 16, CV_8UC1, cv::Scalar(200));
+    m(cv::Rect(0, 0, 8, 16)).setTo(0);
+    cv::imwrite((_dir / "mav0/cam0/mask" / (std::to_string(_cam_stamps[0]) + ".png")).string(), m);
+
+    for (const auto &f : readAll(makeProvider("bimono", 1.0, 0)))
+        for (const auto &cam : f->getSensors())
+            EXPECT_EQ(cv::countNonZero(cam->getMask()), cam->getMask().rows * cam->getMask().cols)
+                << "use_masks 0: mask files ignored";
+    for (double ds : {1.0, 0.5}) {
+        std::vector<std::shared_ptr<Frame>> frames = readAll(makeProvider("bimono", ds, 1));
+        ASSERT_FALSE(frames.empty());
+        const cv::Mat m0 = frames[0]->getSensors().at(0)->getMask();
+        const cv::Mat m1 = frames[0]->getSensors().at(1)->getMask();
+        const int n      = static_cast<int>(16 * ds);
+        ASSERT_EQ(m0.rows, n) << "resampled with the image";
+        EXPECT_EQ(cv::countNonZero(m0(cv::Rect(0, 0, n / 2, n))), 0) << "masked half";
+        EXPECT_EQ(cv::countNonZero(m0(cv::Rect(n / 2, 0, n / 2, n)) == 255), n / 2 * n) << "kept half, binarized";
+        EXPECT_EQ(cv::countNonZero(m1), m1.rows * m1.cols) << "missing mask: whole image";
     }
 }
 

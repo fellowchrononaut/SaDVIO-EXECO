@@ -14,6 +14,7 @@
 
 #include "isaeslam/data/sensors/Camera.h"
 #include "isaeslam/data/sensors/DoubleSphere.h"
+#include "isaeslam/data/sensors/KannalaBrandt.h"
 #include "isaeslam/data/sensors/Fisheye.h"
 #include "isaeslam/data/sensors/IMU.h"
 #include "isaeslam/slamParameters.h"
@@ -76,6 +77,11 @@ class ADataProvider {
     int _ncam;                                             //!< Number of Image Sensors
     std::queue<std::shared_ptr<Frame>> _frame_queue;       //!< Queue of frames to be processed
     Config _slam_config;                                   //!< SLAM configuration
+
+  public:
+    bool useMasks() const { return _slam_config.use_masks == 1; } //!< Config use_masks (offline per-image masks)
+
+  protected:
     int _nframes;                                          //!< Frame counter
     double _stereo_sync_tol_ns = 20.0 * 1e6;             //!< Stereo pair timestamp tolerance [ns]
 };
@@ -140,7 +146,8 @@ class EUROCGrabber {
         : _folder_path(folder_path), _prov(prov), _merger(prov) {}
 
     /*!
-     * @brief Load filenames and timestamps from .csv files.
+     * @brief Load filenames and timestamps from .csv files. With config use_masks, each image gets the mask of the
+     * same file name from camN/mask/ (8-bit, non-zero = keep; doc/nofovvio/NOFOVVIO_LEDGER.md)
      */
     void load_filenames();
 
@@ -170,6 +177,7 @@ class EUROCGrabber {
     std::queue<std::string> _cam0_filename_queue, _cam1_filename_queue; //!< Queues for camera filenames
     std::queue<long long> _cam0_timestamp_queue, _cam1_timestamp_queue; //!< Queues for camera timestamps
 
+    bool _use_masks = false; //!< camN/mask/ found: per-image masks
     std::shared_ptr<ADataProvider> _prov; //!< Pointer to the data provider
     ImuImageMerger _merger;               //!< Orders IMU measurements and images
 

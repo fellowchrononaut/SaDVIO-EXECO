@@ -52,11 +52,15 @@ SEQ_DATASET['rs_synth_sh15'] = '"realsense_d455_vio"'
 SEQUENCES['rs_synth_sh30'] = 'realsense/13_18_29_synth_sh30/mav0'
 SEQ_DATASET['rs_synth_sh30'] = '"realsense_d455_vio"'
 SEQ_DATASET['rs_13_18_29_synthimu'] = '"realsense_d455_vio"'
+# Insta360 X5 dual back-to-back fisheye + IMU (GUTWrap, doc/nofovvio/NOFOVVIO_LEDGER.md); dataset YAMLs with KB4
+for _v in ('001', '012'):
+    SEQUENCES[f'x5_{_v}'] = f'insta360x5/VID_{_v}/mav0'
+    SEQ_DATASET[f'x5_{_v}'] = f'"insta360x5_vid_{_v}"'
 # Forced visual dropouts (make_dropout_seq.py): black images in three windows, IMU unchanged
 SEQUENCES['MH_01_drop'] = 'euroc/MH_01_easy_drop/mav0'        # 65 s and 100 s for 1.5 s, 140 s for 3 s
 SEQ_DATASET['MH_01_drop'] = '"eth"'
 SEQUENCES['room1_drop'] = 'tumvi/dataset-room1_512_16_drop/mav0'  # 45 s and 85 s for 1.5 s, 115 s for 3 s
-MODES      = ('bimono', 'bimonovio', 'mono', 'monovio')
+MODES      = ('bimono', 'bimonovio', 'mono', 'monovio', 'nofov')
 
 
 def to_container(p: Path) -> str:

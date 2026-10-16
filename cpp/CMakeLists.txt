@@ -131,6 +131,7 @@ if(ISAESLAM_BUILD_TESTS)
   add_executable(isae_test
     ./tests/association_test.cpp
     ./tests/basic_test.cpp
+    ./tests/camera_test.cpp
     ./tests/dataprovider_test.cpp
     ./tests/imu_test.cpp
     ./tests/linefeature_test.cpp

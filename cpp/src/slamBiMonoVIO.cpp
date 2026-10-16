@@ -690,6 +690,7 @@ bool SLAMBiMonoVIO::frontEndStep() {
 
     // Send the frame to the viewer
     _frame_to_display = _frame;
+    logPerFrame(_frame);
 
     return true;
 }

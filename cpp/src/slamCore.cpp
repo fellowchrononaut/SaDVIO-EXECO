@@ -625,6 +625,27 @@ void SLAMCore::logWindowCovariance(const WindowCovariance &wc) {
     fw << "\n";
 }
 
+void SLAMCore::logPerFrame(const std::shared_ptr<Frame> &f) {
+    // Moved from slamBiMono.cpp / slamMono.cpp (2026-10-16) so that every mode writes it; same file and format
+    static const bool enabled = (std::getenv("EXECO_PERFRAME_LOG") != nullptr);
+    if (!enabled || !f)
+        return;
+    if (!std::filesystem::is_directory("log_slam"))
+        std::filesystem::create_directory("log_slam");
+    std::ofstream fw("log_slam/results_perframe.csv", _perframe_started ? std::ofstream::app : std::ofstream::trunc);
+    if (!_perframe_started) {
+        fw << "timestamp (ns), nframes, T_wf(00), T_wf(01), T_wf(02), T_wf(03), T_wf(10), T_wf(11), T_wf(12), "
+           << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23)\n";
+        _perframe_started = true;
+    }
+    const Eigen::Affine3d T_w_f = f->getFrame2WorldTransform();
+    const Eigen::Matrix3d R     = T_w_f.linear();
+    const Eigen::Vector3d twc   = T_w_f.translation();
+    fw << f->getTimestamp() << "," << _nframes << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << ","
+       << twc.x() << "," << R(1, 0) << "," << R(1, 1) << "," << R(1, 2) << "," << twc.y() << "," << R(2, 0) << ","
+       << R(2, 1) << "," << R(2, 2) << "," << twc.z() << "\n";
+}
+
 void SLAMCore::logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats) {
 
     if (!kf || !kf->getIMU())

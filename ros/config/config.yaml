@@ -17,6 +17,8 @@ multithreading : 0
 contrast_enhancer : 1
 clahe_clip : 2
 downsampling: 1
+use_masks: 0      # 1: per-image masks from <dataset>/mav0/camN/mask/<image file name> (offline reader; white = keep)
+mask_image_circle: 1   # KB4 cameras: 1 masks out everything beyond the lens' image circle (max_theta_deg)
 
 #################################################################################
 # Details about the SLAM Algorithm

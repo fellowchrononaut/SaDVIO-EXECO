@@ -88,6 +88,11 @@ struct cam_config : sensor_config {
     // For ds
     double alpha;
     double xi;
+
+    // For kb4: valid angle from the optical axis (deg), and the image circle's mask (computed once, at the image size
+    // the sensors get)
+    double max_theta_deg = 100.0;
+    cv::Mat circle_mask;
 };
 
 /*!

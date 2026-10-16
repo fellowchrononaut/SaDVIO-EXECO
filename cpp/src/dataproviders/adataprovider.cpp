@@ -2,8 +2,10 @@
 #include "utilities/geometry.h"
 #include "utilities/timer.h"
 #include <climits>
+#include <filesystem>
 #include <cmath>
 #include <sstream>
+#include <stdexcept>
 #include <thread>
 
 namespace isae {
@@ -149,6 +151,15 @@ void ADataProvider::loadCamConfig(YAML::Node cam_node) {
 
         cam_cfg->xi    = intrinsics[0];
         cam_cfg->alpha = intrinsics[1];
+    } else if (proj_model == "kb4") {
+        // Kannala-Brandt, 4 coefficients (OpenCV fisheye, COLMAP OPENCV_FISHEYE): intrinsics [fu, fv, cu, cv],
+        // distortion_coefficients [k1, k2, k3, k4]; max_theta_deg (optional, default 100): valid angle from the axis
+        cam_cfg->sensor_type   = "kb4_cam";
+        cam_cfg->max_theta_deg = cam_node["max_theta_deg"] ? cam_node["max_theta_deg"].as<double>() : 100.0;
+        // The planar estimators (PnP, ESKF, essential matrix: x / z) take rays up to planar_max_theta_deg (optional,
+        // default 80) from the axis; the angular window optimization uses all of them
+        const double planar = cam_node["planar_max_theta_deg"] ? cam_node["planar_max_theta_deg"].as<double>() : 80.0;
+        geometry::planarRayMinCos() = std::max(geometry::planarRayMinCos(), std::cos(planar * M_PI / 180.0));
     } else if (proj_model == "omni") {
 
         cam_cfg->sensor_type = "omni_cam";
@@ -159,6 +170,9 @@ void ADataProvider::loadCamConfig(YAML::Node cam_node) {
         K(1, 1)     = intrinsics[2];
         K(0, 2)     = intrinsics[3];
         K(1, 2)     = intrinsics[4];
+    } else {
+        throw std::runtime_error("camera projection_model '" + proj_model +
+                                 "' unknown (pinhole, equidistant, double_sphere, kb4, omni)");
     }
 
     // Load distortion model (only for pinhole and omni)
@@ -239,6 +253,11 @@ std::vector<std::shared_ptr<ImageSensor>> ADataProvider::createImageSensors(cons
 
             cam = std::make_shared<DoubleSphere>(img_res, K, _cam_configs.at(i)->alpha, _cam_configs.at(i)->xi);
 
+        } else if (_cam_configs.at(i)->proj_model == "kb4") {
+
+            cv::resize(imgs.at(i), img_res, cv::Size(), downsampling, downsampling);
+            cam = std::make_shared<KannalaBrandt>(img_res, K, _cam_configs.at(i)->d, _cam_configs.at(i)->max_theta_deg);
+
         } else if (_cam_configs.at(i)->proj_model == "omni") {
 
             cv::resize(imgs.at(i), img_res, cv::Size(), downsampling, downsampling);
@@ -249,9 +268,26 @@ std::vector<std::shared_ptr<ImageSensor>> ADataProvider::createImageSensors(cons
                 cam = std::make_shared<Omni>(img_res, K, _cam_configs.at(i)->xi);
         }
 
-        // Add mask if available
-        if (!masks.empty())
-            cam->setMask(masks.at(i));
+        // Add mask if available: through the same undistortion and resampling as the image (nearest: stays binary)
+        if (!masks.empty()) {
+            cv::Mat m = masks.at(i);
+            if (_cam_configs.at(i)->proj_model == "pinhole" && _cam_configs.at(i)->undistort)
+                cv::remap(m, m, _cam_configs.at(i)->undist_map_x, _cam_configs.at(i)->undist_map_y, cv::INTER_NEAREST);
+            if (m.size() != img_res.size())
+                cv::resize(m, m, img_res.size(), 0, 0, cv::INTER_NEAREST);
+            cam->setMask(m);
+        }
+
+        // KB4, config mask_image_circle: nothing is used outside the lens' image circle (max_theta_deg), with or
+        // without per-image masks
+        if (_cam_configs.at(i)->proj_model == "kb4" && _slam_config.mask_image_circle == 1) {
+            cv::Mat &circle = _cam_configs.at(i)->circle_mask;
+            if (circle.size() != img_res.size())
+                circle = std::static_pointer_cast<KannalaBrandt>(cam)->imageCircleMask();
+            cv::Mat m;
+            cv::bitwise_and(cam->getMask(), circle, m);
+            cam->setMask(m);
+        }
 
         // Image processing
         if (_slam_config.contrast_enhancer == 1)
@@ -398,6 +434,16 @@ void EUROCGrabber::load_filenames() {
     if (_prov->getNCam() == 2)
         read_cam_csv(_folder_path + "/cam1/data.csv", _cam1_timestamp_queue, _cam1_filename_queue);
 
+    // Per-image masks when the configuration asks for them (use_masks: camN/mask/<same file name>)
+    _use_masks = _prov->useMasks();
+    if (_use_masks && !std::filesystem::is_directory(_folder_path + "/cam0/mask")) {
+        std::cerr << "EUROCGrabber: use_masks is set but " << _folder_path << "/cam0/mask/ does not exist: whole images"
+                  << std::endl;
+        _use_masks = false;
+    }
+    if (_use_masks)
+        std::cout << "EUROCGrabber: per-image masks from " << _folder_path << "/camN/mask/" << std::endl;
+
     // IMU measurements are only used with an IMU configuration (VIO modes)
     if (!_prov->getIMUConfig())
         return;
@@ -451,10 +497,26 @@ bool EUROCGrabber::addNextFrame() {
     const long long t_img = _cam0_timestamp_queue.front();
 
     // Image frame at the image timestamp
-    std::vector<cv::Mat> imgs;
+    std::vector<cv::Mat> imgs, masks;
     imgs.push_back(cv::imread(_folder_path + "/cam0/data/" + _cam0_filename_queue.front(), cv::IMREAD_GRAYSCALE));
     if (stereo)
         imgs.push_back(cv::imread(_folder_path + "/cam1/data/" + _cam1_filename_queue.front(), cv::IMREAD_GRAYSCALE));
+    if (_use_masks) {
+        const std::string names[2] = {_cam0_filename_queue.front(), stereo ? _cam1_filename_queue.front() : ""};
+        for (size_t c = 0; c < imgs.size(); c++) {
+            cv::Mat m = cv::imread(_folder_path + "/cam" + std::to_string(c) + "/mask/" + names[c], cv::IMREAD_GRAYSCALE);
+            if (m.empty() || m.size() != imgs[c].size()) {
+                static bool warned = false;
+                if (!warned)
+                    std::cerr << "EUROCGrabber: missing or mis-sized mask for " << names[c]
+                              << " (and maybe others): the whole image is used" << std::endl;
+                warned = true;
+                m      = cv::Mat(imgs[c].size(), CV_8UC1, cv::Scalar(255));
+            }
+            cv::threshold(m, m, 127, 255, cv::THRESH_BINARY);
+            masks.push_back(m);
+        }
+    }
     _cam0_timestamp_queue.pop();
     _cam0_filename_queue.pop();
     if (stereo) {
@@ -479,7 +541,7 @@ bool EUROCGrabber::addNextFrame() {
         }
     }
 
-    if (!_merger.emitImageFrame(t_img, _prov->createImageSensors(imgs)))
+    if (!_merger.emitImageFrame(t_img, _prov->createImageSensors(imgs, masks)))
         std::cerr << "EUROCGrabber: image at " << t_img << " is older than the IMU already emitted, skipped"
                   << std::endl;
     return true;

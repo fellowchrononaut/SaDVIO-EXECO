@@ -15,6 +15,19 @@ namespace isae {
 namespace geometry {
 
 /*!
+ * @brief Minimum cosine of the angle from the optical axis for the rays the planar estimators use (PnP, ESKF,
+ * essential matrix work in x / z). Off by default (-2: every ray): behaviour unchanged. The data provider sets it to
+ * cos(planar_max_theta_deg) when a wide-angle KB4 camera is configured, since x / z is undefined from 90 deg on and
+ * ill-conditioned before (doc/nofovvio/NOFOVVIO_LEDGER.md)
+ */
+inline double &planarRayMinCos() {
+    static double c = -2.0;
+    return c;
+}
+inline bool planarRayUsable(const Eigen::Vector3d &ray) { return ray.z() > planarRayMinCos() * ray.norm(); }
+
+
+/*!
 * @brief Computes the skew matrix of a given 3D vector
 */
 template <typename Derived> inline Eigen::Matrix3d skewMatrix(const Eigen::MatrixBase<Derived> &w) {

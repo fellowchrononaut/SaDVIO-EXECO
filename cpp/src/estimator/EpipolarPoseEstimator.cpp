@@ -75,15 +75,23 @@ bool EpipolarPoseEstimator::estimateTransformBetween(const std::shared_ptr<Frame
     }
 
     // Get homogeneous matched points in opencv format
+    // A ray too far from the optical axis for x / z (wide-angle KB4 cameras only) is left out of E and kept untested
     std::vector<cv::Point2f> p_prev, p_curr;
+    std::vector<int> used; // index in matches of each point pair
     double avg_flow = 0;
-    for (const auto &match : matches) {
+    for (size_t i = 0; i < matches.size(); i++) {
+        const auto &match    = matches[i];
         Eigen::Vector3d ray1 = match.first->getSensor()->getRayCamera(match.first->getPoints().at(0));
         Eigen::Vector3d ray2 = match.second->getSensor()->getRayCamera(match.second->getPoints().at(0));
+        if (!geometry::planarRayUsable(ray1) || !geometry::planarRayUsable(ray2))
+            continue;
         avg_flow += (match.first->getPoints().at(0) - match.second->getPoints().at(0)).norm();
         p_prev.push_back(cv::Point2f(ray1.x() / ray1.z(), ray1.y() / ray1.z()));
         p_curr.push_back(cv::Point2f(ray2.x() / ray2.z(), ray2.y() / ray2.z()));
+        used.push_back(static_cast<int>(i));
     }
+    if (p_prev.size() < 5)
+        return false;
 
     // Don't use epipolar for small motion
     avg_flow /= p_prev.size();
@@ -98,13 +106,17 @@ bool EpipolarPoseEstimator::estimateTransformBetween(const std::shared_ptr<Frame
     cv::Mat inliers;
     cv::Mat E = cv::findEssentialMat(p_prev, p_curr, K, cv::RANSAC, 0.99, 1.0 / focal, inliers);
 
-    // Remove matches that are not inliers for E processing
+    // Remove matches that are not inliers for E processing (the ones left out of E are kept)
     vec_match inliermatches;
-    for (uint i = 0; i < matches.size(); i++) {
-        if (inliers.at<char>(i)) {
-            inliermatches.push_back(matches.at(i));
-        }
+    std::vector<char> tested(matches.size(), 0);
+    for (size_t j = 0; j < used.size(); j++) {
+        tested[used[j]] = 1;
+        if (inliers.at<char>(static_cast<int>(j)))
+            inliermatches.push_back(matches.at(used[j]));
     }
+    for (size_t i = 0; i < matches.size(); i++)
+        if (!tested[i])
+            inliermatches.push_back(matches.at(i));
 
     matches = inliermatches;
 
@@ -234,15 +246,23 @@ bool EpipolarPoseEstimator::estimateTransformSensors(const std::shared_ptr<Image
     }
 
     // Get homogeneous matched points in opencv format
+    // A ray too far from the optical axis for x / z (wide-angle KB4 cameras only) is left out of E and kept untested
     std::vector<cv::Point2f> p_prev, p_curr;
+    std::vector<int> used; // index in matches of each point pair
     double avg_flow = 0;
-    for (const auto &match : matches) {
+    for (size_t i = 0; i < matches.size(); i++) {
+        const auto &match    = matches[i];
         Eigen::Vector3d ray1 = sensor1->getRayCamera(match.first->getPoints().at(0));
         Eigen::Vector3d ray2 = sensor2->getRayCamera(match.second->getPoints().at(0));
+        if (!geometry::planarRayUsable(ray1) || !geometry::planarRayUsable(ray2))
+            continue;
         avg_flow += (match.first->getPoints().at(0) - match.second->getPoints().at(0)).norm();
         p_prev.push_back(cv::Point2f(ray1.x() / ray1.z(), ray1.y() / ray1.z()));
         p_curr.push_back(cv::Point2f(ray2.x() / ray2.z(), ray2.y() / ray2.z()));
+        used.push_back(static_cast<int>(i));
     }
+    if (p_prev.size() < 5)
+        return false;
 
     // Don't use epipolar for small motion
     avg_flow /= p_prev.size();
@@ -257,14 +277,26 @@ bool EpipolarPoseEstimator::estimateTransformSensors(const std::shared_ptr<Image
     cv::Mat inliers;
     cv::Mat E = cv::findEssentialMat(p_prev, p_curr, K, cv::RANSAC, 0.99, 3.0 / focal, inliers);
 
-    // Remove matches that are not inliers for E processing
+    // Remove matches that are not inliers for E processing (the ones left out of E are kept)
     vec_match inliermatches;
-    for (uint i = 0; i < matches.size(); i++) {
-        if (inliers.at<char>(i)) {
-            inliermatches.push_back(matches.at(i));
-        }
+    std::vector<char> tested(matches.size(), 0);
+    for (size_t j = 0; j < used.size(); j++) {
+        tested[used[j]] = 1;
+        if (inliers.at<char>(static_cast<int>(j)))
+            inliermatches.push_back(matches.at(used[j]));
     }
+    for (size_t i = 0; i < matches.size(); i++)
+        if (!tested[i])
+            inliermatches.push_back(matches.at(i));
     matches = inliermatches;
+
+    // findEssentialMat may return no solution or several stacked (3k x 3): none fails, otherwise the first is used
+    // (recoverPose asserts a single 3 x 3 matrix; seen with nofov on the Insta360 X5, 2026-10-16)
+    if (E.empty() || E.cols != 3 || E.rows < 3) {
+        std::cerr << "Essential matrix is empty or not valid" << std::endl;
+        return false;
+    }
+    E = E.rowRange(0, 3).clone();
 
     cv::Mat Rcv, tcv;
     cv::recoverPose(E, p_prev, p_curr, K, Rcv, tcv, inliers);

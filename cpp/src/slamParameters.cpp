@@ -85,6 +85,10 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         errors.push_back("dense_fused_view must be 0 (off), 1 (at every save and at the end) or 2 (at the end)");
     if (cfg.dense_anchored && !cfg.dense_depth)
         warnings.push_back("dense_anchored has no effect without dense_depth");
+    if (cfg.use_masks != 0 && cfg.use_masks != 1)
+        errors.push_back("use_masks must be 0 or 1");
+    if (cfg.mask_image_circle != 0 && cfg.mask_image_circle != 1)
+        errors.push_back("mask_image_circle must be 0 or 1");
     if (cfg.loop_closure != 0 && cfg.loop_closure != 1)
         errors.push_back("loop_closure must be 0 or 1");
     if (cfg.loop_closure == 1) {
@@ -160,6 +164,8 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.contrast_enhancer = yaml_file["contrast_enhancer"].as<int>();
     _config.clahe_clip        = yaml_file["clahe_clip"].as<float>();
     _config.downsampling      = yaml_file["downsampling"].as<float>();
+    _config.use_masks         = yaml_file["use_masks"] ? yaml_file["use_masks"].as<int>() : 0;
+    _config.mask_image_circle = yaml_file["mask_image_circle"] ? yaml_file["mask_image_circle"].as<int>() : 1;
 
     // SLAM parameters
     _config.pose_estimator        = yaml_file["pose_estimator"].as<std::string>();

@@ -276,6 +276,12 @@ class SLAMCore {
     void logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats);
 
     /*!
+     * @brief EXECO_PERFRAME_LOG: append the frame's front-end pose to log_slam/results_perframe.csv (every frame, as
+     * the ROS node publishes it; results.csv has the keyframes' final poses). Called by every mode's front end
+     */
+    void logPerFrame(const std::shared_ptr<Frame> &f);
+
+    /*!
      * @brief Config log_pose_covariance: append the front-end ESKF estimate T_ref_f of the current frame and its full
      * covariance (right perturbation, order rotation, translation) to log_slam/cov_front.csv
      */
@@ -335,6 +341,7 @@ class SLAMCore {
     // VIO diagnostics
     uint _n_rejected_imu   = 0;     //!< IMU samples rejected by processIMU() (e.g. out of order)
     bool _vio_diag_started = false; //!< Header of log_slam/vio_diag.csv written
+    bool _perframe_started = false; //!< Header of log_slam/results_perframe.csv written
     bool _cov_front_started  = false; //!< Header of log_slam/cov_front.csv written
     bool _cov_window_started = false; //!< Header of log_slam/cov_window.csv written
     bool _kf_votes_started = false; //!< Header of log_slam/kf_votes.csv written

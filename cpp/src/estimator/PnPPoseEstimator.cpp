@@ -33,6 +33,12 @@ bool PnPPoseEstimator::estimateTransformBetween(const std::shared_ptr<Frame> &fr
                 noninit_matches.push_back(m);
                 continue;
             }
+            // A ray too far from the optical axis for x / z (wide-angle KB4 cameras only) stays in track, unused here
+            Eigen::Vector3d ray_cam2 = m.second->getBearingVectors().at(0);
+            if (!geometry::planarRayUsable(ray_cam2)) {
+                noninit_matches.push_back(m);
+                continue;
+            }
             init_matches.push_back(m);
 
             // Get p3d in camera one frame
@@ -41,7 +47,6 @@ bool PnPPoseEstimator::estimateTransformBetween(const std::shared_ptr<Frame> &fr
             p3d_vector.push_back({t_cam1_lmk.x(), t_cam1_lmk.y(), t_cam1_lmk.z()});
 
             // Get corresponding detection in homogeneous coordinates in frame 2
-            Eigen::Vector3d ray_cam2 = m.second->getBearingVectors().at(0);
             p2d_vector.push_back({ray_cam2.x() / ray_cam2.z(), ray_cam2.y() / ray_cam2.z()});
         }
     }

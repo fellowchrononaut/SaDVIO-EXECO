@@ -2,19 +2,6 @@
 
 namespace isae {
 
-Eigen::Affine3d pose_from_line(std::string line) {
-    std::istringstream s(line);
-
-    std::vector<double> values;
-    std::copy(std::istream_iterator<double>(s), std::istream_iterator<double>(), std::back_inserter(values));
-
-    Eigen::Affine3d pose;
-    pose.matrix() << values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8], values[9],
-        values[10], values[11], values[12], 0, 0, 0, 1;
-
-    return pose;
-}
-
 bool SLAMNonOverlappingFov::init() {
     // get first frame and set keyframe
     _frame = nextFrame();
@@ -28,23 +15,6 @@ bool SLAMNonOverlappingFov::init() {
     _frame->setKeyFrame();
     _local_map->addFrame(_frame);
     std::cout << "t0: " << _frame->getTimestamp() << std::endl;
-
-    // Get the txt file for the groundtruth
-    std::string gt_path = "/home/deos/ce.debeunne/Documents/phd/developpement/SLAM_eval/dataset/gazebo/chariot4.txt";
-    std::fstream gt_file;
-    Eigen::Affine3d T_0, T_1;
-
-    gt_file.open(gt_path, std::ios::in);
-    if (gt_file.is_open()) { // checking whether the file is open
-        std::string tp;
-        while (getline(gt_file, tp)) { // read data from file object and put it into string.
-            if (std::abs((double)_frame->getTimestamp() - std::stod(tp.substr(0, 19))) < 5e+8) {
-                T_0 = pose_from_line(tp);
-                break;
-            }
-        }
-        gt_file.close(); // close the file object.
-    }
 
     // Prior on the first frame, it is set as the origin
     _frame->setWorld2FrameTransform(Eigen::Affine3d::Identity());
@@ -105,21 +75,6 @@ bool SLAMNonOverlappingFov::init() {
             return false;
     }
 
-    // Compute the groundtruth scale
-    gt_file.open(gt_path, std::ios::in);
-    if (gt_file.is_open()) { // checking whether the file is open
-        std::string tp;
-        while (getline(gt_file, tp)) { // read data from file object and put it into string.
-            if (std::abs((double)_frame->getTimestamp() - std::stod(tp.substr(0, 19))) < 5e+8) {
-                T_1 = pose_from_line(tp);
-                break;
-            }
-        }
-        gt_file.close(); // close the file object.
-    }
-    double gt_scale = (T_0 * T_1.inverse()).translation().norm();
-    std::cout << "gt scale : " << gt_scale << std::endl;
-
     // Compute the scale of the first camera motion
     double lambda_0 = 0;
     scaleEstimationRANSAC(T_cam0_cam1, T_cam0_cam0p, _matches_in_time_cam1, lambda_0);
@@ -131,10 +86,6 @@ bool SLAMNonOverlappingFov::init() {
     _frame->setWorld2FrameTransform(_frame->getSensors().at(0)->getFrame2SensorTransform().inverse() * T_cam0p_w);
 
     std::cout << "Estimated scale : " << _frame->getWorld2FrameTransform().translation().norm() << std::endl;
-    // Eigen::Affine3d T_f_w = _frame->getWorld2FrameTransform();
-    // T_f_w.translation().normalize();
-    // T_f_w.translation() *= gt_scale;
-    // _frame->setWorld2FrameTransform(T_f_w);
 
     // Compute velocity
     double dt = (_frame->getTimestamp() - getLastKF()->getTimestamp()) * 1e-9;
@@ -306,6 +257,7 @@ bool SLAMNonOverlappingFov::frontEndStep() {
 
     // Send the frame to the viewer
     _frame_to_display = _frame;
+    logPerFrame(_frame);
 
     return true;
 }

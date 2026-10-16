@@ -1,0 +1,68 @@
+# SaDVIO copy of GUTWrap's VID_001 calibration (SaD_VIO_data/insta360x5/VID_001/insta360x5_vid_001.yaml, 2026-10-16;
+# doc/nofovvio/NOFOVVIO_LEDGER.md). Changed: cu, cv - 0.5 px (COLMAP pixel centres at +0.5, the KB4 model and OpenCV
+# at integer pixels). dt_imu_cam: SaDVIO places an IMU sample stamped t_imu at camera time t_imu - dt_imu_cam, the
+# same convention as GUTWrap's t_imu = t_video + dt.
+# Also changed: camera_1 T_BS translation = VID_012's lens baseline in the body frame, [0.022615, 0.00026, 0.011845] m
+# (VID_012's rig translation [0.016507, 0.00019, 0.008646] SfM units times its measured 1.37 m per unit: 2.55 cm
+# between the lenses; 2.4-2.7 cm over the scale's range). VID_001's own rig translation (Metashape units) gives
+# 10.4 cm, not physical for back-to-back lenses; the two rigs' rotations agree to 0.07 deg, so it is the same rig.
+# Insta360 X5 dual back-to-back fisheye + IMU, VID_001.
+# Written by Digital_Twin_EXECO tools/export_sadvio_calib.py from /media/GS_Captures/Insta360x5/Insta360x5/VID_001/dual_fisheye/colmap/sparse_aligned.
+# Intrinsics: COLMAP 4.2 / pycolmap bundle adjustment (OpenCV fisheye = KB4), scaled to 1920 px.
+# camera T_BS: camera -> body, body = IMU frame (inverse of R_refcam_imu, which maps IMU -> front).
+# R_refcam_imu estimated by rotation-only hand-eye (SfM vs integrated gyro), median residual 0.07 deg over 98 increments.
+# dt_imu_cam = 0.0: our convention t_imu = t_video + dt (estimated, 5 ms search step).
+dataset: insta360x5_vid_001
+ncam: 2
+
+camera_0:
+  topic: /cam0/image_raw   # front lens (INSV video stream 0)
+  T_BS:   # camera -> body (IMU); rotation estimated, translation unknown (0)
+    cols: 4
+    rows: 4
+    data: [ 0.001760912112,  0.007796250106, -0.999968058326,  0.000000000000,
+            0.028092261205, -0.999575339672, -0.007743718693,  0.000000000000,
+           -0.999603783531, -0.028077727883, -0.001979178617,  0.000000000000,
+            0.000000000000,  0.000000000000,  0.000000000000,  1.000000000000]
+  rate_hz: 29.97
+  resolution: [1920, 1920]
+  projection_model: kb4
+  intrinsics: [527.371334, 527.316519, 967.407122, 958.663332] # fu, fv, cu, cv at 1920 px, OpenCV pixel centres (GUTWrap's COLMAP centres - 0.5)
+  distortion_model: kb4
+  distortion_coefficients: [0.033796941, 0.004193001, 0.001968056, -0.001761327] # k1..k4
+
+camera_1:
+  topic: /cam1/image_raw   # rear lens (INSV video stream 1)
+  T_BS:   # camera -> body (IMU); rotation estimated, translation unknown (0)
+  # rear rotation = R_imu_front * R_front_rear; rig: mean over 103 frames of the reference model (spread median 0.106 deg)
+  # rig translation (rear centre in front-camera frame, SfM units, scale unknown): [-0.012977, 0.003311, -0.103615] -- left 0 here
+    cols: 4
+    rows: 4
+    data: [ 0.000155483059,  0.004602377449,  0.999989396917,  0.022615000000,
+            0.009812787143, -0.999941269980,  0.004600630210,  0.000260000000,
+            0.999951841357,  0.009811967777, -0.000200636078,  0.011845000000,
+            0.000000000000,  0.000000000000,  0.000000000000,  1.000000000000]
+  rate_hz: 29.97
+  resolution: [1920, 1920]
+  projection_model: kb4
+  intrinsics: [524.191879, 524.386434, 963.867444, 956.924290] # fu, fv, cu, cv at 1920 px, OpenCV pixel centres (GUTWrap's COLMAP centres - 0.5)
+  distortion_model: kb4
+  distortion_coefficients: [0.036733841, 0.000259264, 0.003857557, -0.002007877] # k1..k4
+
+imu:
+  topic: /imu0
+  T_BS:
+    cols: 4
+    rows: 4
+    data: [ 1.000000000000,  0.000000000000,  0.000000000000,  0.000000000000,
+            0.000000000000,  1.000000000000,  0.000000000000,  0.000000000000,
+            0.000000000000,  0.000000000000,  1.000000000000,  0.000000000000,
+            0.000000000000,  0.000000000000,  0.000000000000,  1.000000000000]
+  rate_hz: 994.6
+  gyroscope_noise_density: 0.00016   # PLACEHOLDER: TUM-VI value, X5 IMU noise unknown
+  gyroscope_random_walk: 2.2e-05   # PLACEHOLDER: TUM-VI value, X5 IMU noise unknown
+  accelerometer_noise_density: 0.0028   # PLACEHOLDER: TUM-VI value, X5 IMU noise unknown
+  accelerometer_random_walk: 0.00086   # PLACEHOLDER: TUM-VI value, X5 IMU noise unknown
+  dt_imu_cam: 0.0
+
+stereo_sync_tolerance_ms: 1   # both lenses share one video clock

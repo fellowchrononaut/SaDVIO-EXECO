@@ -146,6 +146,12 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
                 noninit_matches.push_back(m);
                 continue;
             }
+            // A ray too far from the optical axis for x / z (wide-angle KB4 cameras only) stays in track, unused here
+            Eigen::Vector3d ray_cam2 = m.second->getBearingVectors().at(0);
+            if (!geometry::planarRayUsable(ray_cam2)) {
+                noninit_matches.push_back(m);
+                continue;
+            }
             init_matches.push_back(m);
 
             // Get p3d in camera one frame
@@ -154,7 +160,6 @@ bool isae::ESKFEstimator::estimateTransformBetween(const std::shared_ptr<Frame> 
             p3d_vector.push_back(t_cam1_lmk);
 
             // Get corresponding detection in homogeneous coordinates in frame 2
-            Eigen::Vector3d ray_cam2 = m.second->getBearingVectors().at(0);
             p2d_vector.push_back(Eigen::Vector2d(ray_cam2.x() / ray_cam2.z(), ray_cam2.y() / ray_cam2.z()));
         }
     }
@@ -282,6 +287,10 @@ bool ESKFEstimator::refineTriangulation(std::shared_ptr<Frame> &frame) {
                     std::shared_ptr<ImageSensor> cam = feats[k]->getSensor();
                     Eigen::Affine3d T_s_w            = cam->getWorld2SensorTransform();
                     Eigen::Vector3d ray_cam          = feats[k]->getBearingVectors().at(0);
+                    if (!geometry::planarRayUsable(ray_cam)) { // wide-angle KB4: no x / z residual for this ray
+                        r_var.segment<2>(2 * k) = Eigen::Vector2d::Ones();
+                        continue;
+                    }
                     Eigen::Vector2d ray_cam_h(ray_cam.x() / ray_cam.z(), ray_cam.y() / ray_cam.z());
                     Eigen::Vector2d proj;
                     Eigen::MatrixXd J_T, J_lmk;
