@@ -231,15 +231,33 @@ bool SLAMMonoVIO::init() {
         logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
         profiling(); // a new segment of results.csv (step_init does it otherwise)
     } else {
-        // Perform Local BA on 10 KF before optimizing inertial variables
-        while (_local_map->getFrames().size() < 10) {
-            if (!step_init())
-                return false;
-        }
-
-        // Launch optimization of the inertial variables
+        // Perform Local BA on 10 KF before optimizing inertial variables. If the motion so far does not determine
+        // the scale, the inertial optimization rejects it without touching the map (-1): the visual map is kept and
+        // the optimization tried again every 2 KFs, up to vio_init_max_kf KFs (the map then covers the start of the
+        // data, where a reset started over ~2 s later; e.g. Insta360 X5 VID_012, doc/nofovvio ledger)
+        const size_t max_kf = std::max<size_t>(10, _slam_param->_config.vio_init_max_kf);
+        size_t target       = 10;
         Eigen::Matrix3d dRi;
-        double scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi, true);
+        double scale = -1;
+        while (true) {
+            while (_local_map->getFrames().size() < target) {
+                if (!step_init())
+                    return false;
+            }
+
+            // The map registers a KF's landmarks when the KF is added, and step_init triangulates the new ones after
+            // that: the latest KFs' new landmarks would be left out of the inertial optimization's rotation and scale
+            // (in the old frame, the front end then tracked against them). Register them first (once each)
+            for (auto &kf : _local_map->getFrames())
+                _local_map->pushLandmarks(kf);
+
+            // Launch optimization of the inertial variables
+            scale = _slam_param->getOptimizerFront()->VIInit(_local_map, dRi, true);
+            if (scale != -1 || _local_map->getFrames().size() + 2 > max_kf)
+                break;
+            target = _local_map->getFrames().size() + 2;
+            std::cout << "Inertial initialization: retry with " << target << " keyframes" << std::endl;
+        }
         if (!inertialInitAccepted(scale)) {
             _is_init = false;
             _local_map->reset();
@@ -251,6 +269,20 @@ bool SLAMMonoVIO::init() {
         _6d_velocity.tail<3>() *= scale;
         _slam_param->getOptimizerFront()->localMapVIOptimization(_local_map, 1);
         logVIODiag(getLastKF(), _slam_param->getOptimizerFront()->getLastVIStats());
+
+        // A retried initialization holds more KFs than the window: the oldest leave it as in the back end
+        while (_local_map->getFrames().size() > _local_map->getWindowSize()) {
+            if (_slam_param->_config.marginalization == 1)
+                _slam_param->getOptimizerBack()->marginalize(_local_map->getFrames().at(0),
+                                                             _local_map->getFrames().at(1),
+                                                             _slam_param->_config.sparsification == 1);
+            writeResultRow(_local_map->getFrames().at(0)); // its final estimate (results.csv)
+            _global_map->addFrame(_local_map->getFrames().at(0));
+            releaseImuHistory(_local_map->getFrames().at(0));
+            _map_mutex.lock();
+            _local_map->discardLastFrame();
+            _map_mutex.unlock();
+        }
 
         std::cout << "Timestamp : " << getLastKF()->getTimestamp() << std::endl;
         std::cout << "Orientation update : " << dRi << std::endl;

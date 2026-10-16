@@ -653,15 +653,26 @@ void SLAMCore::logPerFrame(const std::shared_ptr<Frame> &f) {
     std::ofstream fw("log_slam/results_perframe.csv", _perframe_started ? std::ofstream::app : std::ofstream::trunc);
     if (!_perframe_started) {
         fw << "timestamp (ns), nframes, T_wf(00), T_wf(01), T_wf(02), T_wf(03), T_wf(10), T_wf(11), T_wf(12), "
-           << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23)\n";
+           << "T_wf(13), T_wf(20), T_wf(21), T_wf(22), T_wf(23), reference KF timestamp (ns), T_wkf(00..23) of the "
+           << "reference KF as the frame was estimated (row-major x12)\n";
         _perframe_started = true;
     }
-    const Eigen::Affine3d T_w_f = f->getFrame2WorldTransform();
-    const Eigen::Matrix3d R     = T_w_f.linear();
-    const Eigen::Vector3d twc   = T_w_f.translation();
-    fw << f->getTimestamp() << "," << _nframes << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << ","
-       << twc.x() << "," << R(1, 0) << "," << R(1, 1) << "," << R(1, 2) << "," << twc.y() << "," << R(2, 0) << ","
-       << R(2, 1) << "," << R(2, 2) << "," << twc.z() << "\n";
+    // The frame and the KF its pose was estimated from (the last KF, as the front end used it): a later correction of
+    // that KF applies to the frame exactly (doc/nofovvio/tools/export_tum.py)
+    auto row = [&fw](const Eigen::Affine3d &T) {
+        const Eigen::Matrix3d R = T.linear();
+        const Eigen::Vector3d t = T.translation();
+        fw << "," << R(0, 0) << "," << R(0, 1) << "," << R(0, 2) << "," << t.x() << "," << R(1, 0) << "," << R(1, 1)
+           << "," << R(1, 2) << "," << t.y() << "," << R(2, 0) << "," << R(2, 1) << "," << R(2, 2) << "," << t.z();
+    };
+    fw << f->getTimestamp() << "," << _nframes;
+    row(f->getFrame2WorldTransform());
+    const std::shared_ptr<Frame> kf = (_local_map && !_local_map->getFrames().empty()) ? getLastKF() : nullptr;
+    if (kf && kf != f) {
+        fw << "," << kf->getTimestamp();
+        row(kf->getFrame2WorldTransform());
+    }
+    fw << "\n";
 }
 
 void SLAMCore::logVIODiag(const std::shared_ptr<Frame> &kf, const VIOptimStats &stats) {
@@ -929,6 +940,10 @@ void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
         opt.min_gap     = cfg.loop_min_gap;
         opt.min_inliers = cfg.loop_min_inliers;
         opt.gate_radius = cfg.loop_gate_radius;
+        opt.gate_angle  = cfg.loop_gate_angle;
+        opt.n_orb       = cfg.loop_n_orb;
+        // Rigs of non-overlapping cameras: a camera can close a loop with what another camera saw
+        opt.all_cameras = cfg.slam_mode == "nofov" || cfg.slam_mode == "nofovvio";
         // 0 (automatic) is 6-DoF in every mode: with an IMU too it was as good or better than 4-DoF on TUM-VI and
         // EuRoC (VIO's roll and pitch are not exact; doc/loop_closure ledger, 2026-10-09)
         opt.four_dof    = cfg.loop_graph_dof == 4;
@@ -956,6 +971,24 @@ void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
     }
     _loop_closure->addKeyframe(f, _segment);
     _last_loop_ts = f->getTimestamp();
+}
+
+void SLAMCore::finish() {
+    // Multithreading: the front end releases _step_mutex while it waits for frames. Single thread: only while it
+    // waits for data (the end of the data), never in the middle of a frame
+    if (!_frontend_lock && !_waiting_for_data) {
+        std::cout << "finish: the SLAM is processing a frame, the window is not handed to the loop closure" << std::endl;
+        return;
+    }
+    std::lock_guard<std::mutex> lock(_step_mutex);
+    if (_is_init && _local_map) {
+        for (auto &f : _local_map->getFrames())
+            handToLoopClosure(f);
+        if (_frame_to_optim)
+            handToLoopClosure(_frame_to_optim);
+    }
+    if (std::shared_ptr<LoopClosure> lc = getLoopClosure())
+        lc->flush();
 }
 
 void SLAMCore::logWindowBeforeReset() {
@@ -995,7 +1028,9 @@ void SLAMCore::captureCarriedState(const std::shared_ptr<IMU> &imu) {
 std::shared_ptr<Frame> SLAMCore::nextFrame() {
     std::shared_ptr<Frame> f;
     if (!_frontend_lock) {
-        f = _slam_param->getDataProvider()->next();
+        _waiting_for_data = true; // finish() may hand the window over meanwhile (end of the data)
+        f                 = _slam_param->getDataProvider()->next();
+        _waiting_for_data = false;
     } else {
         _frontend_lock->unlock();
         _step_cv.notify_all();

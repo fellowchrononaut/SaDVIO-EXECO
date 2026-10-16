@@ -419,4 +419,141 @@ Rules for this work:
   between the candidate's landmarks and the query's keypoints: median 1, max 7 (verification needs 12 PnP inliers each
   way), 0 inliers. ATE with the loop-closed output: VID_012 0.113 m, VID_001 0.168 units (no correction applied).
   So on the X5 the matching itself fails, before any cross-lens question: the first thing to look at in 4.1.
+- 2026-10-16, item 4.1 step 1 (loop closure with one lens on the X5): the previous entry's reading ("the matching
+  itself fails") was WRONG. The captures barely revisit a mapped place:
+  - Reference geometry (frames ≥ 20 s apart): VID_012's revisits are all of the first seconds and face the opposite
+    way (120–180°); the closest to a keyframe (first KF 2.4 s) is 1.8 m away at 104–146°: a cross-lens loop only.
+    VID_001 returns within 0.66–0.82 m of its start (KFs from 0.03 s) at 24.4–25.6 s, turned 44–74°.
+  - VID_001's revisit keyframes are still in the sliding window when the data ends: the loop closure takes keyframes
+    as they leave the window, so its last query is at 22 s. The attempts at 20–22 s (1–2 m, turned) have 0 inliers.
+    With `loop_detector: proximity_bow` and a 45° or 90° heading gate (`nfv_lcg45`, `nfv_lcg90`): 6 / 13 attempts,
+    the same queries (20–22 s), 0 inliers.
+  - The 88 VID_012 candidates (`bow`) were look-alike places, correctly rejected.
+  - So these two captures cannot show whether single-lens loop closure works on the X5. VID_012's start/25 s revisit
+    is the one test case for cross-lens loops (rear lens at ~25 s against front lens at 2.4 s, 1.8 m).
+  - New config option `loop_gate_angle` (deg, default 45 as before): the proximity gate's heading limit, wider for
+    fisheye lenses.
+  - The posted GUTWrap note says the fisheye matching breaks: to correct.
+- 2026-10-16, loop closure on the X5, revised again (the user pointed out cross-lens passes):
+  - The 20 s `loop_min_gap` hid most revisits of these 25–48 s captures. Reference geometry, ≤ 3 m, lenses facing
+    within 45°: with an 8 s gap, VID_001 has cross-lens passes (start vs 12–27 s, 15–18 vs 24–27 s) and same-lens
+    passes (start vs 9–12 s and 21–27 s); VID_012 has cross-lens passes (3 vs 27 s, 30–33 vs 39–42 s) and no
+    same-lens pass. With a 20 s gap: VID_012 51 cross-lens pairs within 4 m, VID_001 12.
+  - Front lens, `loop_min_gap: 8` (`nfv_lc8_bow`, `nfv_lc8_prox` with `proximity_bow` and a 90° gate): 54 / 106
+    attempts, among them real revisits (1–3 m, turned 30–60°), at most 6–9 descriptor matches, 0 PnP inliers.
+  - Plain ORB (2000 per 960 px image, masks, ratio test) between VID_001's start and its return at 24.6 s (0.78 m,
+    44°): 87 matches, 37 fundamental-matrix inliers (consecutive frames: 443). The images do match.
+  - Bottleneck: the loop closure's sources are the keyframe's landmarks, median 42 per KF on the X5 (front end:
+    `number_detected_features: 150` per camera, tuned for 512 px TUM-VI); at ~2 % of points matching across such a
+    revisit, that leaves ~1 match where 12 PnP inliers are needed.
+  - Plan for 4.1: a larger feature budget for the X5 (front end and loop ORB), both lenses' landmarks in the loop
+    closure (cross-lens candidates), a shorter `loop_min_gap` for short captures, and the end-of-data hand-over of the
+    window's keyframes (user's go).
+- 2026-10-16, item 4.1, cross-lens loop closure (in progress):
+  - `LoopClosure::Options::all_cameras` (on in `nofov` and `nofovvio` only): each keyframe record keeps a view per
+    camera (pyramid ORB as rays, bag of words, oriented ORB at the landmarks); candidates score every camera pair by
+    bag of words (proximity gate over any camera pair); verification (`verifyAnyCameras`) takes each direction over
+    every camera pair and compares the best of each in the frames (body): a keyframe from before camera 1 started has
+    no camera-1 landmarks, but its camera-0 landmarks can be found in the query's camera 1. `learned` keeps camera 0.
+    `loop_attempts.csv` gains the two camera indices (all modes).
+  - End of data: `SLAMCore::finish()` (offline `main.cpp`, on SIGTERM) hands the window's keyframes to the loop
+    closure and waits for it (`LoopClosure::flush()`); single thread: only while the front end waits for data. Queries
+    now reach the end of the data (VID_001 25.7 s, was 22 s).
+  - New config options: `loop_n_orb` (1000), `loop_gate_angle` (45°); `run_sadvio.py --set` reaches nested keys
+    (e.g. `number_detected_features`).
+  - Findings (front-end features 150 → 300 → 500, loop ORB 1000 → 2000 → 3000, `loop_min_gap: 8`): same-lens pairs
+    never reach an inlier on these captures; cross-lens pairs at true revisits (0.2–0.7 m, fronts 125–170° apart) reach
+    7 / 14 / 26 inliers. With 500 features and `loop_min_inliers: 10`, cross-lens loops are accepted, all genuine by
+    the reference: VID_001 11.8 → 3.8 s and 12.2 → 3.9 s (rear → front, 0.70 / 0.91 m, 136° / 135°, directions agree
+    within 0.10 m and 1.4°), VID_012 40.7 → 32.2 s (0.75 m, 129°).
+  - ATE: worse with loop closure in first tests, but not because of it: runs whose first inertial initialization is
+    rejected start at ~5 s instead of ~2.8 s and carry a 0.9–1.6 m error right after it (VID_012: 0.09–0.27 m ATE
+    against 0.044–0.075 for runs that start at 2.8 s, with or without loop closure). More frequent with 500 features:
+    a start-up robustness item.
+  - One crash (segfault, exit 139) in 11 runs with 500 features and loop closure, while the loop closure processed its
+    first keyframe, after a retried start; not reproduced in 6 runs under gdb. `main.cpp` now prints a backtrace on
+    SIGSEGV / SIGABRT. Batch `xl_E` (10 runs per capture) running.
+- 2026-10-16, batch `xl_E` (10 runs per capture; 500 features, loop ORB 3000, `loop_min_gap: 8`,
+  `loop_min_inliers: 10`): no crash (1 crash in 31 runs so far, none since the backtrace handler). Loops accepted:
+  VID_012 in 6 / 10 runs (8 loops, all rear ↔ front at 40 s → 32 s, 0.48–0.75 m, 129–136° by the reference), VID_001
+  in 1 / 10 (11.8 → 3.7 s, 0.70 m, 136°). No false loop. ATE: VID_012 0.039–0.088 m for the 4 runs starting at 2.8 s
+  (0.039 / 0.051 with two loops), 0.070–0.249 m for the 6 runs whose first initialization was rejected (start ~5 s);
+  VID_001 0.106–0.193 units (mean 0.155, as with 150 features). The 500-feature budget makes VID_012's first inertial
+  initialization fail in 6 / 10 runs (150 features: start 2.4–2.8 s): the loop closure's gain is smaller than that
+  cost. Next: decouple the loop closure's landmarks from the front end's budget, or find why more features delay the
+  initialization.
+- 2026-10-16, why the start-up fails more with 500 features (item 1 of the user's go):
+  - Not the KF vote: start-up KFs come at the same times with 150 and 500 features (parallax votes every ~0.3 s).
+  - Not the fisheye periphery: 500 features with `max_theta_deg: 85` (diagnostic YAML, removed): 4 of 6 runs still
+    start late.
+  - The first inertial fit (10 KFs, ~0.4–2.8 s) collapses the scale (1e-143, "not determined") or leaves it at
+    sigma 0.11–0.14 > 0.1; the start-up then resets the map and starts over from the current frame, ~2 s later.
+  - It also happens with 150 features: 5 of 16 earlier VID_012 runs (`monovio` and `nofovvio`) started at 4.6–6.7 s
+    (500 features: ~60 %). The late starts carry the larger errors (500 features: 0.9–1.6 m right after the start).
+    VID_012's first seconds give the IMU too little to fix the scale over 10 KFs.
+  - Proposed fix (needs the user's go, it is `monovio`'s start-up): when the inertial fit is rejected, keep the
+    visual-only map and retry the fit as more KFs come (up to a limit), instead of resetting it; the trajectory then
+    covers the start, and the early KFs stay as loop targets.
+- 2026-10-16, start-up fixes (user's go, option 1: `monovio`'s start-up, shared by `nofovvio`):
+  - Retry (`SLAMMonoVIO::init`, config `vio_init_max_kf`, default 20; 10 = old behaviour): when the inertial
+    optimization leaves the scale undetermined it returns -1 without touching the map; the visual map is now kept and
+    the optimization retried every 2 KFs up to `vio_init_max_kf`, instead of a reset and a start ~2 s later. After an
+    accepted retry, KFs beyond the window size leave it as in the back end (marginalization if on, global map, loop
+    closure, `results.csv`). A first-attempt success is unchanged.
+  - Start-up landmarks: the map registers a KF's landmarks when the KF is added (`AMap::pushLandmarks`), and
+    `step_init` triangulates the new ones after that, so the latest start-up KFs' new landmarks were left out of the
+    inertial optimization's rotation and scale; the front end then tracked against landmarks in the old frame (tracking
+    collapsed within 0.35 s after a retried start: matches 545 → 43, landmark matches 39 → 5; errors 0.9–1.7 m for
+    ~0.3 s; after a normal start a ~0.2–0.3 m lag). They are now registered before each inertial optimization.
+  - Crash (the segfault, exit 139): `detectAndComputeGrid` in `AOpenCVFeatureDetector`, `cvGFTTFeatureDetector` and
+    `ACustomFeatureDetector` indexed its grid with tracked points' pixels unchecked; a KLT track just outside the image
+    (u = 964 on 960 px) overflowed the grid with 500 features (42 px cells) but not with 150 (78 px cells). Points
+    outside the image are skipped (backtrace caught by the new crash handler). An old bug of every mode.
+  - Per-frame export: `results_perframe.csv` now also gives each frame's reference KF (timestamp, pose as the front end
+    used it); `export_tum.py` corrects a frame with exactly that KF's final pose. Before, a KF logged with a bad
+    front-end pose spread its error to the following frames (seen after the retried start).
+  - Result (VID_012, 500 features, loop closure, `loop_min_gap: 8`, `loop_min_inliers: 10`, 6 runs, `xl_T`): ATE
+    0.035–0.091 m (mean 0.056; before the fixes 0.082–0.142 with a retry, 0.053 without), no start-up error left, 20
+    loops in 5 / 6 runs, all genuine; VID_001 (6 runs): 0.090–0.277 units (mean 0.145), 3 loops, all genuine.
+  - Ablation running (`ab_f150`, `ab_f500`, without loop closure, 4 runs per capture).
+- 2026-10-16, ablation with the start-up fixes (`ab_f150`, `ab_f500`: 4 runs per capture; `xl_T`: 6):
+
+  | | VID_012 ATE (m), mean / median | before 46.9 s | VID_001 ATE (units), mean / median |
+  |---|---|---|---|
+  | 150 features, no loop closure | 0.083 / 0.084 | 0.058–0.076 | 0.171 / 0.154 |
+  | 500 features, no loop closure | 0.085 / 0.087 | 0.032–0.082 | 0.242 / 0.145 (one run 0.563) |
+  | 500 features, loop closure (gap 8 s, 10 inliers) | 0.056 / 0.046 | 0.028–0.058 | 0.145 / 0.126 |
+
+  The loop closure brings the gain (VID_012 −33 % mean, −45 % median); 500 features alone change nothing but give the
+  loop closure enough landmarks. Retried starts: 2 / 4, 3 / 4 and 5 / 6 on VID_012 (no longer costly). Loops: 23 in
+  12 runs, all genuine by the reference. Regression subset for the shared changes running (snapshot `nf3`, labels
+  `reg_nf3_*`, against `reg_nf2_*`).
+- 2026-10-16, regression subset for the shared changes (start-up retry and landmark registration, detector bounds,
+  end-of-data hand-over, per-frame log columns): snapshot `nf3`, `reg_nf3_*` against `reg_nf2_*` (6 configurations ×
+  room1, MH_01, V1_01, V2_03 × 2 runs). No crash, same reset counts, VIO configurations (`vio_mono` included) within
+  run-to-run noise on window and loop-closed ATE. `vo_mono` V1_01 looked worse (0.74 / 1.03 vs 0.21 / 0.24 m); 4 more
+  runs per snapshot (`vm_nf2`, `vm_nf3`): nf2 0.21–1.32 m, nf3 0.37–1.31 m, medians ~0.80 / ~0.75: mono VO's known
+  spread, not a change. Unit tests 104 / 105 (flaky `LineFeatureMatching`).
+- 2026-10-16, factory rig (GUTWrap, `gutwrap-50`: Insta360's `offset_v3`, identical in both captures): rear lens 32.2 mm
+  behind the front one on its optical axis (0.48 mm sideways, 0.86° off the axis). The SfM rig directions were
+  artefacts (VID_012 27.5° off the axis) and their length 12 % short (28.4 mm). Both YAMLs: rear T_BS translation =
+  R_body_front (0, 0, −0.0322) m = [0.032199, 0.000213, 0.000073] (VID_012) / [0.032199, 0.000249, 0.000064] (VID_001);
+  rotations unchanged. GUTWrap also: rolling-shutter readout top → bottom, effective only 1–2 ms (< 1 px, negligible);
+  their training had the same COLMAP half-pixel issue (our −0.5 px shift confirmed).
+
+  | `nofovvio`, 4 runs each | VID_012 ATE (m) mean / median | VID_001 ATE (units) mean / median |
+  |---|---|---|
+  | SfM rig, 150 features, no loop closure | 0.083 / 0.084 | 0.171 / 0.154 |
+  | factory rig, 150 features, no loop closure | 0.058 / 0.059 | 0.129 / 0.123 |
+  | SfM rig, 500 features + loop closure (6 runs) | 0.056 / 0.046 | 0.145 / 0.126 |
+  | factory rig, 500 features + loop closure | 0.063 / 0.058 | 0.112 / 0.085 |
+  | `monovio`, front lens (earlier) | ~0.09 | 0.149 |
+
+  The factory rig alone gives −30 % (VID_012) and −25 % (VID_001); with it, the loop closure adds little on VID_012
+  and −13 % mean (median −31 %) on VID_001. Loops with the factory rig: 19, none false. Two lenses now beat the front
+  lens alone on both captures.
+- 2026-10-16, X5 configuration file (user's choice, instead of run overrides): `doc/vio_imu_fix/configs/x5_config.yaml`
+  = `base_config.yaml` with `nofovvio`, masks, 960 px, loop closure on, 500 features, `loop_n_orb: 3000`,
+  `loop_min_gap: 8`, `loop_min_inliers: 10`. `run_sadvio.py --config x5_config.yaml` (the run's dataset_id still comes
+  from the sequence). Check run (`x5cfg_check`, VID_001): ATE 0.117 units, 1 loop. Shipped defaults unchanged.
 

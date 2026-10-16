@@ -24,6 +24,9 @@ ACustomFeatureDetector::detectAndComputeGrid(const cv::Mat &img,
     // Draw a circle on the mask around features
     for (auto feat : existing_features) {
         for (auto pt : feat->getPoints()) {
+            // A tracked point can lie just outside the image: it occupies no cell (its index was out of the grid)
+            if (!(pt.x() >= 0 && pt.y() >= 0 && pt.x() < img.cols && pt.y() < img.rows))
+                continue;
             occupied_cells[floor((int)pt.x() / cell_size)][floor((int)pt.y() / cell_size)] += 1;
             cv::circle(updated_mask, cv::Point2d(pt.x(), pt.y()), 10, cv::Scalar(0));
         }

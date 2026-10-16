@@ -7,9 +7,23 @@
 #include <cstdlib>
 #include <thread>
 
+#include <execinfo.h>
+#include <unistd.h>
+
 namespace {
 std::atomic<bool> g_stop{false};
 extern "C" void onStop(int) { g_stop = true; }
+// A crash prints the call stack (batch runs: stdout.log) before the process dies as it would have
+extern "C" void onCrash(int sig) {
+    void *frames[64];
+    const int n         = backtrace(frames, 64);
+    const char header[] = "\n*** crash (signal), backtrace:\n";
+    if (write(STDERR_FILENO, header, sizeof(header) - 1) < 0) {
+    }
+    backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -40,9 +54,12 @@ int main(int argc, char **argv) {
     // SIGINT the dense map finishes (queued keyframes, final files), then the process exits
     std::signal(SIGTERM, onStop);
     std::signal(SIGINT, onStop);
+    std::signal(SIGSEGV, onCrash);
+    std::signal(SIGABRT, onCrash);
     std::thread([SLAM] {
         while (!g_stop)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        SLAM->finish(); // the window's keyframes to the loop closure (a revisit at the very end)
         if (SLAM->_depth_injector)
             SLAM->_depth_injector->finish();
         std::_Exit(0);

@@ -98,6 +98,12 @@ struct Config {
     double loop_min_gap      = 20.0;       //!< Loop candidates are at least this much older than the query (s)
     int loop_min_inliers     = 12;         //!< PnP inliers to accept a loop (each direction)
     double loop_gate_radius  = 2.0;        //!< Proximity gate radius (m)
+    int vio_init_max_kf      = 20;         //!< Mono VIO initialization: KFs up to which the inertial optimization is
+                                           //!< retried (every 2 KFs) when the motion does not determine the scale; 10:
+                                           //!< no retry (the map is reset and the initialization starts over)
+    int loop_n_orb           = 1000;       //!< Pyramid ORB the loop closure extracts per keyframe and camera
+    double loop_gate_angle   = 45.0;       //!< Proximity gate: viewing directions within this angle (deg; wider for
+                                           //!< fisheye lenses, whose views still overlap at larger angles)
     int loop_graph_dof       = 0;          //!< Pose graph: 4 (position, yaw; roll and pitch kept from the odometry; needs an
                                            //!< IMU), 6, 7 (Sim3, mono only), or 0: automatic (7 in mono, else 6)
     int loop_correct_window  = -1;         //!< 1: after a loop, move the sliding window by the pose graph's correction

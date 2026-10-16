@@ -1,0 +1,296 @@
+#################################################################################
+# Insta360 X5 configuration (two back-to-back fisheye lenses + IMU, GUTWrap captures; doc/nofovvio/NOFOVVIO_LEDGER.md)
+# base_config.yaml with, for the X5:
+#   slam_mode nofovvio, dataset insta360x5_vid_012 / _001, per-image masks, 960 px working resolution,
+#   loop closure on with cross-lens candidates (automatic in nofovvio): 500 front-end features per camera (enough
+#   landmarks per keyframe), 3000 loop ORB, loop_min_gap 8 s (short captures), loop_min_inliers 10.
+# Measured (2026-10-16, factory rig): VID_012 Sim3 ATE 0.063 m mean, VID_001 0.112 SfM units mean, 19 loops, none false.
+# Usage: run_sadvio.py --config x5_config.yaml --seq x5_012 --mode nofovvio; or the binary with a config folder holding
+# this file as config.yaml and the dataset YAMLs under dataset/.
+#################################################################################
+#################################################################################
+# Details about the dataset
+#################################################################################
+
+## dataset_id in {kitti, eth, gazebo_fisheye, gazebo_pinhole, oivio, isae}
+dataset_id : "insta360x5_vid_012"   # or "insta360x5_vid_001" (each capture has its own calibration)
+
+## slam mode in {mono, bimono, nofov, monovio, bimonovio, nofovvio}
+slam_mode : "nofovvio"
+enable_visu : 0
+ros_map_interface : 1   # ROS node: TF map -> world (the loop correction), vo_pose_corrected, keyframes_corrected,
+                        # dense_anchor_mesh, dense_anchor_poses (doc/loop_closure/ros_map_interface.md); also with enable_visu 0
+multithreading : 0
+
+## contrast enhancer parameters (0: nothing, 1: clahe, 2: histogram equalization, 
+## 3: image normalization, 4: adaptive gamma correction)
+contrast_enhancer : 1
+clahe_clip : 2
+downsampling: 0.5   # 1920 -> 960 px
+use_masks: 1      # 1: per-image masks from <dataset>/mav0/camN/mask/<image file name> (offline reader; white = keep)
+mask_image_circle: 1   # KB4 cameras: 1 masks out everything beyond the lens' image circle (max_theta_deg)
+
+#################################################################################
+# Details about the SLAM Algorithm
+############################<#####################################################
+
+## pose estimator method to used in {epipolar, epipolar_custom, pnp}
+pose_estimator: "pnp"
+
+## select optimizer to use in {Analytic, Numeric, AngularAnalytic}
+optimizer: "AngularAnalytic"
+
+## type of tracker in {matcher, klt}
+tracker: "klt"
+
+## estimate the delay between camera and IMU or not
+estimate_td: 0
+
+## consecutive frames without visual pose estimate before re-initializing (0: mode default: VO 5, mono VIO 10,
+## stereo VIO 20 ~ 1 s at 20 Hz, where the IMU carries the pose through short visual dropouts)
+max_lost_frames: 0
+
+## after a visual dropout, re-initialize from the last state (1: VIO keeps pose, velocity and biases, dead-reckoned
+## with the IMU; stereo VO the last tracked pose extrapolated at its velocity) or from scratch at the origin (0). Mono
+## VO always restarts at its last KF, with a new scale
+reinit_carry_state: 1
+## longest time since the last visual pose for which that state is used, in s (then from scratch). VIO dead reckoning
+## (median / 90 % position error): with marginalization ~0.07 / 0.15 m at 2 s, 0.3 / 0.6 m at 5 s; default VIO up to
+## 0.3 / 0.7 m at 2 s, 1.8 / 4 m at 5 s (better biases, longer carry). Stereo VO: constant velocity, 0.5-1.3 m and up
+## to 80 deg at 1.4 s
+reinit_carry_max_age_vio: 2.0
+reinit_carry_max_age_vo: 2.0
+
+## mono VO: when PnP fails (too few tracked landmarks), pose the frame from the 2D-2D essential matrix of all the
+## tracked features (scale from the landmarks left, else from the motion model; the translation direction only with
+## 1 deg of parallax, else from the motion model) and vote a KF. Other modes ignore it. Off by default: it turns
+## re-initializations (free scale for the Sim3 loop closure) into scale jumps inside a segment, and with loop closure
+## on mono VO's median loop-closed ATE went 0.19 -> 0.52 m (doc/vio_imu_fix/IMU_FIX_LEDGER.md, 2026-10-10)
+mono_essential_fallback: 0
+## VIO without a marginalization prior: zero-mean prior on the window frames' biases (standard deviations, a turn-on
+## bias), so that they stay physical when vision is weak; 0: none
+vio_bias_prior_acc: 0.3     # m/s^2 (fixes the V2_03 bias runaway; median ATE 0.146 -> 0.129 m over 18 sequences)
+vio_bias_prior_gyr: 0       # rad/s
+vio_init_max_kf: 20         # mono VIO / nofovvio initialization: retry the inertial optimization every 2 KFs up to this many KFs when the motion does not determine the scale (10: reset and start over)
+log_pose_covariance: 0     # 1: log the ESKF covariance of every frame (cov_front.csv) and the VIO window pose covariance (cov_window.csv) for NEES checks; evaluation only, adds up to ~40 ms per KF
+
+## Loop closure over the keyframes that left the window (doc/loop_closure): a separate pose graph (6-DoF, Sim3 in
+## mono VO), the corrected trajectory goes to log_slam/results_loop.csv (final) and results_loop_online.csv (as
+## estimated at each KF); the window follows the correction only where loop_correct_window says so
+loop_closure: 1             # on for the X5: cross-lens loops (nofovvio), see the header
+                            # ones; on in the shipped ros/config/config.yaml
+## candidates from: bow (bag-of-words over 1000 pyramid ORB per KF), proximity (gate around the corrected position,
+## no vocabulary), proximity_bow (the gate ranked by bag-of-words, plus a global search), learned (global image
+## descriptor, e.g. MegaLoc; needs the build option ISAESLAM_WITH_VPR_OPENVINO for CPU or ISAESLAM_WITH_VPR_TENSORRT
+## for GPU)
+loop_detector: "bow"
+loop_vocabulary: "/Simulator_Validation/SaD_VIO_data/vocabulary/ORBvoc.dbow3"  # DBoW3 binary, or ORB-SLAM's ORBvoc.txt
+loop_model: "/Simulator_Validation/SaD_VIO_data/models/megaloc_322x322.onnx"  # learned: .onnx (CPU) or TensorRT engine (GPU)
+loop_model_device: "CPU"    # learned: CPU (OpenVINO) or GPU (TensorRT)
+loop_model_threads: 8       # learned, CPU: inference threads
+loop_min_gap: 8.0           # s between a keyframe and its loop candidates
+loop_min_inliers: 10        # PnP inliers to accept a loop (each direction; both directions must agree)
+loop_gate_radius: 2.0       # m, proximity gate
+loop_gate_angle: 45.0       # deg, proximity gate on the viewing directions (wider for fisheye lenses)
+loop_n_orb: 3000            # pyramid ORB per keyframe and camera for the loop closure
+loop_graph_dof: 0           # pose graph: 6, 4 (roll, pitch kept from the odometry; IMU modes only), 7 (Sim3, mono only),
+                            # or 0: automatic (7 in mono, else 6)
+loop_correct_window: -1     # 1: move the sliding window into the corrected frame (its marginalization prior moves with it),
+                            # 0: correct the output only, -1: automatic (1 for VIO with a dense prior and mono VIO, else 0)
+
+## LocalMap parameters
+min_kf_number: 1                # number of keyframes that are added by default when the map starts
+max_kf_number: 12               # size of the sliding window
+fixed_frame_number: 1         # number of keyframe that will remain static during windowed BA
+marginalization: 0              # marginalization of old variables or not 
+sparsification: 0         # sparsification of the prior or not   
+
+## Mesh parameters
+mesh3d: 0                      # mesh3d computation or not
+ZNCC_tsh: 0.8                   # Threshold on ZNCC for triangle filtering
+max_length_tsh: 2               # Threshold on maximum length for triangle filtering
+
+## Dense stereo mesh (independent of mesh3d sparse pipeline)
+dense_depth:             false
+dense_mesh_method:       "none"   # "none"=depth only, "gp"=GP, "pd"=primal-dual, "zncc"=SGBM+Delaunay+ZNCC, "vdbgpdf"=VDB-GPDF map
+stereo_depth_num_disp:   64
+stereo_depth_block_size: 9
+stereo_depth_scale:      1.0
+stereo_depth_stride:     4
+stereo_depth_max_depth:  20.0
+stereo_depth_uniqueness_ratio:    10
+stereo_depth_speckle_window_size: 100
+stereo_depth_speckle_range:       32
+stereo_depth_disp12_max_diff:     1
+stereo_depth_pre_filter_cap:      0
+stereo_depth_publish_sgbm_images: true   # publish rectified/scaled left/right images used by SGBM
+stereo_depth_matcher:    "sgbm"   # "sgbm", "ffs" = Fast-FoundationStereo (build with -DISAESLAM_WITH_FFS=ON; doc/dense_ffs_stereo.md)
+                                  # or "las2" = Lite Any Stereo V2 on the CPU (build with -DISAESLAM_WITH_LAS2=ON; doc/dense_las2_stereo.md)
+stereo_depth_ffs_engine: ""       # "ffs": TensorRT engine from the upstream single-ONNX export (trtexec, same GPU/TensorRT)
+stereo_depth_ffs_lr_check: 0.0    # "ffs": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
+stereo_depth_las2_model_dir:  "/root/SaDVIO-Dense/las2/models"  # "las2": folder of las2_<size>_<HxW>.onnx (upstream export_onnx.py)
+stereo_depth_las2_size:       "m"        # "las2": s | m | l | h (feed-forward S/M/L, iterative H; slower and more accurate in that order)
+stereo_depth_las2_resolution: "480x864"  # "las2": model input HxW: 480x864 (full) | 320x576 | 256x448 (images are downscaled to fit, never up)
+stereo_depth_las2_onnx:       ""         # "las2": explicit ONNX path, overrides model_dir/size/resolution
+stereo_depth_las2_device:     "CPU"      # "las2": OpenVINO device
+stereo_depth_las2_precision:  "f32"      # "las2": f32 | f16 | bf16 inference precision hint (M full res: 1.3x / 1.8x faster, doc/dense_las2_stereo.md §5)
+stereo_depth_las2_threads:    8          # "las2": OpenVINO inference threads, 0 = all cores (leave cores for the front-end)
+stereo_depth_las2_lr_check:   0.0        # "las2": > 0 runs a mirrored second inference and drops pixels with |dL - dR| above this (px)
+dense_gp_cell_size:          1.0    # metres; SLAMesh voxel/cell size
+dense_gp_num_test:           6      # predicted GP grid side per cell
+dense_gp_min_pts_per_cell:   8
+dense_gp_kernel_length:      1.2
+dense_gp_variance_sensor:    0.1
+dense_gp_max_variance:       0.5    # reject faces above this average GP variance
+dense_gp_full_cover:         false  # true includes cell borders in the prediction grid
+dense_gp_eigen_1:            48.0   # PCA non-surface threshold
+dense_gp_eigen_2:            0.95   # PCA one-direction threshold
+dense_gp_eigen_3:            0.2    # PCA two-vs-three direction threshold
+dense_gp_stitch_seams:       true   # add triangles between compatible neighbouring GP patches
+dense_gp_seam_max_variance:  0.5    # reject seam faces above this average GP variance
+dense_gp_seam_max_edge_length:    0.5  # metres; rejects long bridge triangles
+dense_gp_seam_max_prediction_gap: 0.25 # metres along the GP prediction axis
+dense_gp_seam_min_normal_cos:     0.5  # abs(dot) between seam and local patch normals
+dense_keep_all_keyframes:     false  # true: queue every marginalised keyframe (no drops); needed for a complete global map
+## Global GP map (doc/dense_gp_global_map.md): A = SLAMesh map update, B = SLAMesh frame-to-model registration
+dense_gp_global_map:          false  # A: fuse keyframes into one world GP map instead of one mesh per keyframe
+dense_gp_variance_map_update: 0.5    # SLAMesh variance_map_update: fuse only vertices below this variance
+dense_gp_max_raw_points_per_cell: 2000  # raw points kept per non-surface cell
+dense_gp_register:            false  # B: register each keyframe to the map before fusing (needs dense_gp_global_map)
+dense_gp_register_times:      5      # SLAMesh register_times
+dense_gp_variance_register:   0.1    # SLAMesh variance_register (code default); 0.6 biases stereo keyframes, see doc
+dense_gp_cross_cell_overlap_length: 1  # SLAMesh cross_cell_overlap_length (search +-N cells along the GP axis)
+dense_gp_register_converge_thr: 1.0e-5 # SLAMesh converge_thr
+dense_gp_register_huber:      0.1    # SLAMesh Huber loss delta
+dense_gp_register_min_matches: 30    # keep the VO pose when fewer pairs are found
+dense_gp_register_max_translation: 0.5   # metres; reject larger corrections
+dense_gp_register_max_rotation_deg: 10.0 # degrees; reject larger corrections
+dense_gp_register_carry_correction: true # start each keyframe from the last accepted correction
+dense_gp_register_depth_weighting: false # weight residuals by min(1, (ref/depth)^2) (not in SLAMesh)
+dense_gp_register_depth_ref:  2.0    # metres
+dense_gp_global_mesh_path:    "log_slam/dense_gp_global_mesh.ply"  # plus dense_gp_registration.csv next to it
+dense_gp_save_every:          5      # keyframes between PLY saves (0 = never)
+## VDB-GPDF map (dense_mesh_method "vdbgpdf"; build with -DISAESLAM_WITH_VDBGPDF=ON; doc/dense_vdb_gpdf.md)
+dense_vdbgpdf_preset:     "stereo"  # config/vdbgpdf/<preset>.yaml: stereo (VDB-GPDF), stereo_tsdf (TSDF, best stereo mesh), rgbd, lidar
+dense_vdbgpdf_stride:     2         # pixel stride of the stereo points fed to the map (2: ~100 k points per 848x480 keyframe)
+dense_vdbgpdf_mesh_every: 5         # keyframes between marching cubes + PLY save (0 = never save)
+dense_vdbgpdf_mesh_path:  "log_slam/dense_vdbgpdf_mesh.ply"
+## Anchored maps (doc/dense_anchored_maps.md): the dense geometry of every dense_mesh_method is kept per anchor
+## keyframe, in its frame, and placed at its loop-corrected pose (log_slam/dense_anchors/: anchor_NNNNN.ply, anchors.csv)
+dense_anchored:           false
+dense_submap_kfs:         10        # fused methods (gp global map, vdbgpdf): keyframes per submap; per-keyframe methods
+                                    # (zncc, pd, per-keyframe gp, none) anchor every keyframe
+dense_anchored_mesh_path: "log_slam/dense_anchored_mesh.ply"  # the anchors at their corrected poses
+dense_anchored_save_every: 5        # keyframes between saves of that mesh (0: only at the end)
+dense_fused_view:         1         # anchors merged into one VDB volume (revisits averaged; needs the VDB-GPDF build):
+                                    # 0 off, 1 at every save (moved volumes re-projected) + full rebuild at the end,
+                                    # 2 only at the end
+dense_fused_mesh_path:    "log_slam/dense_fused_mesh.ply"
+dense_pd_steiner_spacing:    20     # px; 2D Delaunay Steiner grid spacing
+dense_pd_lambda:             0.5    # depth/tracking L1 data weight
+dense_pd_num_iterations:     120
+dense_pd_tau:                0.01   # primal step
+dense_pd_sigma:              0.1    # dual step
+dense_pd_theta:              1.0    # extrapolation
+dense_pd_min_depth:          0.5    # metres; max depth uses stereo_depth_max_depth
+
+## KF selection criteria
+min_lmk_number: 50              # minimum tracked landmark below which a KF is voted
+min_movement_parallax: 0.05     # parallax below which no frame is to be added (stop, small motion) in degree
+max_movement_parallax: 4        # maximum parallax between two images above which a frame is added in degree
+
+
+################################################################################
+# Details about the SLAM Algorithm
+#################################################################################
+features_handled: 
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvORBFeatureDetector"
+  #   number_detected_features: 250
+  #   n_features_per_cell: 1
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 16
+  #   tracker_width: 16
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 50
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 16
+  #   matcher_width: 16
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvKAZEFeatureDetector"
+  #   number_detected_features: 250
+  #   n_features_per_cell: 250
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 16
+  #   tracker_width: 16
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 30
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 16
+  #   matcher_width: 16
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  - label_feature: "pointxd"
+    detector_label: "cvFASTFeatureDetector"
+    number_detected_features: 500   # X5: enough landmarks per keyframe for the cross-lens loop closure
+    n_features_per_cell: 1
+    tracker_label: "Point2DFeatureTracker"
+    tracker_height: 24
+    tracker_width: 24
+    tracker_nlvls_pyramids: 3
+    tracker_max_err: 30
+    matcher_label: "Point2DFeatureMatcher"
+    max_matching_dist: 32
+    matcher_width: 32
+    matcher_height: 32
+    lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvGFTTFeatureDetector"
+  #   number_detected_features: 200
+  #   n_features_per_cell: 1
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 24
+  #   tracker_width: 24
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 30
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 16
+  #   matcher_width: 16
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "pointxd"
+  #   detector_label: "cvBRISKFeatureDetector"
+  #   number_detected_features: 300
+  #   n_features_per_cell: 300
+  #   tracker_label: "Point2DFeatureTracker"
+  #   tracker_height: 16
+  #   tracker_width: 16
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 50
+  #   matcher_label: "Point2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 32
+  #   matcher_width: 32
+  #   lmk_triangulator: "Point3DLandmarkInitializer"
+
+  # - label_feature: "linexd"
+  #   detector_label: "Line2DFeatureDetector"
+  #   number_detected_features: 300
+  #   n_features_per_cell: 300        # TODO chack why crash if < num detected features
+  #   tracker_label: "Line2DFeatureTracker"
+  #   tracker_height: 64
+  #   tracker_width: 64
+  #   tracker_nlvls_pyramids: 3
+  #   tracker_max_err: 50
+  #   matcher_label: "Line2DFeatureMatcher"
+  #   max_matching_dist: 50
+  #   matcher_height: 64
+  #   matcher_width: 64
+  #   lmk_triangulator: "Line3DLandmarkInitializer"

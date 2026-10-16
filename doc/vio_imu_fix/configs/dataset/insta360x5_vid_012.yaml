@@ -2,10 +2,11 @@
 # doc/nofovvio/NOFOVVIO_LEDGER.md). Changed: cu, cv - 0.5 px (COLMAP pixel centres at +0.5, the KB4 model and OpenCV
 # at integer pixels). dt_imu_cam: SaDVIO places an IMU sample stamped t_imu at camera time t_imu - dt_imu_cam, the
 # same convention as GUTWrap's t_imu = t_video + dt.
-# Also changed: camera_1 T_BS translation = GUTWrap's rig translation (rear centre in the front camera, SfM units)
-# in the body frame, [0.016507, 0.00019, 0.008646] units, times 1.525 m per unit = [0.025173, 0.00029, 0.013185] m
-# (2.84 cm between the lenses; 2.81-2.88 cm over the scale's range). Scale: GUTWrap's two 1 x 1 x 0.5 m boxes in the
-# arena, v2 from their side walls, 1.525 m per SfM unit (1.507-1.545), VID_012/cube_corners_VID_012.csv, 2026-10-16.
+# Also changed: camera_1 T_BS translation = the rear lens centre from Insta360's factory calibration (INSV metadata
+# offset_v3, identical in VID_001 and VID_012, via GUTWrap 2026-10-16): 32.2 mm behind the front lens on its optical
+# axis (lateral offsets < 0.5 mm, dropped), i.e. (0, 0, -0.0322) m in the front camera, in the body frame through
+# this capture's front rotation: [0.032199, 0.000213, 0.000073] m. The SfM rigs' directions were artefacts
+# (VID_012's 27.5 deg off the axis) and their length 12 % short (28.4 mm). Rotations stay the reconstructions'.
 # Insta360 X5 dual back-to-back fisheye + IMU, VID_012.
 # Written by Digital_Twin_EXECO tools/export_sadvio_calib.py from /media/GS_Captures/Insta360x5/Insta360x5/VID_012/dual_fisheye/colmap/sparse_aligned.
 # Intrinsics: COLMAP 4.2 / pycolmap bundle adjustment (OpenCV fisheye = KB4), scaled to 1920 px.
@@ -38,9 +39,9 @@ camera_1:
   # rig translation (rear centre in front-camera frame, SfM units, scale unknown): [-0.008603, -0.000321, -0.016528] -- left 0 here
     cols: 4
     rows: 4
-    data: [ 0.001296440219,  0.005162400373,  0.999985834332,  0.025173000000,
-            0.009798808738, -0.999938731361,  0.005149453456,  0.000290000000,
-            0.999951150102,  0.009791993973, -0.001346946162,  0.013185000000,
+    data: [ 0.001296440219,  0.005162400373,  0.999985834332,  0.032199214193,
+            0.009798808738, -0.999938731361,  0.005149453456,  0.000212665498,
+            0.999951150102,  0.009791993973, -0.001346946162,  0.000073340095,
             0.000000000000,  0.000000000000,  0.000000000000,  1.000000000000]
   rate_hz: 29.97
   resolution: [1920, 1920]

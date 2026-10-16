@@ -67,7 +67,7 @@ def to_container(p: Path) -> str:
     return CROOT + '/' + p.relative_to(DATA).as_posix()
 
 
-def write_config(cfg_dir: Path, mode: str, overrides: dict):
+def write_config(cfg_dir: Path, mode: str, overrides: dict, base: str = 'base_config.yaml'):
     cfg_dir.joinpath('dataset').mkdir(parents=True, exist_ok=True)
     for y in (EVAL / 'configs/dataset').glob('*.yaml'):
         shutil.copy(y, cfg_dir / 'dataset' / y.name)
@@ -75,7 +75,7 @@ def write_config(cfg_dir: Path, mode: str, overrides: dict):
     cfg_dir.joinpath('vdbgpdf').mkdir(exist_ok=True)
     for y in (EVAL.parents[1] / 'ros/config/vdbgpdf').glob('*.yaml'):
         shutil.copy(y, cfg_dir / 'vdbgpdf' / y.name)
-    lines = (EVAL / 'configs/base_config.yaml').read_text().splitlines()
+    lines = (EVAL / 'configs' / base).read_text().splitlines()
     overrides = dict(overrides, slam_mode=f'"{mode}"')
     out, seen = [], set()
     for ln in lines:
@@ -85,6 +85,18 @@ def write_config(cfg_dir: Path, mode: str, overrides: dict):
             seen.add(key)
         else:
             out.append(ln)
+    # A key that is not a top-level one: its first uncommented nested occurrence (e.g. number_detected_features in
+    # the active features_handled block)
+    for key in sorted(set(overrides) - seen):
+        for i, ln in enumerate(out):
+            st = ln.lstrip()
+            if st.startswith('#') or not ln.startswith(' '):
+                continue
+            if st.lstrip('- ').split(':', 1)[0].strip() == key:
+                indent = ln[:len(ln) - len(st)] + ('- ' if st.startswith('- ') else '')
+                out[i] = f'{indent}{key}: {overrides[key]}'
+                seen.add(key)
+                break
     missing = set(overrides) - seen
     if missing:
         raise SystemExit(f'unknown config keys: {sorted(missing)}')
@@ -100,14 +112,14 @@ def output_size(run_dir: Path) -> int:
 
 
 def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: float, timeout: float, binary: str = BIN,
-             env: tuple = (), cpus: str = '', nice: int = 0):
+             env: tuple = (), cpus: str = '', nice: int = 0, base: str = 'base_config.yaml'):
     run_dir = SCRATCH / result_dir.relative_to(EVAL / 'runs')
     if run_dir.exists():
         subprocess.run(['docker', 'exec', CONTAINER, 'rm', '-rf', to_container(run_dir)], check=True)
     if result_dir.exists():
         shutil.rmtree(result_dir)
     cfg_dir = run_dir / 'config'
-    write_config(cfg_dir, mode, overrides)
+    write_config(cfg_dir, mode, overrides, base)
     mav0 = to_container(DATA / SEQUENCES[seq])
     # Optional CPU limits: pin to a core list (OpenMP then uses that many threads) and lower the priority
     limit = (f'nice -n {nice} ' if nice else '') + (f'taskset -c {cpus} ' if cpus else '')
@@ -133,7 +145,7 @@ def run_once(result_dir: Path, seq: str, mode: str, overrides: dict, stall: floa
         subprocess.run(['docker', 'exec', CONTAINER, 'pkill', '-f', to_container(cfg_dir)])
         proc.wait(timeout=600)  # the dense map writes its final files on SIGTERM
     wall = time.time() - t0 - (stall if reason == 'stall' else 0)
-    meta = dict(seq=seq, mode=mode, overrides=overrides, end_reason=reason, wall_s=round(wall, 1), binary=binary,
+    meta = dict(seq=seq, mode=mode, config=base, overrides=overrides, end_reason=reason, wall_s=round(wall, 1), binary=binary,
                 cpus=cpus, nice=nice,
                 started=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(t0)))
     (run_dir / 'run.json').write_text(json.dumps(meta, indent=1))
@@ -168,6 +180,8 @@ def main():
     ap.add_argument('--bin', default=BIN, help='isaeslam binary inside the container')
     ap.add_argument('--cpus', default='', help='pin the binary to these cores (taskset list, e.g. 8-15)')
     ap.add_argument('--nice', type=int, default=0, help='run the binary at this nice level')
+    ap.add_argument('--config', default='base_config.yaml',
+                    help='base configuration in configs/ (e.g. x5_config.yaml for the Insta360 X5)')
     ap.add_argument('--kf-features', action='store_true', help='log the KF features (log_slam/kf_features.csv)')
     ap.add_argument('--env', action='append', default=[], help='environment variable for the binary, KEY=VALUE '
                     '(e.g. EXECO_DENSE_DUMP=dense_dump: relative paths are in the run folder)')
@@ -177,7 +191,7 @@ def main():
         overrides.setdefault('dataset_id', SEQ_DATASET[a.seq])
     for i in range(a.first, a.first + a.runs):
         run_once(EVAL / 'runs' / a.label / a.seq / a.mode / f'run_{i:02d}', a.seq, a.mode, overrides,
-                 a.stall, a.timeout, a.bin, (('-e', 'EXECO_KF_FEATURES_LOG=1') if a.kf_features else ()) + tuple(x for kv in a.env for x in ('-e', kv)), a.cpus, a.nice)
+                 a.stall, a.timeout, a.bin, (('-e', 'EXECO_KF_FEATURES_LOG=1') if a.kf_features else ()) + tuple(x for kv in a.env for x in ('-e', kv)), a.cpus, a.nice, a.config)
 
 
 if __name__ == '__main__':

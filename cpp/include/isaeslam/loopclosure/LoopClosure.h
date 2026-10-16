@@ -67,6 +67,10 @@ class LoopClosure {
                                         //!< (a tilt would contradict gravity, fixed along the world z axis)
         bool sim3              = false; //!< Monocular VO: Sim3 pose graph, loops measure the scale ratio (no window
                                         //!< correction)
+        bool all_cameras       = false; //!< Every camera of the keyframes, for rigs of non-overlapping cameras (nofov
+                                        //!< modes): candidates and verification over every pair of cameras, so that
+                                        //!< a camera closes a loop with what another camera saw (a 360 rig passing a
+                                        //!< place the other way round). Off: camera 0 only
     };
 
     struct Stats {
@@ -82,6 +86,12 @@ class LoopClosure {
      * async mode the image is processed later in the loop thread
      */
     void addKeyframe(const std::shared_ptr<Frame> &f, int segment);
+
+    /*!
+     * @brief Wait until every keyframe handed over has been processed (async mode; at once otherwise). For the end of
+     * an offline run
+     */
+    void flush();
 
     /*!
      * @brief Pose (frame to world) corrected by the current pose graph, for a pose of the given segment (sim3: the
@@ -143,6 +153,13 @@ class LoopClosure {
         std::shared_ptr<ImageSensor> cam;   // held until processed, for the image and the camera model
         std::vector<Eigen::Vector3d> lmk_c; // landmarks seen by camera 0, in camera 0
         std::vector<cv::Point2f> lmk_px;    // their pixels in camera 0's image
+        struct Camera {                     // the other cameras (all_cameras), as camera 0 above
+            Eigen::Affine3d T_s_f;
+            std::shared_ptr<ImageSensor> cam;
+            std::vector<Eigen::Vector3d> lmk_c;
+            std::vector<cv::Point2f> lmk_px;
+        };
+        std::vector<Camera> others;
     };
     struct Record {
         unsigned long long ts;
@@ -156,10 +173,17 @@ class LoopClosure {
         std::vector<Eigen::Vector3d> lmk_c;  // landmarks in camera 0
         cv::Mat lmk_desc;                    // oriented ORB at their pixels (rows aligned with lmk_c)
         double focal;
+        int cam = 0;                         // camera of this view
+        std::vector<Record> others;          // views of the other cameras (all_cameras; same ts, segment, node)
     };
 
     void process(Input &in);
     std::vector<int> candidates(const Record &q);
+    std::vector<int> candidatesAllCameras(const Record &q, int n_old);
+    //! The views of camera c of an input (all_cameras): ORB, bag of words, oriented ORB at the landmarks
+    void describeView(Input::Camera &c, Record &v);
+    //! verify() for rigs (all_cameras): each direction over every pair of cameras, compared in the frames
+    bool verifyAnyCameras(const Record &q, const Record &c, Eigen::Affine3d &T_fc_fq, int &inl_q, int &inl_c);
     bool verify(const Record &q, const Record &c, Eigen::Affine3d &T_fc_fq, int &inl_q, int &inl_c);
     bool pnp(const std::vector<Eigen::Vector3d> &pts, const cv::Mat &pts_desc, const Record &target,
              Eigen::Affine3d &T_t_src, int &inliers, int &matches,
@@ -188,6 +212,7 @@ class LoopClosure {
     std::condition_variable _queue_cv;
     std::deque<Input> _queue;
     std::atomic<bool> _stop{false};
+    std::atomic<bool> _busy{false}; // the loop thread is processing a keyframe
     std::thread _thread;
 };
 

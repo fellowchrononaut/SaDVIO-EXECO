@@ -4,9 +4,11 @@ calibration (doc/nofovvio/NOFOVVIO_LEDGER.md, item 1.2).
 
 Per-frame poses come from log_slam/results_perframe.csv: every frame's front-end pose, written when the run sets
 EXECO_PERFRAME_LOG, which run_sadvio.py does. The keyframes' final poses come from log_slam/results_loop.csv (loop
-closure on) or log_slam/results.csv (window refinement). Each frame takes the correction of the latest keyframe at or
-before it, T = T_final(kf) T_front(kf)^-1 T_front(frame), so the per-frame trajectory follows the window refinement
-and the loop closure. Frames before the first keyframe keep their front-end pose.
+closure on) or log_slam/results.csv (window refinement). Each frame takes the correction of the keyframe it was
+estimated from, T = T_final(kf) T_kf_then^-1 T_front(frame), with the keyframe's pose as the front end used it (logged
+with the frame); older logs without it use the latest keyframe at or before the frame and its own front-end pose. The
+per-frame trajectory so follows the window refinement and the loop closure. Frames before the first keyframe keep
+their front-end pose.
 
 Writes in <run>/log_slam/:
   trajectory_tum.txt   per frame: "t tx ty tz qx qy qz qw" (t in s), pose of --frame (body: the SLAM frame, the IMU in
@@ -23,6 +25,21 @@ import re
 from pathlib import Path
 
 import numpy as np
+
+
+def read_references(path):
+    """{ts: (kf_ts, 4x4 T_w_kf)} from results_perframe.csv's reference columns (the KF the frame was estimated from, as
+    it was then), for logs that have them"""
+    out = {}
+    for ln in path.read_text().splitlines()[1:]:
+        v = ln.split(',')
+        if len(v) < 27:
+            continue
+        T = np.eye(4)
+        T[:3, :4] = np.array([float(x) for x in v[15:27]]).reshape(3, 4)
+        if np.isfinite(T).all():
+            out[int(v[0])] = (int(v[14]), T)
+    return out
 
 
 def read_poses(path):
@@ -94,14 +111,23 @@ def main():
     T_BS = dataset_T_BS(a.run)
     T_f_out = T_BS.get('camera_0', np.eye(4)) if a.frame == 'cam0' else np.eye(4)
 
+    # Newer logs say which KF each frame was estimated from and that KF's pose then: its final pose corrects the frame
+    # exactly. Older logs: the latest KF at or before the frame, with the KF's own front-end pose (off when the back
+    # end moved the KF before the next frames were estimated from it)
+    refs  = read_references(log / 'results_perframe.csv')
     kf_ts = sorted(t for t in final if t in front)
-    lines, n_corr = [], 0
+    lines, n_corr, n_exact = [], 0, 0
     j = -1
     for ts in sorted(front):
         while j + 1 < len(kf_ts) and kf_ts[j + 1] <= ts:
             j += 1
         T = front[ts]
-        if j >= 0:
+        if ts in refs and refs[ts][0] in final:
+            k, T_ref = refs[ts]
+            T = final[k] @ np.linalg.inv(T_ref) @ T
+            n_corr += 1
+            n_exact += 1
+        elif j >= 0:
             k = kf_ts[j]
             T = final[k] @ np.linalg.inv(front[k]) @ T
             n_corr += 1
@@ -110,6 +136,7 @@ def main():
     (log / 'keyframes_tum.txt').write_text('\n'.join(tum_line(t, final[t] @ T_f_out) for t in sorted(final)) + '\n')
 
     summary = dict(frames=len(front), keyframes=len(final), frames_corrected_by_a_keyframe=n_corr,
+                   frames_corrected_by_their_reference_keyframe=n_exact,
                    keyframe_poses_from=final_file.name, pose_frame=a.frame)
     stdout = (a.run / 'stdout.log').read_text(errors='replace') if (a.run / 'stdout.log').exists() else ''
     td = re.findall(r'Global time offset : ([-0-9.eE+]+)', stdout)

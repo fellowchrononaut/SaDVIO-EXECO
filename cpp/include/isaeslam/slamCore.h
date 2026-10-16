@@ -1,6 +1,7 @@
 #ifndef SLAMCORE_H
 #define SLAMCORE_H
 
+#include <atomic>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
@@ -296,6 +297,13 @@ class SLAMCore {
      */
     void logWindowCovariance(const WindowCovariance &wc);
 
+    /*!
+     * @brief End of an offline run (main.cpp, on SIGTERM once the data is exhausted): the keyframes still in the
+     * window go to the loop closure, as at a re-initialization, so that a revisit at the very end is checked; then
+     * waits until the loop closure has processed them (its output files are then final)
+     */
+    void finish();
+
   protected:
     std::shared_ptr<Frame> _frame; //!< Current frame
 
@@ -326,6 +334,7 @@ class SLAMCore {
     std::mutex _step_mutex;
     std::condition_variable _step_cv;
     std::unique_lock<std::mutex> *_frontend_lock = nullptr; //!< Lock of the front end thread, null in single thread
+    std::atomic<bool> _waiting_for_data{false};             //!< Single thread: waiting in nextFrame() (finish())
 
     /*!
      * @brief Next frame of the data provider; in multithreading the back end can run while the front end waits,

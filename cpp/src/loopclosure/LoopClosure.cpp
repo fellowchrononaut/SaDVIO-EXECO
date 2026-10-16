@@ -98,7 +98,7 @@ LoopClosure::LoopClosure(const Options &opt) : _opt(opt), _graph(opt.four_dof, 4
     std::ofstream("log_slam/loop_attempts.csv", std::ofstream::trunc)
         << "timestamp query (ns), timestamp candidate (ns), query landmarks, matches query->candidate, inliers, "
            "candidate landmarks, matches candidate->query, inliers, disagreement (m; sim3: fraction of the candidate's "
-           "scene depth), disagreement (deg), accepted\n";
+           "scene depth), disagreement (deg), accepted, query camera, candidate camera\n";
     std::ofstream("log_slam/results_loop.csv", std::ofstream::trunc) << kTrajHeader;
     std::ofstream("log_slam/results_loop_online.csv", std::ofstream::trunc) << kTrajHeader;
 
@@ -139,6 +139,28 @@ void LoopClosure::addKeyframe(const std::shared_ptr<Frame> &f, int segment) {
         in.lmk_px.emplace_back(static_cast<float>(px.x()), static_cast<float>(px.y()));
     }
 
+    // The other cameras' landmarks, the same way (all_cameras)
+    if (_opt.all_cameras) {
+        for (size_t k = 1; k < f->getSensors().size(); k++) {
+            Input::Camera c;
+            c.cam   = f->getSensors().at(k);
+            c.T_s_f = c.cam->getFrame2SensorTransform();
+            const Eigen::Affine3d T_ck_w = c.T_s_f * f->getWorld2FrameTransform();
+            for (auto &feat : c.cam->getFeatures("pointxd")) {
+                std::shared_ptr<ALandmark> lmk = feat->getLandmark().lock();
+                if (!lmk || !lmk->isInitialized() || lmk->isOutlier() || feat->getPoints().empty())
+                    continue;
+                const Eigen::Vector3d p_c = T_ck_w * lmk->getPose().translation();
+                if (p_c.z() < 0.1)
+                    continue;
+                const Eigen::Vector2d px = feat->getPoints().at(0);
+                c.lmk_c.push_back(p_c);
+                c.lmk_px.emplace_back(static_cast<float>(px.x()), static_cast<float>(px.y()));
+            }
+            in.others.push_back(std::move(c));
+        }
+    }
+
     if (_opt.async) {
         std::lock_guard<std::mutex> lock(_queue_mutex);
         _queue.push_back(std::move(in));
@@ -158,8 +180,10 @@ void LoopClosure::loop() {
                 return;
             in = std::move(_queue.front());
             _queue.pop_front();
+            _busy = true;
         }
         process(in);
+        _busy = false;
     }
 }
 
@@ -299,6 +323,15 @@ void LoopClosure::process(Input &in) {
         r.node = _graph.addNode(in.T_w_f, in.segment);
         _handover[in.ts] = {r.node, in.T_w_f_handover};
     }
+    for (size_t k = 0; k < in.others.size(); k++) {
+        Record v;
+        v.ts      = r.ts;
+        v.segment = r.segment;
+        v.node    = r.node;
+        v.cam     = static_cast<int>(k) + 1;
+        describeView(in.others[k], v);
+        r.others.push_back(std::move(v));
+    }
 
     // Detection and verification: up to max_loops_per_kf verified candidates, from different times (a recent
     // revisit and an old one constrain different drift), then one pose graph solve
@@ -319,7 +352,8 @@ void LoopClosure::process(Input &in) {
             continue;
         Eigen::Affine3d T_fc_fq;
         std::array<int, 2> inl = {0, 0};
-        if (!verify(r, _records[c], T_fc_fq, inl[0], inl[1]))
+        if (!(_opt.all_cameras ? verifyAnyCameras(r, _records[c], T_fc_fq, inl[0], inl[1])
+                               : verify(r, _records[c], T_fc_fq, inl[0], inl[1])))
             continue;
         accepted.push_back({c, inl});
         rel.push_back(T_fc_fq);
@@ -405,6 +439,8 @@ std::vector<int> LoopClosure::candidates(const Record &q) {
         _records.begin());
     if (n_old == 0)
         return {};
+    if (_opt.all_cameras && _opt.detector != "learned") // learned: camera 0's global descriptor only
+        return candidatesAllCameras(q, n_old);
 
     std::vector<int> out;
     auto push = [&](int i) {
@@ -609,7 +645,8 @@ bool LoopClosure::verify(const Record &q, const Record &c, Eigen::Affine3d &T_fc
     // Every verification attempt, for tuning (log_slam/loop_attempts.csv)
     std::ofstream("log_slam/loop_attempts.csv", std::ofstream::app)
         << q.ts << "," << c.ts << "," << q.lmk_c.size() << "," << m_q << "," << inl_q << "," << c.lmk_c.size() << ","
-        << m_c << "," << inl_c << "," << e_t << "," << e_deg << "," << (accepted ? 1 : 0) << "\n";
+        << m_c << "," << inl_c << "," << e_t << "," << e_deg << "," << (accepted ? 1 : 0) << "," << q.cam << ","
+        << c.cam << "\n";
     if (!accepted)
         return false;
     Eigen::Affine3d S_cc_cq = T_cc_cq; // sim3: a similarity (linear part s R), else rigid
@@ -619,4 +656,170 @@ bool LoopClosure::verify(const Record &q, const Record &c, Eigen::Affine3d &T_fc
     return true;
 }
 
+void LoopClosure::flush() {
+    if (!_opt.async)
+        return;
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            if (_queue.empty() && !_busy)
+                return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+void LoopClosure::describeView(Input::Camera &c, Record &v) {
+    // As camera 0 in process(): pyramid ORB as rays, bag of words, oriented ORB at the landmarks' pixels
+    cv::Mat img = c.cam->getRawData();
+    if (img.depth() == CV_16U)
+        img.convertTo(img, CV_8U, 1.0 / 256);
+    if (img.channels() == 3)
+        cv::cvtColor(img, img, cv::COLOR_BGR2GRAY);
+    std::vector<cv::KeyPoint> kps;
+    cv::Mat desc;
+    _orb->detectAndCompute(img, cv::noArray(), kps, desc);
+    v.T_s_f = c.T_s_f;
+    v.focal = c.cam->getFocal();
+    for (size_t k = 0; k < kps.size(); k++) {
+        const Eigen::Vector3d ray = c.cam->getRayCamera(Eigen::Vector2d(kps[k].pt.x, kps[k].pt.y));
+        if (!(ray.z() > 0.2 * ray.norm()))
+            continue;
+        v.kp_n.emplace_back(ray.x() / ray.z(), ray.y() / ray.z());
+        v.desc.push_back(desc.row(static_cast<int>(k)));
+    }
+    if (!_voc.empty() && !v.desc.empty())
+        _voc.transform(v.desc, v.bow);
+    std::vector<cv::KeyPoint> lkps;
+    for (size_t k = 0; k < c.lmk_px.size(); k++)
+        lkps.emplace_back(c.lmk_px[k], 31.f, icAngle(img, c.lmk_px[k]), 0.f, 0, static_cast<int>(k));
+    cv::Mat ldesc;
+    if (!lkps.empty())
+        _orb->compute(img, lkps, ldesc); // drops points too close to the border
+    for (size_t k = 0; k < lkps.size(); k++) {
+        v.lmk_c.push_back(c.lmk_c[lkps[k].class_id]);
+        v.lmk_desc.push_back(ldesc.row(static_cast<int>(k)));
+    }
+    c.cam.reset(); // the image is no longer needed
+}
+
+std::vector<int> LoopClosure::candidatesAllCameras(const Record &q, int n_old) {
+    // Every camera of the query against every camera of the older keyframes: a keyframe scores its best pair. A
+    // camera can then find a place another camera saw (the other way round on a 360 rig)
+    auto views = [](const Record &r) {
+        std::vector<const Record *> v = {&r};
+        for (const Record &o : r.others)
+            v.push_back(&o);
+        return v;
+    };
+    const std::vector<const Record *> qv = views(q);
+    const unsigned long long gap         = static_cast<unsigned long long>(_opt.min_gap * 1e9);
+    std::vector<std::pair<double, int>> ranked; // (-score, record)
+    const bool bow  = (_opt.detector == "bow" || _opt.detector == "proximity_bow") && !_voc.empty();
+    const bool gate = _opt.detector == "proximity" || _opt.detector == "proximity_bow";
+    std::lock_guard<std::mutex> lock(_graph_mutex);
+    const Eigen::Affine3d Tq = _graph.pose(q.node);
+    const double cos_max     = std::cos(_opt.gate_angle * M_PI / 180);
+    for (int i = 0; i < n_old; i++) {
+        const std::vector<const Record *> cv = views(_records[i]);
+        const Eigen::Affine3d Ti             = _graph.pose(_records[i].node);
+        const bool near = (Ti.translation() - Tq.translation()).norm() < _opt.gate_radius;
+        double best     = gate ? -1 : 0; // proximity: only keyframes with a camera pair inside the gate
+        for (const Record *a : qv) {
+            const Eigen::Vector3d za = Tq.rotation() * a->T_s_f.rotation().transpose() * Eigen::Vector3d::UnitZ();
+            for (const Record *b : cv) {
+                const Eigen::Vector3d zb = Ti.rotation() * b->T_s_f.rotation().transpose() * Eigen::Vector3d::UnitZ();
+                if (gate && !(near && za.dot(zb) > cos_max))
+                    continue;
+                const double score = (bow && !a->bow.empty() && !b->bow.empty()) ? _voc.score(a->bow, b->bow) : 1e-6;
+                best               = std::max(best, score);
+            }
+        }
+        if (best > 0)
+            ranked.push_back({-best, i});
+    }
+    std::sort(ranked.begin(), ranked.end());
+
+    // At most n_candidates, at least min_gap apart in time (as candidates())
+    std::vector<int> out;
+    for (const auto &rk : ranked) {
+        if (static_cast<int>(out.size()) >= _opt.n_candidates)
+            break;
+        bool far = true;
+        for (int c : out) {
+            const unsigned long long a = _records[rk.second].ts, b = _records[c].ts;
+            far &= (a > b ? a - b : b - a) >= gap;
+        }
+        if (far)
+            out.push_back(rk.second);
+    }
+    return out;
+}
+
+bool LoopClosure::verifyAnyCameras(const Record &q, const Record &c, Eigen::Affine3d &T_fc_fq, int &inl_q,
+                                   int &inl_c) {
+    // The two directions of verify(), each over every pair of cameras and taken in the frames (body): the query's
+    // landmarks in a candidate camera's image (query -> candidate), and the candidate's landmarks in a query camera's
+    // image (candidate -> query). The best of each direction must agree, as in verify(). On a rig the two directions
+    // may come from different camera pairs: e.g. a keyframe from before camera 1 started (nofovvio's initialization)
+    // has no camera-1 landmarks, while its camera-0 landmarks can be found in the query's camera 1
+    std::vector<const Record *> qv = {&q}, cv = {&c};
+    for (const Record &o : q.others)
+        qv.push_back(&o);
+    for (const Record &o : c.others)
+        cv.push_back(&o);
+    struct Pair {
+        const Record *a, *b;
+        int m_q = 0, i_q = 0, m_c = 0, i_c = 0;
+    };
+    std::vector<Pair> pairs;
+    Eigen::Affine3d T_qc_best, T_cq_best; // T_fc_fq from query -> candidate, T_fq_fc from candidate -> query
+    int best_q = 0, best_c = -1, pair_q = -1, pair_c = -1;
+    bool any_c_lmk = false;
+    for (const Record *a : qv) {
+        for (const Record *b : cv) {
+            Pair pr{a, b};
+            Eigen::Affine3d T;
+            if (pnp(a->lmk_c, a->lmk_desc, *b, T, pr.i_q, pr.m_q) && pr.i_q > best_q) {
+                best_q    = pr.i_q;
+                T_qc_best = b->T_s_f.inverse() * T * a->T_s_f;
+                pair_q    = static_cast<int>(pairs.size());
+            }
+            if (static_cast<int>(b->lmk_c.size()) >= _opt.min_inliers) {
+                any_c_lmk = true;
+                if (pnp(b->lmk_c, b->lmk_desc, *a, T, pr.i_c, pr.m_c) && pr.i_c > best_c) {
+                    best_c    = pr.i_c;
+                    T_cq_best = a->T_s_f.inverse() * T * b->T_s_f;
+                    pair_c    = static_cast<int>(pairs.size());
+                }
+            }
+            pairs.push_back(pr);
+        }
+    }
+    bool accepted = false;
+    double e_t = -1, e_deg = -1;
+    if (pair_q >= 0 && pair_c >= 0) {
+        const Eigen::Affine3d E = T_qc_best * T_cq_best;
+        e_t                     = E.translation().norm();
+        e_deg                   = Eigen::AngleAxisd(E.rotation()).angle() * 180 / M_PI;
+        accepted                = e_t < 0.3 && e_deg < 5;
+    } else if (pair_q >= 0 && !any_c_lmk) {
+        accepted = best_q >= 1.5 * _opt.min_inliers; // the candidate has too few landmarks for the reverse check
+    }
+    // One row per camera pair (log_slam/loop_attempts.csv); the decision on the pair of the query -> candidate estimate
+    std::ofstream log("log_slam/loop_attempts.csv", std::ofstream::app);
+    for (size_t k = 0; k < pairs.size(); k++) {
+        const Pair &pr = pairs[k];
+        const bool dec = static_cast<int>(k) == pair_q;
+        log << q.ts << "," << c.ts << "," << pr.a->lmk_c.size() << "," << pr.m_q << "," << pr.i_q << ","
+            << pr.b->lmk_c.size() << "," << pr.m_c << "," << pr.i_c << "," << (dec ? e_t : -1) << ","
+            << (dec ? e_deg : -1) << "," << (dec && accepted ? 1 : 0) << "," << pr.a->cam << "," << pr.b->cam << "\n";
+    }
+    if (!accepted)
+        return false;
+    T_fc_fq = T_qc_best;
+    inl_q   = best_q;
+    inl_c   = std::max(best_c, 0);
+    return true;
+}
 } // namespace isae

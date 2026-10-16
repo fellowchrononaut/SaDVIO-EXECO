@@ -61,6 +61,7 @@ mono_essential_fallback: 0
 ## bias), so that they stay physical when vision is weak; 0: none
 vio_bias_prior_acc: 0.3     # m/s^2 (fixes the V2_03 bias runaway; median ATE 0.146 -> 0.129 m over 18 sequences)
 vio_bias_prior_gyr: 0       # rad/s
+vio_init_max_kf: 20         # mono VIO / nofovvio initialization: retry the inertial optimization every 2 KFs up to this many KFs when the motion does not determine the scale (10: reset and start over)
 log_pose_covariance: 0     # 1: log the ESKF covariance of every frame (cov_front.csv) and the VIO window pose covariance (cov_window.csv) for NEES checks; evaluation only, adds up to ~40 ms per KF
 
 ## Loop closure over the keyframes that left the window (doc/loop_closure): a separate pose graph (6-DoF, Sim3 in
@@ -79,6 +80,8 @@ loop_model_threads: 8       # learned, CPU: inference threads
 loop_min_gap: 20.0          # s between a keyframe and its loop candidates
 loop_min_inliers: 12        # PnP inliers to accept a loop (each direction; both directions must agree)
 loop_gate_radius: 2.0       # m, proximity gate
+loop_gate_angle: 45.0       # deg, proximity gate on the viewing directions (wider for fisheye lenses)
+loop_n_orb: 1000            # pyramid ORB per keyframe and camera for the loop closure
 loop_graph_dof: 0           # pose graph: 6, 4 (roll, pitch kept from the odometry; IMU modes only), 7 (Sim3, mono only),
                             # or 0: automatic (7 in mono, else 6)
 loop_correct_window: -1     # 1: move the sliding window into the corrected frame (its marginalization prior moves with it),
