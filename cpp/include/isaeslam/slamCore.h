@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 
+#include "isaeslam/data/maps/ColmapExport.h"
 #include "isaeslam/data/features/AFeature2D.h"
 #include "isaeslam/data/maps/globalmap.h"
 #include "isaeslam/data/maps/localmap.h"
@@ -367,6 +368,7 @@ class SLAMCore {
     void writeResultRow(const std::shared_ptr<Frame> &f);
 
     std::shared_ptr<LoopClosure> _loop_closure; //!< Loop closure over the KFs leaving the window (config loop_closure)
+    std::shared_ptr<ColmapExport> _colmap;      //!< COLMAP export of the final map (config export_colmap)
     unsigned long long _last_loop_ts = 0;       //!< Last KF handed to the loop closure (each KF once)
 
     /*!

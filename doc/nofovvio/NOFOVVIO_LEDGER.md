@@ -63,8 +63,8 @@ Rules for this work:
   or more non-overlapping cameras; validated on the captures that return to their start.
 
 ### 5. Export for SfM
-- [ ] 5.1 COLMAP text export (`cameras`, `images`, `points3D`, rig) from the final map, with KB4 written as
-  `OPENCV_FISHEYE`.
+- [x] 5.1 COLMAP text export (`cameras`, `images`, `points3D`, rig) from the final map, with KB4 written as
+  `OPENCV_FISHEYE` (config `export_colmap`, log 2026-10-17).
 
 ### 6. Later, if the results call for it
 - [ ] 6.1 Rolling-shutter compensation (needs the measured readout time): per-row time offset in the residuals,
@@ -556,4 +556,28 @@ Rules for this work:
   = `base_config.yaml` with `nofovvio`, masks, 960 px, loop closure on, 500 features, `loop_n_orb: 3000`,
   `loop_min_gap: 8`, `loop_min_inliers: 10`. `run_sadvio.py --config x5_config.yaml` (the run's dataset_id still comes
   from the sequence). Check run (`x5cfg_check`, VID_001): ATE 0.117 units, 1 loop. Shipped defaults unchanged.
+- 2026-10-17, item 5.1, COLMAP export (config `export_colmap: 1`, on in `x5_config.yaml`; `ColmapExport` in
+  `cpp/src/data/maps/`): every keyframe is recorded as it leaves the window (pose, per camera the pixels of its
+  features with an initialized landmark), the window's at the end; `SLAMCore::finish()` writes `log_slam/colmap/`:
+  `cameras.txt` (original resolution, COLMAP pixel centres +0.5; radial-tangential pinhole as `OPENCV` on the original
+  distorted images, feature pixels mapped back from the undistorted image with the original K, now kept as
+  `cam_config::K_raw`; KB4 as `OPENCV_FISHEYE`; double sphere, equidistant and omni as an `OPENCV_FISHEYE` fitted to
+  the camera's rays: focal length and k1..k4 by linear least squares, principal point and aspect kept, with a message
+  and README note giving the reason and the fit's RMS), `images.txt` (one image per keyframe and camera,
+  `camN/data/<ts>.png`, loop-corrected poses when the loop closure ran), `points3D.txt` (landmarks with ≥ 2 linked
+  observations, moved by their last keyframe's loop correction), `rigs.txt` and `frames.txt` (COLMAP 3.12+/4 rig
+  format) with ≥ 2 cameras, `README.txt`. Observations more than 89° from their camera's axis stay 2D points without a
+  3D point (COLMAP projects through x / z: 1.7 % of the X5's). Offline binary only (written at SIGTERM).
+  - Checked with `doc/nofovvio/tools/check_colmap.py` (reprojection with COLMAP's models): X5 VID_001 (KB4) median
+    0.78 / 0.82 px, p90 3.4 / 3.6 px; EuRoC V1_01 (`OPENCV`) median 0.28 / 0.31 px; TUM-VI room1 (double sphere,
+    fitted KB4: fit RMS 0.0001 px, focal 191.2 px as TUM-VI's own KB4 calibration) median 0.27 / 0.28 px. The X5 rig:
+    camera 2 at (0, 0, −32.2 mm) from camera 1, turned ~180°. Not yet read by COLMAP itself (GUTWrap has 4.2).
+- 2026-10-17, presentation: loop-closure subtabs for the X5 (`sadvio-x5lc-012`, `sadvio-x5lc-001`), the loop-closure
+  viewer without a mesh (`meta.mesh: false`), data from `doc/nofovvio/tools/build_x5_lc_view.py`: per-frame odometry,
+  online-corrected positions, the keyframe path as keyframes reach the loop closure and at every solve (new log
+  `results_loop_solves.csv`: the corrected trajectory after each pose-graph solve), loop edges and times, the
+  reference (VID_012 metric). Runs `x5_lcview` (x5_config.yaml): VID_012 3 runs, ATE 0.051–0.055 m, loops in 3 / 3
+  (1, 1, 6), shown run_02; VID_001 7 runs, 0.052–0.227 units, loops in 2 / 7, shown run_04 (0.062, 2 loops). The 3D
+  view could not be checked headless (no WebGL; the existing tabs alike); the data was checked numerically (raw
+  odometry vs reference under the view's alignment: 0.083 / 0.051 m RMS).
 

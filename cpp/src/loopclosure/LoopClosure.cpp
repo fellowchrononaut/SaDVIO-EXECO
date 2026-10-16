@@ -100,6 +100,8 @@ LoopClosure::LoopClosure(const Options &opt) : _opt(opt), _graph(opt.four_dof, 4
            "candidate landmarks, matches candidate->query, inliers, disagreement (m; sim3: fraction of the candidate's "
            "scene depth), disagreement (deg), accepted, query camera, candidate camera\n";
     std::ofstream("log_slam/results_loop.csv", std::ofstream::trunc) << kTrajHeader;
+    std::ofstream("log_slam/results_loop_solves.csv", std::ofstream::trunc)
+        << "solve (query keyframe timestamp, ns), " << kTrajHeader;
     std::ofstream("log_slam/results_loop_online.csv", std::ofstream::trunc) << kTrajHeader;
 
     if (_opt.async)
@@ -393,6 +395,13 @@ void LoopClosure::process(Input &in) {
         f << kTrajHeader;
         for (const auto &rec : _records)
             writeRow(f, rec.ts, _graph.pose(rec.node), rec.segment, _graph.group(rec.segment));
+        // Every solve's corrected trajectory, for replays of the corrections over time (results_loop.csv keeps the last)
+        std::ofstream h("log_slam/results_loop_solves.csv", std::ofstream::app);
+        const unsigned long long solve_ts = _records.back().ts; // the query keyframe (r was moved into _records)
+        for (const auto &rec : _records) {
+            h << solve_ts << ",";
+            writeRow(h, rec.ts, _graph.pose(rec.node), rec.segment, _graph.group(rec.segment));
+        }
     }
 
     std::lock_guard<std::mutex> lock(_graph_mutex);

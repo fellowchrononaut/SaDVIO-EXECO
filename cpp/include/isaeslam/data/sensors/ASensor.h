@@ -72,6 +72,7 @@ class ASensor {
 */
 struct cam_config : sensor_config {
     Eigen::Matrix3d K;
+    Eigen::Matrix3d K_raw; //!< K as in the dataset file (K becomes the undistorted image's for radial-tangential pinhole)
     std::string proj_model;
     int width;
     int height;

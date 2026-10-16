@@ -98,6 +98,8 @@ struct Config {
     double loop_min_gap      = 20.0;       //!< Loop candidates are at least this much older than the query (s)
     int loop_min_inliers     = 12;         //!< PnP inliers to accept a loop (each direction)
     double loop_gate_radius  = 2.0;        //!< Proximity gate radius (m)
+    int export_colmap        = 0;          //!< 1: COLMAP text export of the final map at the end of an offline run
+                                           //!< (log_slam/colmap/; doc/nofovvio, item 5.1)
     int vio_init_max_kf      = 20;         //!< Mono VIO initialization: KFs up to which the inertial optimization is
                                            //!< retried (every 2 KFs) when the motion does not determine the scale; 10:
                                            //!< no retry (the map is reset and the initialization starts over)

@@ -86,6 +86,8 @@ isae::validateConfig(const Config &cfg, int ncam, bool has_imu, std::vector<std:
         errors.push_back("dense_fused_view must be 0 (off), 1 (at every save and at the end) or 2 (at the end)");
     if (cfg.dense_anchored && !cfg.dense_depth)
         warnings.push_back("dense_anchored has no effect without dense_depth");
+    if (cfg.export_colmap != 0 && cfg.export_colmap != 1)
+        errors.push_back("export_colmap must be 0 or 1");
     if (cfg.vio_init_max_kf < 10)
         errors.push_back("vio_init_max_kf must be >= 10");
     if (cfg.use_masks != 0 && cfg.use_masks != 1)
@@ -204,6 +206,7 @@ void isae::SLAMParameters::readConfigFile(const std::string &path_config_folder)
     _config.loop_gate_angle  = yaml_file["loop_gate_angle"] ? yaml_file["loop_gate_angle"].as<double>() : 45.0;
     _config.loop_n_orb       = yaml_file["loop_n_orb"] ? yaml_file["loop_n_orb"].as<int>() : 1000;
     _config.vio_init_max_kf  = yaml_file["vio_init_max_kf"] ? yaml_file["vio_init_max_kf"].as<int>() : 20;
+    _config.export_colmap    = yaml_file["export_colmap"] ? yaml_file["export_colmap"].as<int>() : 0;
     _config.loop_graph_dof   = yaml_file["loop_graph_dof"] ? yaml_file["loop_graph_dof"].as<int>() : 0;
     _config.loop_correct_window =
         yaml_file["loop_correct_window"] ? yaml_file["loop_correct_window"].as<int>() : -1;

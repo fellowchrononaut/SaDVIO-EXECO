@@ -21,8 +21,12 @@ SLAMCore::SLAMCore(std::shared_ptr<isae::SLAMParameters> slam_param) : _slam_par
                                             _slam_param->_config.max_kf_number,
                                             _slam_param->_config.fixed_frame_number);
     _global_map = std::make_shared<GlobalMap>();
-    // Each KF leaving the window goes to the loop closure with its final estimate, before its data is cleaned
-    if (_slam_param->_config.loop_closure == 1)
+    // Each KF leaving the window goes to the loop closure and the COLMAP export with its final estimate, before its
+    // data is cleaned
+    if (_slam_param->_config.export_colmap == 1)
+        _colmap = std::make_shared<ColmapExport>(_slam_param->getDataProvider()->getCamConfigs(),
+                                                 _slam_param->_config.downsampling);
+    if (_slam_param->_config.loop_closure == 1 || _colmap)
         _local_map->setDiscardCallback([this](const std::shared_ptr<Frame> &f) { handToLoopClosure(f); });
     if (slam_param->_config.mesh3D)
         _mesher = std::make_shared<Mesher>(
@@ -928,6 +932,8 @@ void SLAMCore::applyLoopCorrection() {
 
 void SLAMCore::handToLoopClosure(const std::shared_ptr<Frame> &f) {
     const Config &cfg = _slam_param->_config;
+    if (_colmap)
+        _colmap->record(f); // each KF once (it skips KFs not newer than the last one)
     if (cfg.loop_closure != 1 || !f || f->getTimestamp() <= _last_loop_ts)
         return;
     if (!_loop_closure) {
@@ -989,6 +995,8 @@ void SLAMCore::finish() {
     }
     if (std::shared_ptr<LoopClosure> lc = getLoopClosure())
         lc->flush();
+    if (_colmap)
+        _colmap->write("log_slam/colmap", getLoopClosure());
 }
 
 void SLAMCore::logWindowBeforeReset() {

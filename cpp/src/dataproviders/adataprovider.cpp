@@ -176,6 +176,8 @@ void ADataProvider::loadCamConfig(YAML::Node cam_node) {
                                  "' unknown (pinhole, equidistant, double_sphere, kb4, omni)");
     }
 
+    cam_cfg->K_raw = K.cast<double>();
+
     // Load distortion model (only for pinhole and omni)
     if (cam_node["distortion_model"].as<std::string>() == "radial-tangential") {
         cam_cfg->undistort = true;
